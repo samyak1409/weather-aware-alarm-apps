@@ -1,0 +1,21 @@
+name: core
+description: Shared logic for Arunoday and Nivaat - solar math, sleep planning, wind engine, Open-Meteo client, theme.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  alarm: ^5.5.0
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.5.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ">=4.0.0"
+
+flutter:
