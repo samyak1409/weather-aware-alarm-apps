@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
+import 'src/bedtime_actions.dart';
 import 'src/controller.dart';
 import 'src/home_screen.dart';
 
@@ -34,6 +35,10 @@ class ArunodayApp extends StatelessWidget {
       theme: buildOledTheme(AppPalette.dawn),
       home: RingGate(
         appName: 'ARUNODAY',
+        actionsBuilder: (context, alarm) =>
+            BedtimeActions.isBedtimeAlarm(alarm)
+                ? BedtimeActions(controller: controller, ringingAlarm: alarm)
+                : const SizedBox.shrink(),
         child: HomeScreen(controller: controller),
       ),
     );

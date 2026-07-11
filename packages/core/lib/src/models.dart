@@ -35,6 +35,9 @@ class ArunodaySettings {
     this.bedtimeOverrideMinutes,
     this.wakeEnabled = true,
     this.bedtimeEnabled = true,
+    this.oneTimeExtraMinutes = 0,
+    this.oneTimeExtraDate,
+    this.bedtimeDelayedUntil,
   });
 
   final List<SavedLocation> locations;
@@ -48,6 +51,15 @@ class ArunodaySettings {
 
   final bool wakeEnabled;
   final bool bedtimeEnabled;
+
+  /// One-time extra wake offset ("tomorrow +2h" from the bedtime ritual),
+  /// applied only to the wake whose calendar date equals [oneTimeExtraDate]
+  /// (ISO yyyy-mm-dd); auto-cleared once that wake has passed.
+  final int oneTimeExtraMinutes;
+  final String? oneTimeExtraDate;
+
+  /// A "not sleepy yet" delayed bedtime reminder; cleared once it fires.
+  final DateTime? bedtimeDelayedUntil;
 
   SavedLocation? get activeLocation {
     for (final l in locations) {
@@ -63,6 +75,9 @@ class ArunodaySettings {
     int? Function()? bedtimeOverrideMinutes,
     bool? wakeEnabled,
     bool? bedtimeEnabled,
+    int? oneTimeExtraMinutes,
+    String? Function()? oneTimeExtraDate,
+    DateTime? Function()? bedtimeDelayedUntil,
   }) =>
       ArunodaySettings(
         locations: locations ?? this.locations,
@@ -73,6 +88,13 @@ class ArunodaySettings {
             : this.bedtimeOverrideMinutes,
         wakeEnabled: wakeEnabled ?? this.wakeEnabled,
         bedtimeEnabled: bedtimeEnabled ?? this.bedtimeEnabled,
+        oneTimeExtraMinutes: oneTimeExtraMinutes ?? this.oneTimeExtraMinutes,
+        oneTimeExtraDate: oneTimeExtraDate != null
+            ? oneTimeExtraDate()
+            : this.oneTimeExtraDate,
+        bedtimeDelayedUntil: bedtimeDelayedUntil != null
+            ? bedtimeDelayedUntil()
+            : this.bedtimeDelayedUntil,
       );
 
   Map<String, dynamic> toJson() => {
@@ -82,6 +104,9 @@ class ArunodaySettings {
         'bedtimeOverrideMinutes': bedtimeOverrideMinutes,
         'wakeEnabled': wakeEnabled,
         'bedtimeEnabled': bedtimeEnabled,
+        'oneTimeExtraMinutes': oneTimeExtraMinutes,
+        'oneTimeExtraDate': oneTimeExtraDate,
+        'bedtimeDelayedUntil': bedtimeDelayedUntil?.toIso8601String(),
       };
 
   factory ArunodaySettings.fromJson(Map<String, dynamic> j) =>
@@ -95,6 +120,11 @@ class ArunodaySettings {
         bedtimeOverrideMinutes: j['bedtimeOverrideMinutes'] as int?,
         wakeEnabled: j['wakeEnabled'] as bool? ?? true,
         bedtimeEnabled: j['bedtimeEnabled'] as bool? ?? true,
+        oneTimeExtraMinutes: j['oneTimeExtraMinutes'] as int? ?? 0,
+        oneTimeExtraDate: j['oneTimeExtraDate'] as String?,
+        bedtimeDelayedUntil: j['bedtimeDelayedUntil'] == null
+            ? null
+            : DateTime.parse(j['bedtimeDelayedUntil'] as String),
       );
 }
 

@@ -2,7 +2,20 @@ import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/check_scheduler.dart';
 import 'package:nivaat/src/engine.dart';
+import 'package:nivaat/src/skip_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class FakeNotifier extends SkipNotifier {
+  final List<(HistoryRecord, String)> shown = [];
+
+  @override
+  Future<void> ensureInitialized() async {}
+
+  @override
+  Future<void> showSkip(HistoryRecord record, String courtName) async {
+    shown.add((record, courtName));
+  }
+}
 
 class FakeRing implements AlarmScheduler {
   final Map<int, ({DateTime at, double volume, String body})> scheduled = {};
@@ -84,6 +97,7 @@ void main() {
   late FakeRing ring;
   late FakeChecks checks;
   late FakeApi api;
+  late FakeNotifier notifier;
   late NivaatEngine engine;
 
   setUp(() {
@@ -91,11 +105,13 @@ void main() {
     ring = FakeRing();
     checks = FakeChecks();
     api = FakeApi();
+    notifier = FakeNotifier();
     engine = NivaatEngine(
       store: NivaatStore(),
       scheduler: ring,
       api: api,
       checks: checks,
+      notifier: notifier,
     );
   });
 
@@ -148,6 +164,8 @@ void main() {
     expect(ring.scheduled, isEmpty, reason: 'ring cancelled');
     final history = await engine.store.loadHistory();
     expect(history.first.outcome, CheckOutcome.skippedWindy);
+    expect(notifier.shown, hasLength(1), reason: 'skip card notified');
+    expect(notifier.shown.first.$2, 'Home Court');
   });
 
   test('API dead all the way to the +30m cap: skippedNoData recorded',
@@ -167,6 +185,7 @@ void main() {
     expect(history, hasLength(1));
     expect(history.first.outcome, CheckOutcome.skippedNoData);
     expect(await engine.store.loadCheckState(7), isNull);
+    expect(notifier.shown, hasLength(1), reason: 'API failure also notifies');
   });
 
   test('late success in retry window rings late, never in the past', () async {
@@ -182,6 +201,7 @@ void main() {
     expect(ring.scheduled[7]!.at.isAfter(lateNow), isTrue);
     final history = await engine.store.loadHistory();
     expect(history.first.outcome, CheckOutcome.rang);
+    expect(notifier.shown, isEmpty, reason: 'a ring needs no card');
   });
 
   test('disabled alarm clears everything', () async {

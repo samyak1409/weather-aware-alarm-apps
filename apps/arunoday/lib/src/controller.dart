@@ -34,9 +34,22 @@ class ArunodayController extends ChangeNotifier {
     return Solar.civilDawnLocal(date, loc.lat, loc.lon);
   }
 
-  /// Wake time (dawn + offset) for [date].
-  DateTime? wakeOn(DateTime date) => dawnOn(date)
-      ?.add(Duration(minutes: settings.wakeOffsetMinutes));
+  static String _dateKey(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Wake time (dawn + permanent offset) for [date], before one-time extras.
+  DateTime? baseWakeOn(DateTime date) =>
+      dawnOn(date)?.add(Duration(minutes: settings.wakeOffsetMinutes));
+
+  /// Wake time for [date] including a matching one-time extra.
+  DateTime? wakeOn(DateTime date) {
+    final base = baseWakeOn(date);
+    if (base == null) return null;
+    if (settings.oneTimeExtraDate == _dateKey(base)) {
+      return base.add(Duration(minutes: settings.oneTimeExtraMinutes));
+    }
+    return base;
+  }
 
   /// The next wake alarm moment strictly after now.
   DateTime? get nextWake {
@@ -74,7 +87,54 @@ class ArunodayController extends ChangeNotifier {
   /// Called on app resume: keeps the rolling window fresh.
   Future<void> resync() => _recomputeAndResync().then((_) => notifyListeners());
 
+  /// Bedtime-ritual action: "tomorrow only, wake N minutes later".
+  /// Applies to the next upcoming wake; auto-clears once it has passed.
+  Future<void> setOneTimeExtra(int minutes) async {
+    final now = DateTime.now();
+    DateTime? nextBase;
+    for (var i = 0; i <= windowDays; i++) {
+      final w = baseWakeOn(now.add(Duration(days: i)));
+      if (w != null && w.isAfter(now)) {
+        nextBase = w;
+        break;
+      }
+    }
+    if (nextBase == null) return;
+    await update(settings.copyWith(
+      oneTimeExtraMinutes: minutes,
+      oneTimeExtraDate: () => minutes == 0 ? null : _dateKey(nextBase!),
+    ));
+  }
+
+  /// Bedtime-ritual action: "not sleepy yet" — ring the bedtime again later.
+  Future<void> delayBedtime(Duration delay) async {
+    await update(settings.copyWith(
+      bedtimeDelayedUntil: () => DateTime.now().add(delay),
+    ));
+  }
+
+  void _clearExpiredOneTimers() {
+    var s = settings;
+    final now = DateTime.now();
+    if (s.oneTimeExtraDate != null) {
+      final parts = s.oneTimeExtraDate!.split('-').map(int.parse).toList();
+      final wake = wakeOn(DateTime(parts[0], parts[1], parts[2]));
+      if (wake == null || !wake.isAfter(now)) {
+        s = s.copyWith(oneTimeExtraMinutes: 0, oneTimeExtraDate: () => null);
+      }
+    }
+    final delayed = s.bedtimeDelayedUntil;
+    if (delayed != null && !delayed.isAfter(now)) {
+      s = s.copyWith(bedtimeDelayedUntil: () => null);
+    }
+    if (!identical(s, settings)) {
+      settings = s;
+      store.save(s); // fire-and-forget persistence of the cleanup
+    }
+  }
+
   Future<void> _recomputeAndResync() async {
+    _clearExpiredOneTimers();
     final loc = activeLocation;
     if (loc == null) {
       plan = null;
@@ -118,6 +178,16 @@ class ArunodayController extends ChangeNotifier {
           );
         }
       }
+    }
+
+    // "Not sleepy yet" delayed bedtime reminder from the ring screen.
+    final delayed = settings.bedtimeDelayedUntil;
+    if (settings.bedtimeEnabled && delayed != null && delayed.isAfter(now)) {
+      wanted[2999] = (
+        at: delayed,
+        title: 'Arunoday · bedtime',
+        body: 'Second call — dawn does not snooze.',
+      );
     }
 
     final existing = await scheduler.scheduledIds();

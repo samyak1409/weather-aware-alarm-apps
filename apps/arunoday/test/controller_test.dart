@@ -96,6 +96,56 @@ void main() {
     expect(c.bedtimeMinutes, 21 * 60 + 30);
   });
 
+  test('one-time extra shifts only the next wake, then auto-clears', () async {
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    final base = c.nextWake!;
+
+    await c.setOneTimeExtra(120);
+    final shifted = c.nextWake!;
+    expect(shifted.difference(base).inMinutes, 120);
+
+    // Only the one dated wake moved; the day after is unshifted dawn+offset.
+    final dayAfter = shifted.add(const Duration(days: 1));
+    final baseDayAfter = c.baseWakeOn(dayAfter)!;
+    expect(c.wakeOn(dayAfter), baseDayAfter);
+
+    // Clearing works via 0.
+    await c.setOneTimeExtra(0);
+    expect(c.nextWake, base);
+  });
+
+  test('delayed bedtime schedules the 2999 reminder and expires', () async {
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+
+    await c.delayBedtime(const Duration(minutes: 30));
+    expect(fake.scheduled.containsKey(2999), isTrue);
+    expect(
+      fake.scheduled[2999]!.difference(DateTime.now()).inMinutes,
+      inInclusiveRange(28, 30),
+    );
+
+    // Simulate the reminder having fired: expired timers clear on resync.
+    await c.update(c.settings.copyWith(
+      bedtimeDelayedUntil: () =>
+          DateTime.now().subtract(const Duration(minutes: 1)),
+    ));
+    await c.resync();
+    expect(c.settings.bedtimeDelayedUntil, isNull);
+    expect(fake.scheduled.containsKey(2999), isFalse);
+  });
+
   test('wake offset shifts nextWake', () async {
     final fake = FakeScheduler();
     final c = ArunodayController(store: ArunodayStore(), scheduler: fake);

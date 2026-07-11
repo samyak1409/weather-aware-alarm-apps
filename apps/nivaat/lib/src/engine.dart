@@ -4,6 +4,7 @@ import 'package:core/core.dart';
 import 'package:flutter/widgets.dart';
 
 import 'check_scheduler.dart';
+import 'skip_notifier.dart';
 
 /// Background entrypoint for Android AlarmManager wakeups. Runs in a fresh
 /// isolate: rebuild the whole graph, evaluate every alarm, reschedule.
@@ -24,6 +25,7 @@ class NivaatEngine {
     required this.scheduler,
     required this.api,
     required this.checks,
+    this.notifier,
   });
 
   factory NivaatEngine.standard() => NivaatEngine(
@@ -33,12 +35,22 @@ class NivaatEngine {
         api: OpenMeteo(),
         checks: CheckScheduler.forPlatform(
             androidEntrypoint: nivaatBackgroundCheck),
+        notifier: SkipNotifier(),
       );
 
   final NivaatStore store;
   final AlarmScheduler scheduler;
   final OpenMeteo api;
   final CheckScheduler checks;
+  final SkipNotifier? notifier;
+
+  Future<void> _notifySkip(HistoryRecord record, String courtName) async {
+    try {
+      await notifier?.showSkip(record, courtName);
+    } on Exception {
+      // A notification failure must never break the cascade.
+    }
+  }
 
   /// Within this window of the alarm we trust live wind over forecast.
   static const Duration liveWindWindow = Duration(minutes: 15);
@@ -128,7 +140,7 @@ class NivaatEngine {
     final atOrPastAlarm =
         !t.isBefore(next.subtract(const Duration(seconds: 30)));
     if (atOrPastAlarm && decision != null) {
-      await store.addHistory(HistoryRecord(
+      final record = HistoryRecord(
         alarmId: alarm.id,
         at: next,
         outcome: switch (decision.verdict) {
@@ -139,16 +151,20 @@ class NivaatEngine {
         courtSpeedKmh: decision.sample.courtSpeedKmh,
         rawGustKmh: decision.sample.rawGustKmh,
         volume: decision.shouldRing ? decision.volume : null,
-      ));
+      );
+      await store.addHistory(record);
       await store.clearCheckState(alarm.id);
+      if (!decision.shouldRing) await _notifySkip(record, court.name);
     } else if (atOrPastAlarm && nextCheck == null) {
       // Every check of this occurrence failed and the retry cap has passed.
-      await store.addHistory(HistoryRecord(
+      final record = HistoryRecord(
         alarmId: alarm.id,
         at: next,
         outcome: CheckOutcome.skippedNoData,
-      ));
+      );
+      await store.addHistory(record);
       await store.clearCheckState(alarm.id);
+      await _notifySkip(record, court.name);
     }
 
     if (nextCheck != null && !(atOrPastAlarm && decision != null)) {

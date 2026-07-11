@@ -123,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen>
         const SizedBox(height: 4),
         Text(
           'WAKE · DAWN ${fmtOffset(offset)}'
+          '${c.settings.oneTimeExtraDate != null && c.settings.oneTimeExtraMinutes != 0 ? ' · ONE-TIME ${fmtOffset(c.settings.oneTimeExtraMinutes)}' : ''}'
           '${c.settings.wakeEnabled ? '' : ' · OFF'}',
           style: text.labelSmall,
         ),

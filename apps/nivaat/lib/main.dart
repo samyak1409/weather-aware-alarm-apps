@@ -33,6 +33,8 @@ Future<void> main() async {
 
   final controller = NivaatController(engine: engine);
   unawaited(controller.init());
+  // Android 13+ notification permission for skip cards (no-op elsewhere).
+  unawaited(engine.notifier?.requestPermissionIfNeeded() ?? Future.value());
 
   runApp(NivaatApp(controller: controller));
 }
