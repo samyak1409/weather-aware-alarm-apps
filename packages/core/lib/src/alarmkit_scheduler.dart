@@ -147,5 +147,5 @@ Future<AlarmScheduler> createAlarmScheduler({
       tintColor: tintColor,
     );
   }
-  return AlarmPkgScheduler(soundAsset: soundAssetForVolume(1.0));
+  return AlarmPkgScheduler(soundAssetForVolume: soundAssetForVolume);
 }

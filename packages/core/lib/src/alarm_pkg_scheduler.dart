@@ -5,10 +5,12 @@ import 'scheduler.dart';
 /// v1 [AlarmScheduler] backed by the `alarm` pub package (both platforms).
 /// v1.1 swaps the iOS path to flutter_alarmkit behind this same interface.
 class AlarmPkgScheduler implements AlarmScheduler {
-  AlarmPkgScheduler({required this.soundAsset});
+  AlarmPkgScheduler({required this.soundAssetForVolume});
 
-  /// e.g. 'assets/sounds/arunoday_dawn.wav'
-  final String soundAsset;
+  /// Resolves the sound at schedule time (user-selectable tone). Receives
+  /// the ring volume for parity with AlarmKit's loudness-variant mapping;
+  /// this scheduler applies real volume, so most callers ignore it.
+  final String Function(double volume) soundAssetForVolume;
 
   static bool _initialized = false;
 
@@ -32,7 +34,7 @@ class AlarmPkgScheduler implements AlarmScheduler {
       alarmSettings: AlarmSettings(
         id: id,
         dateTime: at,
-        assetAudioPath: soundAsset,
+        assetAudioPath: soundAssetForVolume(volume),
         loopAudio: true,
         vibrate: true,
         androidFullScreenIntent: true,

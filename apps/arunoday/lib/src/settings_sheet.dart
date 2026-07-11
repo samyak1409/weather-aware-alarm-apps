@@ -119,6 +119,24 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
+              title: const Text('Alarm sound'),
+              trailing: Text(
+                SoundLibrary.displayName(s.soundPath,
+                    defaultName: 'Dawn Bells'),
+                style: text.titleMedium,
+              ),
+              onTap: () async {
+                final picked = await showSoundPicker(context,
+                    selectedPath:
+                        s.soundPath ?? 'assets/sounds/arunoday_dawn.wav');
+                if (picked != null) {
+                  await c.update(
+                      c.settings.copyWith(soundPath: () => picked.path));
+                }
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
               title: const Text('Bedtime'),
               subtitle: Text(
                 s.bedtimeOverrideMinutes == null ? 'Auto' : 'Manual',

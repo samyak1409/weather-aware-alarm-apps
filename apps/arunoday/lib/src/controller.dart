@@ -1,6 +1,8 @@
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 
+import 'sound_selection.dart' as sound;
+
 /// App state + alarm orchestration for Arunoday.
 ///
 /// Scheduling model (v1): a rolling window of the next [windowDays] wake and
@@ -134,6 +136,7 @@ class ArunodayController extends ChangeNotifier {
   }
 
   Future<void> _recomputeAndResync() async {
+    sound.selectedSoundPath = settings.soundPath;
     _clearExpiredOneTimers();
     final loc = activeLocation;
     if (loc == null) {

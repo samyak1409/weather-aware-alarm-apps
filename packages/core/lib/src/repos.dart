@@ -53,7 +53,23 @@ class NivaatStore {
   static const _alarmsKey = 'nivaat.alarms';
   static const _historyKey = 'nivaat.history';
   static const _statePrefix = 'nivaat.checkstate.';
+  static const _soundKey = 'nivaat.sound';
   static const _historyLimit = 60;
+
+  /// Selected alarm tone path; null = default (Court Call).
+  Future<String?> loadSoundPath() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_soundKey);
+  }
+
+  Future<void> saveSoundPath(String? path) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (path == null) {
+      await prefs.remove(_soundKey);
+    } else {
+      await prefs.setString(_soundKey, path);
+    }
+  }
 
   Future<List<SavedLocation>> loadCourts() async {
     final prefs = await SharedPreferences.getInstance();

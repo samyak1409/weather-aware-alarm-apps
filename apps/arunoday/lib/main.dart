@@ -7,19 +7,18 @@ import 'src/bedtime_actions.dart';
 import 'src/controller.dart';
 import 'src/home_screen.dart';
 import 'src/routing_scheduler.dart';
-
-String _dawnSound(double _) => 'assets/sounds/arunoday_dawn.wav';
+import 'src/sound_selection.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Wake alarms ride AlarmKit on iOS 26 (system-grade, Silent-proof);
   // bedtime alarms stay on the alarm package for the in-app ritual UI.
   final wake = await createAlarmScheduler(
-    soundAssetForVolume: _dawnSound,
+    soundAssetForVolume: arunodaySoundForVolume,
     tintColor: '#FFB067',
   );
   final bedtimePkg =
-      AlarmPkgScheduler(soundAsset: 'assets/sounds/arunoday_dawn.wav');
+      AlarmPkgScheduler(soundAssetForVolume: arunodaySoundForVolume);
   final scheduler = RoutingScheduler(
     wake: wake,
     bedtime: wake is AlarmPkgScheduler ? wake : bedtimePkg,

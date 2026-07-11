@@ -6,10 +6,19 @@ import 'package:flutter/widgets.dart';
 import 'check_scheduler.dart';
 import 'skip_notifier.dart';
 
+/// User-selected alarm tone; null = default Court Call. Loaded from the
+/// store at startup and in background entrypoints.
+String? nivaatSelectedSound;
+
+const String nivaatDefaultSound = 'assets/sounds/nivaat_ring.wav';
+
 /// Maps the wind-ramp volume to a pre-rendered loudness variant (AlarmKit
-/// has no volume knob). The `alarm` package path uses the 100% file with a
-/// real volume parameter instead.
+/// has no volume knob). Variants exist only for the default Court Call;
+/// other tones play as-is (the `alarm` package path applies real volume,
+/// so this only flattens the ramp on iOS with a non-default tone).
 String nivaatSoundForVolume(double volume) {
+  final selected = nivaatSelectedSound;
+  if (selected != null && selected != nivaatDefaultSound) return selected;
   final pct = ((volume * 10).round() * 10).clamp(50, 100);
   return 'assets/sounds/nivaat_ring_$pct.wav';
 }
@@ -20,7 +29,9 @@ String nivaatSoundForVolume(double volume) {
 Future<void> nivaatBackgroundCheck() async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
-  await (await NivaatEngine.standard()).evaluateAll();
+  final engine = await NivaatEngine.standard();
+  nivaatSelectedSound = await engine.store.loadSoundPath();
+  await engine.evaluateAll();
 }
 
 /// Orchestrates the wind-check cascade for every alarm (SPEC.md):

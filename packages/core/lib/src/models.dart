@@ -38,6 +38,7 @@ class ArunodaySettings {
     this.oneTimeExtraMinutes = 0,
     this.oneTimeExtraDate,
     this.bedtimeDelayedUntil,
+    this.soundPath,
   });
 
   final List<SavedLocation> locations;
@@ -61,6 +62,9 @@ class ArunodaySettings {
   /// A "not sleepy yet" delayed bedtime reminder; cleared once it fires.
   final DateTime? bedtimeDelayedUntil;
 
+  /// Selected alarm tone (asset or absolute device path); null = app default.
+  final String? soundPath;
+
   SavedLocation? get activeLocation {
     for (final l in locations) {
       if (l.id == activeLocationId) return l;
@@ -78,6 +82,7 @@ class ArunodaySettings {
     int? oneTimeExtraMinutes,
     String? Function()? oneTimeExtraDate,
     DateTime? Function()? bedtimeDelayedUntil,
+    String? Function()? soundPath,
   }) =>
       ArunodaySettings(
         locations: locations ?? this.locations,
@@ -95,6 +100,7 @@ class ArunodaySettings {
         bedtimeDelayedUntil: bedtimeDelayedUntil != null
             ? bedtimeDelayedUntil()
             : this.bedtimeDelayedUntil,
+        soundPath: soundPath != null ? soundPath() : this.soundPath,
       );
 
   Map<String, dynamic> toJson() => {
@@ -107,6 +113,7 @@ class ArunodaySettings {
         'oneTimeExtraMinutes': oneTimeExtraMinutes,
         'oneTimeExtraDate': oneTimeExtraDate,
         'bedtimeDelayedUntil': bedtimeDelayedUntil?.toIso8601String(),
+        'soundPath': soundPath,
       };
 
   factory ArunodaySettings.fromJson(Map<String, dynamic> j) =>
@@ -125,6 +132,7 @@ class ArunodaySettings {
         bedtimeDelayedUntil: j['bedtimeDelayedUntil'] == null
             ? null
             : DateTime.parse(j['bedtimeDelayedUntil'] as String),
+        soundPath: j['soundPath'] as String?,
       );
 }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'alarm_sheet.dart';
 import 'controller.dart';
 import 'courts_sheet.dart';
+import 'engine.dart';
 import 'history_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -69,6 +70,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 children: [
                   Text('NIVAAT', style: text.labelSmall),
                   const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.music_note_outlined, size: 20),
+                    color: AppPalette.textSecondary,
+                    onPressed: () async {
+                      final current = await c.store.loadSoundPath();
+                      if (!context.mounted) return;
+                      final picked = await showSoundPicker(context,
+                          selectedPath: current ?? nivaatDefaultSound);
+                      if (picked != null) {
+                        await c.store.saveSoundPath(picked.path);
+                        nivaatSelectedSound = picked.path;
+                        await c.resync();
+                      }
+                    },
+                  ),
                   IconButton(
                     icon: const Icon(Icons.history, size: 20),
                     color: AppPalette.textSecondary,

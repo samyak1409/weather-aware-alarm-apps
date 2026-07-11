@@ -11,5 +11,7 @@ export 'src/ring_gate.dart';
 export 'src/scheduler.dart';
 export 'src/sleep_plan.dart';
 export 'src/solar.dart';
+export 'src/sound_picker.dart';
+export 'src/sounds.dart';
 export 'src/theme.dart';
 export 'src/wind.dart';

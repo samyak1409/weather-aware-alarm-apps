@@ -24,6 +24,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final engine = await NivaatEngine.standard();
+  nivaatSelectedSound = await engine.store.loadSoundPath();
   await engine.scheduler.ensureInitialized();
 
   if (Platform.isIOS) {
