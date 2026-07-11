@@ -1,6 +1,7 @@
 library;
 
 export 'src/alarm_pkg_scheduler.dart';
+export 'src/alarmkit_scheduler.dart';
 export 'src/format.dart';
 export 'src/location_picker.dart';
 export 'src/models.dart';

@@ -15,7 +15,7 @@ import 'src/home_screen.dart';
 void workmanagerDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     DartPluginRegistrant.ensureInitialized();
-    await NivaatEngine.standard().evaluateAll();
+    await (await NivaatEngine.standard()).evaluateAll();
     return true;
   });
 }
@@ -23,7 +23,7 @@ void workmanagerDispatcher() {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final engine = NivaatEngine.standard();
+  final engine = await NivaatEngine.standard();
   await engine.scheduler.ensureInitialized();
 
   if (Platform.isIOS) {

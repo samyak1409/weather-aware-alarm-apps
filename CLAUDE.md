@@ -16,6 +16,15 @@ Two Flutter alarm apps sharing one core package. **Read SPEC.md before changing 
 - Tests: `packages/core/test` validates against real-world reference numbers recorded in SPEC.md (Jaipur/Tonk/BLR dawn times, ring-rate expectations). Keep them passing; they are the spec-as-code.
 - Verify with `flutter analyze` + `flutter test` in each package/app you touch.
 
+## Build notes (hard-won, don't rediscover)
+
+- JDK: brew formula openjdk@21, wired via `flutter config --jdk-dir`. Android SDK: `~/Library/Android/sdk` (headless, no Android Studio); use the SDK's own `cmdline-tools/latest/bin/avdmanager` (the brew one points at the wrong root).
+- Both apps force `compileSdk = 36` AND carry a root-gradle reflection override forcing plugin modules to 36 (the `alarm` plugin pins 34 but its `flutter_fgbg` dep needs 35+).
+- Nivaat Android needs core-library desugaring (flutter_local_notifications).
+- Nivaat iOS: deployment target 15.0 (workmanager); the Swift import is `workmanager_apple` (federated module name), plugin class `WorkmanagerPlugin`.
+- AlarmKit: `flutter_alarmkit` takes Flutter asset paths for sounds (WAV < 30s); timestamps are Unix **milliseconds** as double; it assigns its own UUIDs → `AlarmKitScheduler` persists an int-id→UUID map. `NSAlarmKitUsageDescription` required in Info.plist.
+- Emulator smoke loop: boot `emulator -avd pixel -no-window`, `adb exec-out screencap -p`. iOS: `xcrun simctl` install/launch/screenshot; seed SharedPreferences by writing the app container's plist while the sim is shut down (simctl spawn defaults writes outside the sandbox — doesn't work).
+
 ## Workflow
 
 - Samyak prefers: TLDR-first answers, simple language with examples, data-verified claims, small focused iterations during implementation.

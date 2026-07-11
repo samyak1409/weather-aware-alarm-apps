@@ -141,6 +141,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_alarmkit:
+    dependency: transitive
+    description:
+      name: flutter_alarmkit
+      sha256: "8cba5f813d113d92a5bd4bcfc4cb6297c7e4722bebb41785c1cb3bb8034e611c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.3.1"
   flutter_fgbg:
     dependency: transitive
     description:

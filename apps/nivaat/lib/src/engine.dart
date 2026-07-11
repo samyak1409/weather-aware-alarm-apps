@@ -6,13 +6,21 @@ import 'package:flutter/widgets.dart';
 import 'check_scheduler.dart';
 import 'skip_notifier.dart';
 
+/// Maps the wind-ramp volume to a pre-rendered loudness variant (AlarmKit
+/// has no volume knob). The `alarm` package path uses the 100% file with a
+/// real volume parameter instead.
+String nivaatSoundForVolume(double volume) {
+  final pct = ((volume * 10).round() * 10).clamp(50, 100);
+  return 'assets/sounds/nivaat_ring_$pct.wav';
+}
+
 /// Background entrypoint for Android AlarmManager wakeups. Runs in a fresh
 /// isolate: rebuild the whole graph, evaluate every alarm, reschedule.
 @pragma('vm:entry-point')
 Future<void> nivaatBackgroundCheck() async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
-  await NivaatEngine.standard().evaluateAll();
+  await (await NivaatEngine.standard()).evaluateAll();
 }
 
 /// Orchestrates the wind-check cascade for every alarm (SPEC.md):
@@ -28,10 +36,12 @@ class NivaatEngine {
     this.notifier,
   });
 
-  factory NivaatEngine.standard() => NivaatEngine(
+  static Future<NivaatEngine> standard() async => NivaatEngine(
         store: NivaatStore(),
-        scheduler:
-            AlarmPkgScheduler(soundAsset: 'assets/sounds/nivaat_ring.wav'),
+        scheduler: await createAlarmScheduler(
+          soundAssetForVolume: nivaatSoundForVolume,
+          tintColor: '#6FD6C8',
+        ),
         api: OpenMeteo(),
         checks: CheckScheduler.forPlatform(
             androidEntrypoint: nivaatBackgroundCheck),

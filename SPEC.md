@@ -14,7 +14,7 @@ All decisions below were locked with Samyak on 2026-07-11 after research and rea
 | Framework | Flutter, monorepo, shared `core` package |
 | Targets | Android 13+ (minSdk 33), iOS — latest; AlarmKit (iOS 26) planned for v1.1 |
 | UI | Pure black `#000000`, minimal, dark-only. Arunoday accent: dawn orange. Nivaat accent: wind teal |
-| Alarm engine v1 | `alarm` pub package behind a `core` interface; swap to `flutter_alarmkit` on iOS in v1.1 |
+| Alarm engine v1 | Behind core's `AlarmScheduler`: **AlarmKit (iOS 26+)** via flutter_alarmkit — system-rung, Silent/Focus-proof, survives termination; `alarm` pub package elsewhere. Hybrid in Arunoday: wake → AlarmKit, bedtime → alarm pkg (keeps in-app ritual UI). AlarmKit has no volume knob → Nivaat ships pre-rendered loudness WAVs (50–100%), mapped from the wind ramp. Verified live on iOS 26.5 simulator (authorization prompt) |
 | Locations | Saved named locations in settings. Two ways to add: **"Use my current location"** (one-shot GPS fix — works offline, low accuracy is fine at dawn/wind scale, custom name prompt) or **geocoding search** (Open-Meteo, free, no key — for places you aren't standing at). No background location, ever |
 | Distribution | GitHub releases. Android: APK. iOS: sideload (free Apple ID = 7-day signing during dev; SideStore later) |
 | Units | Metric, km/h. English UI. Weekday selector on alarms. Snooze 5 min |
@@ -45,7 +45,7 @@ All decisions below were locked with Samyak on 2026-07-11 after research and rea
 
 ## v1.1 roadmap (not v1)
 
-flutter_alarmkit on iOS 26 · Nivaat bedside mode · per-court shelter calibration · background schedule top-up · "how often will this ring?" seasonal preview (Open-Meteo archive) · Hindi UI
+Nivaat bedside mode · per-court shelter calibration · background schedule top-up · "how often will this ring?" seasonal preview (Open-Meteo archive) · Hindi UI · AlarmKit on-device ring verification (sound loop length, snooze behavior)
 
 ## Explicitly rejected
 

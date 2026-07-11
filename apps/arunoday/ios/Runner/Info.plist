@@ -13,6 +13,8 @@
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Used once to set your alarm location — dawn time depends on where you are. Never tracked in the background.</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Rings your dawn alarm even in Silent mode and Focus.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

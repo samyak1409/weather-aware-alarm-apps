@@ -2,7 +2,7 @@ import Flutter
 import UIKit
 import UserNotifications
 import alarm
-import workmanager
+import workmanager_apple
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
