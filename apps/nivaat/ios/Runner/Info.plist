@@ -13,6 +13,8 @@
 		<string>com.samyak.nivaat.refresh</string>
 		<string>com.gdelataillade.fetch</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used once to save a court's location — wind is checked at the court. Never tracked in the background.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

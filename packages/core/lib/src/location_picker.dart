@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'open_meteo.dart';
 import 'theme.dart';
 
-/// Shared bottom-sheet place search (Open-Meteo geocoding). Returns the
-/// picked [GeoPlace], or null if dismissed.
+/// Shared bottom-sheet place picker: GPS ("use my current location", works
+/// fully offline — GPS is satellite-based) or Open-Meteo geocoding search
+/// (for places you aren't standing at). Returns the picked [GeoPlace], or
+/// null if dismissed.
 Future<GeoPlace?> showLocationSearch(BuildContext context) {
   return showModalBottomSheet<GeoPlace>(
     context: context,
@@ -27,6 +30,7 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
   Timer? _debounce;
   List<GeoPlace> _results = const [];
   bool _loading = false;
+  bool _locating = false;
   String? _error;
 
   @override
@@ -57,23 +61,122 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
     });
   }
 
+  Future<Position?> _gpsFix() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      setState(() => _error = 'Turn on location services first');
+      return null;
+    }
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
+      setState(() => _error = 'Location permission denied');
+      return null;
+    }
+    try {
+      // Low accuracy = fast fix; dawn/wind barely change across a few km.
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 20),
+        ),
+      );
+    } on Exception {
+      return Geolocator.getLastKnownPosition();
+    }
+  }
+
+  Future<void> _useGps() async {
+    setState(() {
+      _locating = true;
+      _error = null;
+    });
+    try {
+      final pos = await _gpsFix();
+      if (!mounted) return;
+      if (pos == null) {
+        setState(() => _error ??= 'Could not get a GPS fix — try search');
+        return;
+      }
+      final name = await _askName(context);
+      if (!mounted || name == null) return;
+      Navigator.of(context).pop(GeoPlace(
+        name: name,
+        region:
+            '${pos.latitude.toStringAsFixed(3)}, ${pos.longitude.toStringAsFixed(3)}',
+        lat: pos.latitude,
+        lon: pos.longitude,
+      ));
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  Future<String?> _askName(BuildContext context) {
+    final controller = TextEditingController(text: 'My location');
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('NAME THIS PLACE',
+            style: Theme.of(context).textTheme.labelSmall),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(border: InputBorder.none),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              Navigator.pop(context, name.isEmpty ? 'My location' : name);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: SizedBox(
-        height: 420,
+        height: 460,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            ListTile(
+              leading: _locating
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.my_location, size: 20),
+              title: Text(_locating
+                  ? 'Getting a GPS fix…'
+                  : 'Use my current location'),
+              subtitle: const Text(
+                'Works offline',
+                style: TextStyle(color: AppPalette.textSecondary, fontSize: 12),
+              ),
+              onTap: _locating ? null : _useGps,
+            ),
+            const Divider(),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
               child: TextField(
-                autofocus: true,
                 onChanged: _onQuery,
                 decoration: const InputDecoration(
-                  hintText: 'Search a place…',
+                  hintText: 'Or search a place…',
                   border: InputBorder.none,
                 ),
                 style: const TextStyle(fontSize: 18),

@@ -11,6 +11,8 @@
 	<array>
 		<string>com.gdelataillade.fetch</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Used once to set your alarm location — dawn time depends on where you are. Never tracked in the background.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

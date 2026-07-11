@@ -15,7 +15,7 @@ All decisions below were locked with Samyak on 2026-07-11 after research and rea
 | Targets | Android 13+ (minSdk 33), iOS — latest; AlarmKit (iOS 26) planned for v1.1 |
 | UI | Pure black `#000000`, minimal, dark-only. Arunoday accent: dawn orange. Nivaat accent: wind teal |
 | Alarm engine v1 | `alarm` pub package behind a `core` interface; swap to `flutter_alarmkit` on iOS in v1.1 |
-| Locations | Saved named locations in settings (Open-Meteo geocoding search, free, no key). No GPS/background location |
+| Locations | Saved named locations in settings. Two ways to add: **"Use my current location"** (one-shot GPS fix — works offline, low accuracy is fine at dawn/wind scale, custom name prompt) or **geocoding search** (Open-Meteo, free, no key — for places you aren't standing at). No background location, ever |
 | Distribution | GitHub releases. Android: APK. iOS: sideload (free Apple ID = 7-day signing during dev; SideStore later) |
 | Units | Metric, km/h. English UI. Weekday selector on alarms. Snooze 5 min |
 
