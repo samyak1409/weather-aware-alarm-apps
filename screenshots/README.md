@@ -8,4 +8,4 @@ change (simulator + emulator captures; see CLAUDE.md).
 - **nivaat/** — 01 home (alarms + last outcome) → 02 alarm editor →
   03 courts → 04 history (ring/skip reasons)
 
-Android = Pixel 7 emulator (1080x2400) · iOS = iPhone 17 simulator (iOS 26.5)
+Android = Pixel 9 emulator (1080x2424; latest profile the SDK ships) · iOS = iPhone 17 simulator (iOS 26.5)

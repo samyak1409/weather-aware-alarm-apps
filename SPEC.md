@@ -45,7 +45,7 @@ All decisions below were locked with Samyak on 2026-07-11 after research and rea
 
 ## v1.1 roadmap (not v1)
 
-Nivaat bedside mode · per-court shelter calibration · background schedule top-up · "how often will this ring?" seasonal preview (Open-Meteo archive) · Hindi UI · AlarmKit on-device ring verification (sound loop length, snooze behavior)
+Nivaat bedside mode · per-court shelter calibration · background schedule top-up · "how often will this ring?" seasonal preview (Open-Meteo archive) · Hindi UI · AlarmKit on-device ring verification (sound loop length, snooze behavior) · **integration-test screenshot harness** (in-app driver walks every screen on both platforms and regenerates `screenshots/` in one command — solves iOS's no-headless-tap limitation; ~400 LOC, plan ~1h incl. flakiness debugging) · more original bundled tones, then revisit cross-shipping both tones in both apps (kept for now so the iOS picker has ≥2 options)
 
 ## Explicitly rejected
 
