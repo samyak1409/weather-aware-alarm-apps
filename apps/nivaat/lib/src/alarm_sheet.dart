@@ -32,7 +32,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
       widget.existing?.courtId ?? widget.c.courts.first.id;
   late int _limit =
       widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit;
-  late Set<int> _weekdays =
+  late final Set<int> _weekdays =
       {...(widget.existing?.weekdays ?? const {1, 2, 3, 4, 5, 6, 7})};
 
   Future<void> _pickTime() async {
