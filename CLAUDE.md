@@ -25,6 +25,11 @@ Two Flutter alarm apps sharing one core package. **Read SPEC.md before changing 
 - AlarmKit: `flutter_alarmkit` takes Flutter asset paths for sounds (WAV < 30s); timestamps are Unix **milliseconds** as double; it assigns its own UUIDs → `AlarmKitScheduler` persists an int-id→UUID map. `NSAlarmKitUsageDescription` required in Info.plist.
 - Emulator smoke loop: boot `emulator -avd pixel -no-window`, `adb exec-out screencap -p`. iOS: `xcrun simctl` install/launch/screenshot; seed SharedPreferences by writing the app container's plist while the sim is shut down (simctl spawn defaults writes outside the sandbox — doesn't work).
 
+## Assets & screenshots
+
+- `screenshots/<app>/` is **git-tracked** with stable filenames; refresh the affected screenshots (simulator + emulator captures) whenever UI changes — history lives in git, never in versioned folder names.
+- Alarm sounds are generated, not sourced: `tools/make_sounds.py` (numpy) synthesizes both WAVs; Nivaat's loudness variants (50-100%) are amplitude-scaled copies of the base. Keep every sound < 30s (AlarmKit hard limit).
+
 ## Workflow
 
 - Samyak prefers: TLDR-first answers, simple language with examples, data-verified claims, small focused iterations during implementation.
