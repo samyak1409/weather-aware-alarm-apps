@@ -7,8 +7,8 @@ class AppPalette {
   /// Arunoday accent: first light of dawn.
   static const Color dawn = Color(0xFFFFB067);
 
-  /// Nivaat accent: still-air teal.
-  static const Color wind = Color(0xFF6FD6C8);
+  /// Nivaat accent: clear-sky blue (a calm, windless morning).
+  static const Color wind = Color(0xFF6FB7EC);
 
   static const Color trueBlack = Color(0xFF000000);
   static const Color surface = Color(0xFF0E0E0E);
@@ -30,6 +30,11 @@ ThemeData buildOledTheme(Color accent) {
     scaffoldBackgroundColor: AppPalette.trueBlack,
     canvasColor: AppPalette.trueBlack,
     dialogTheme: const DialogThemeData(backgroundColor: AppPalette.surface),
+    snackBarTheme: const SnackBarThemeData(
+      backgroundColor: AppPalette.surface,
+      contentTextStyle: TextStyle(color: AppPalette.textPrimary),
+      behavior: SnackBarBehavior.floating,
+    ),
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: AppPalette.surface,
       surfaceTintColor: Colors.transparent,
@@ -44,6 +49,13 @@ ThemeData buildOledTheme(Color accent) {
       color: AppPalette.hairline,
       thickness: 0.5,
       space: 0.5,
+    ),
+    scrollbarTheme: ScrollbarThemeData(
+      // Dull grey, not the bright default white.
+      thumbColor:
+          WidgetStatePropertyAll(AppPalette.textSecondary.withValues(alpha: 0.4)),
+      thickness: const WidgetStatePropertyAll(4),
+      radius: const Radius.circular(4),
     ),
     listTileTheme: const ListTileThemeData(
       iconColor: AppPalette.textSecondary,

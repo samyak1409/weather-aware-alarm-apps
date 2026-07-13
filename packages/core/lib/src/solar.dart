@@ -117,6 +117,22 @@ class Solar {
     );
   }
 
+  /// True only if civil dawn occurs on **every** day of [year] at this
+  /// location. False in polar regions where the sun doesn't cross the
+  /// civil-dawn threshold for part of the year — Arunoday needs a real
+  /// daily dawn, so such locations are refused.
+  static bool hasDailyDawnAllYear(int year, double latDeg, double lonDeg) {
+    var day = DateTime.utc(year, 1, 1);
+    while (day.year == year) {
+      if (_morningEventUtcMinutes(day, latDeg, lonDeg, zenith: civilZenith) ==
+          null) {
+        return false;
+      }
+      day = day.add(const Duration(days: 1));
+    }
+    return true;
+  }
+
   static int _dayOfYear(DateTime d) =>
       d.difference(DateTime.utc(d.year, 1, 1)).inDays + 1;
 }

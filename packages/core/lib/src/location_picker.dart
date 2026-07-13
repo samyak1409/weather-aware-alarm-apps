@@ -10,16 +10,24 @@ import 'theme.dart';
 /// fully offline — GPS is satellite-based) or Open-Meteo geocoding search
 /// (for places you aren't standing at). Returns the picked [GeoPlace], or
 /// null if dismissed.
-Future<GeoPlace?> showLocationSearch(BuildContext context) {
+/// [validate] runs on the picked coords **before** the user is asked to name
+/// a GPS spot or a search result is returned — returning a message rejects it
+/// in place (shown inline), so a doomed pick never wastes the user's effort.
+Future<GeoPlace?> showLocationSearch(
+  BuildContext context, {
+  String? Function(double lat, double lon)? validate,
+}) {
   return showModalBottomSheet<GeoPlace>(
     context: context,
     isScrollControlled: true,
-    builder: (_) => const _LocationSearchSheet(),
+    builder: (_) => _LocationSearchSheet(validate: validate),
   );
 }
 
 class _LocationSearchSheet extends StatefulWidget {
-  const _LocationSearchSheet();
+  const _LocationSearchSheet({this.validate});
+
+  final String? Function(double lat, double lon)? validate;
 
   @override
   State<_LocationSearchSheet> createState() => _LocationSearchSheetState();
@@ -97,7 +105,14 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
       final pos = await _gpsFix();
       if (!mounted) return;
       if (pos == null) {
-        setState(() => _error ??= 'Could not get a GPS fix — try search');
+        setState(() =>
+            _error ??= "Couldn't get your location — try search instead");
+        return;
+      }
+      // Reject up front (duplicate / polar) before bothering with a name.
+      final err = widget.validate?.call(pos.latitude, pos.longitude);
+      if (err != null) {
+        setState(() => _error = err);
         return;
       }
       final name = await _askName(context);
@@ -162,7 +177,7 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
                     )
                   : const Icon(Icons.my_location, size: 20),
               title: Text(_locating
-                  ? 'Getting a GPS fix…'
+                  ? 'Getting your location…'
                   : 'Use my current location'),
               subtitle: const Text(
                 'Works offline',
@@ -200,7 +215,14 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
                     subtitle: Text(p.region,
                         style: const TextStyle(
                             color: AppPalette.textSecondary, fontSize: 12)),
-                    onTap: () => Navigator.of(context).pop(p),
+                    onTap: () {
+                      final err = widget.validate?.call(p.lat, p.lon);
+                      if (err != null) {
+                        setState(() => _error = err);
+                        return;
+                      }
+                      Navigator.of(context).pop(p);
+                    },
                   );
                 },
               ),

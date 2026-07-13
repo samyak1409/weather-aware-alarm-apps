@@ -2,6 +2,7 @@ import 'package:alarm/alarm.dart';
 import 'package:alarm/utils/alarm_set.dart';
 import 'package:flutter/material.dart';
 
+import 'format.dart';
 import 'theme.dart';
 
 /// Wraps the app and overlays a full-screen stop UI whenever an alarm from
@@ -54,7 +55,6 @@ class _RingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final now = TimeOfDay.now();
     final first = alarms.first;
     return Scaffold(
       backgroundColor: AppPalette.trueBlack,
@@ -67,10 +67,9 @@ class _RingScreen extends StatelessWidget {
               const SizedBox(height: 16),
               Text(appName, style: text.labelSmall),
               const Spacer(),
-              Text(
-                '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
-                style: text.displayLarge,
-              ),
+              // The alarm's scheduled time, not the wall clock: rings can
+              // start a second early and this screen doesn't rebuild.
+              Text(fmtClock(first.dateTime), style: text.displayLarge),
               const SizedBox(height: 12),
               Text(
                 first.notificationSettings.body,

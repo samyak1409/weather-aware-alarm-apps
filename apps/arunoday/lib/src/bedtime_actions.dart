@@ -4,9 +4,9 @@ import 'package:flutter/material.dart';
 
 import 'controller.dart';
 
-/// Bedtime-ritual actions shown on the ring screen for bedtime alarms
-/// (ids 2000-2999): confirm tomorrow's wake, delay bedtime if not sleepy,
-/// or push tomorrow's wake later one time.
+/// Bedtime-ritual action shown on the ring screen for bedtime alarms
+/// (ids 2000-2999): "not sleepy" — stop the ring, ring bedtime again in an
+/// hour. (Tomorrow-wake shifting was removed 2026-07-12; see SPEC.md.)
 class BedtimeActions extends StatelessWidget {
   const BedtimeActions({
     super.key,
@@ -20,22 +20,29 @@ class BedtimeActions extends StatelessWidget {
   static bool isBedtimeAlarm(AlarmSettings a) => a.id >= 2000 && a.id < 3000;
 
   Future<void> _delay(BuildContext context, Duration d) async {
-    await controller.delayBedtime(d);
+    // Stop first — the resync inside delayBedtime re-schedules the whole
+    // 7-day window and takes a moment; the ring must die instantly.
     await Alarm.stop(ringingAlarm.id);
+    await controller.delayBedtime(d);
+  }
+
+  /// A post-midnight bedtime wakes you the same calendar day.
+  static bool _isToday(DateTime t) {
+    final now = DateTime.now();
+    return t.year == now.year && t.month == now.month && t.day == now.day;
   }
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final nextWake = controller.nextWake;
-    final extra = controller.settings.oneTimeExtraMinutes;
 
     return Column(
       children: [
         if (nextWake != null) ...[
           Text(
-            'WAKE TOMORROW ${fmtClock(nextWake)}'
-            '${extra != 0 ? ' · ONE-TIME ${fmtOffset(extra)}' : ''}',
+            'WAKE ${_isToday(nextWake) ? 'TODAY' : 'TOMORROW'} '
+            '${fmtClock(nextWake)}',
             style: text.labelSmall,
           ),
           const SizedBox(height: 16),
@@ -46,31 +53,8 @@ class BedtimeActions extends StatelessWidget {
             Text('NOT SLEEPY', style: text.labelSmall),
             const SizedBox(width: 8),
             OutlinedButton(
-              onPressed: () => _delay(context, const Duration(minutes: 30)),
-              child: const Text('+30m'),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
               onPressed: () => _delay(context, const Duration(hours: 1)),
               child: const Text('+1h'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('TOMORROW', style: text.labelSmall),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              onPressed: () => controller.setOneTimeExtra(extra == 60 ? 0 : 60),
-              child: Text(extra == 60 ? '+1h ✓' : '+1h'),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              onPressed: () =>
-                  controller.setOneTimeExtra(extra == 120 ? 0 : 120),
-              child: Text(extra == 120 ? '+2h ✓' : '+2h'),
             ),
           ],
         ),

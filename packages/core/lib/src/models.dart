@@ -32,7 +32,7 @@ class ArunodaySettings {
     this.locations = const [],
     this.activeLocationId,
     this.wakeOffsetMinutes = 0,
-    this.bedtimeOverrideMinutes,
+    this.bedtimeOffsetMinutes,
     this.wakeEnabled = true,
     this.bedtimeEnabled = true,
     this.oneTimeExtraMinutes = 0,
@@ -47,8 +47,10 @@ class ArunodaySettings {
   /// Signed offset applied to civil dawn (e.g. +120 = dawn + 2h).
   final int wakeOffsetMinutes;
 
-  /// Minutes-after-midnight; null = auto (SleepPlan).
-  final int? bedtimeOverrideMinutes;
+  /// Signed offset from the auto bedtime (SleepPlan), in minutes; null = auto.
+  /// Stored as an offset (not an absolute time) so it stays consistent when
+  /// the active location — and thus the auto bedtime — changes.
+  final int? bedtimeOffsetMinutes;
 
   final bool wakeEnabled;
   final bool bedtimeEnabled;
@@ -76,7 +78,7 @@ class ArunodaySettings {
     List<SavedLocation>? locations,
     String? activeLocationId,
     int? wakeOffsetMinutes,
-    int? Function()? bedtimeOverrideMinutes,
+    int? Function()? bedtimeOffsetMinutes,
     bool? wakeEnabled,
     bool? bedtimeEnabled,
     int? oneTimeExtraMinutes,
@@ -88,9 +90,9 @@ class ArunodaySettings {
         locations: locations ?? this.locations,
         activeLocationId: activeLocationId ?? this.activeLocationId,
         wakeOffsetMinutes: wakeOffsetMinutes ?? this.wakeOffsetMinutes,
-        bedtimeOverrideMinutes: bedtimeOverrideMinutes != null
-            ? bedtimeOverrideMinutes()
-            : this.bedtimeOverrideMinutes,
+        bedtimeOffsetMinutes: bedtimeOffsetMinutes != null
+            ? bedtimeOffsetMinutes()
+            : this.bedtimeOffsetMinutes,
         wakeEnabled: wakeEnabled ?? this.wakeEnabled,
         bedtimeEnabled: bedtimeEnabled ?? this.bedtimeEnabled,
         oneTimeExtraMinutes: oneTimeExtraMinutes ?? this.oneTimeExtraMinutes,
@@ -107,7 +109,7 @@ class ArunodaySettings {
         'locations': locations.map((l) => l.toJson()).toList(),
         'activeLocationId': activeLocationId,
         'wakeOffsetMinutes': wakeOffsetMinutes,
-        'bedtimeOverrideMinutes': bedtimeOverrideMinutes,
+        'bedtimeOffsetMinutes': bedtimeOffsetMinutes,
         'wakeEnabled': wakeEnabled,
         'bedtimeEnabled': bedtimeEnabled,
         'oneTimeExtraMinutes': oneTimeExtraMinutes,
@@ -124,7 +126,7 @@ class ArunodaySettings {
             .toList(),
         activeLocationId: j['activeLocationId'] as String?,
         wakeOffsetMinutes: j['wakeOffsetMinutes'] as int? ?? 0,
-        bedtimeOverrideMinutes: j['bedtimeOverrideMinutes'] as int?,
+        bedtimeOffsetMinutes: j['bedtimeOffsetMinutes'] as int?,
         wakeEnabled: j['wakeEnabled'] as bool? ?? true,
         bedtimeEnabled: j['bedtimeEnabled'] as bool? ?? true,
         oneTimeExtraMinutes: j['oneTimeExtraMinutes'] as int? ?? 0,

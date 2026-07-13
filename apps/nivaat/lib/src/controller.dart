@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
@@ -24,6 +25,30 @@ class NivaatController extends ChangeNotifier {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  /// An already-saved court within ~100 m (true great-circle distance), else
+  /// null. Tighter than Arunoday's 1 km: distinct courts can sit close
+  /// together, so only reject what is essentially the exact same spot.
+  SavedLocation? existingCourtNear(double lat, double lon) {
+    for (final c in courts) {
+      if (_metersBetween(c.lat, c.lon, lat, lon) < 100) return c;
+    }
+    return null;
+  }
+
+  static double _metersBetween(
+      double lat1, double lon1, double lat2, double lon2) {
+    const r = 6371000.0;
+    double rad(double d) => d * math.pi / 180.0;
+    final dLat = rad(lat2 - lat1);
+    final dLon = rad(lon2 - lon1);
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(rad(lat1)) *
+            math.cos(rad(lat2)) *
+            math.sin(dLon / 2) *
+            math.sin(dLon / 2);
+    return 2 * r * math.asin(math.sqrt(a));
   }
 
   Future<void> init() async {
@@ -59,12 +84,19 @@ class NivaatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// How many alarms are tied to [courtId] (for the delete confirmation).
+  int alarmsForCourt(String courtId) =>
+      alarms.where((a) => a.courtId == courtId).length;
+
   Future<void> removeCourt(String id) async {
+    final orphaned = alarms.where((a) => a.courtId == id).toList();
     courts = courts.where((c) => c.id != id).toList();
+    alarms = alarms.where((a) => a.courtId != id).toList();
     await store.saveCourts(courts);
-    // Alarms pointing at the removed court get their rings cancelled.
-    for (final a in alarms.where((a) => a.courtId == id)) {
-      await engine.evaluateAlarm(a, courts);
+    await store.saveAlarms(alarms);
+    // Cancel each orphaned alarm's ring + pending checks + cascade state.
+    for (final a in orphaned) {
+      await engine.evaluateAlarm(a.copyWith(enabled: false), courts);
     }
     notifyListeners();
   }
@@ -83,17 +115,24 @@ class NivaatController extends ChangeNotifier {
     await store.saveAlarms(alarms);
     // Edits invalidate the in-flight occurrence: start the cascade fresh.
     await store.clearCheckState(alarm.id);
-    await engine.evaluateAlarm(alarm, courts);
     notifyListeners();
+    // The wind evaluation hits the network — never block the UI on it.
+    unawaited(_evaluateInBackground(alarm));
   }
 
   Future<void> deleteAlarm(int id) async {
     final removed = alarms.where((a) => a.id == id).toList();
     alarms = alarms.where((a) => a.id != id).toList();
     await store.saveAlarms(alarms);
+    notifyListeners();
     for (final a in removed) {
-      await engine.evaluateAlarm(a.copyWith(enabled: false), courts);
+      unawaited(_evaluateInBackground(a.copyWith(enabled: false)));
     }
+  }
+
+  Future<void> _evaluateInBackground(NivaatAlarm alarm) async {
+    await engine.evaluateAlarm(alarm, courts);
+    history = await store.loadHistory();
     notifyListeners();
   }
 

@@ -28,8 +28,15 @@ class _AlarmSheet extends StatefulWidget {
 class _AlarmSheetState extends State<_AlarmSheet> {
   late int _hour = widget.existing?.hour ?? 6;
   late int _minute = widget.existing?.minute ?? 0;
-  late String _courtId =
-      widget.existing?.courtId ?? widget.c.courts.first.id;
+  // Fall back to the first court if the alarm's court was deleted — a value
+  // absent from the dropdown items would assert-crash the DropdownButton.
+  late String _courtId = _initialCourtId();
+
+  String _initialCourtId() {
+    final id = widget.existing?.courtId;
+    if (id != null && widget.c.courts.any((c) => c.id == id)) return id;
+    return widget.c.courts.first.id;
+  }
   late int _limit =
       widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit;
   late final Set<int> _weekdays =
@@ -48,7 +55,13 @@ class _AlarmSheetState extends State<_AlarmSheet> {
     }
   }
 
+  bool _saving = false;
+
   Future<void> _save() async {
+    // Guard against double-taps: a second tap would mint a second id and
+    // create a duplicate alarm.
+    if (_saving) return;
+    setState(() => _saving = true);
     final alarm = NivaatAlarm(
       id: widget.existing?.id ?? widget.c.nextAlarmId(),
       hour: _hour,
@@ -154,7 +167,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
                   ),
                 const Spacer(),
                 FilledButton(
-                  onPressed: _weekdays.isEmpty ? null : _save,
+                  onPressed: _weekdays.isEmpty || _saving ? null : _save,
                   child: const Text('Save'),
                 ),
               ],

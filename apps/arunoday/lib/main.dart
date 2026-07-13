@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'src/bedtime_actions.dart';
 import 'src/controller.dart';
 import 'src/home_screen.dart';
+import 'src/notifications.dart';
 import 'src/routing_scheduler.dart';
 import 'src/sound_selection.dart';
 
@@ -30,6 +31,8 @@ Future<void> main() async {
     scheduler: scheduler,
   );
   unawaited(controller.init());
+  // Android 13+ notification permission for the ring UI (no-op elsewhere).
+  unawaited(requestNotificationPermission());
 
   runApp(ArunodayApp(controller: controller));
 }

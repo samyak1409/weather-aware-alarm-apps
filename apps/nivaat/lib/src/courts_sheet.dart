@@ -11,6 +11,7 @@ Future<bool> showCourtsSheet(
 }) async {
   await showModalBottomSheet<void>(
     context: context,
+    isScrollControlled: true,
     builder: (_) => _CourtsSheet(c: c, promptAdd: promptAdd),
   );
   return c.courts.isNotEmpty;
@@ -28,18 +29,37 @@ class _CourtsSheet extends StatefulWidget {
 
 class _CourtsSheetState extends State<_CourtsSheet> {
   NivaatController get c => widget.c;
+  final _scroll = ScrollController();
+  bool _flashScrollbar = false;
 
   @override
   void initState() {
     super.initState();
     c.addListener(_onChanged);
-    if (widget.promptAdd && c.courts.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _addCourt());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget.promptAdd && c.courts.isEmpty) {
+        _addCourt();
+      } else {
+        _maybeFlashScrollbar();
+      }
+    });
+  }
+
+  void _maybeFlashScrollbar() {
+    if (!mounted ||
+        !_scroll.hasClients ||
+        _scroll.position.maxScrollExtent <= 0) {
+      return;
     }
+    setState(() => _flashScrollbar = true);
+    Future<void>.delayed(const Duration(milliseconds: 1100), () {
+      if (mounted) setState(() => _flashScrollbar = false);
+    });
   }
 
   @override
   void dispose() {
+    _scroll.dispose();
     c.removeListener(_onChanged);
     super.dispose();
   }
@@ -48,9 +68,42 @@ class _CourtsSheetState extends State<_CourtsSheet> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _deleteCourt(SavedLocation court) async {
+    final n = c.alarmsForCourt(court.id);
+    if (n > 0) {
+      final text = Theme.of(context).textTheme;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('DELETE COURT', style: text.labelSmall),
+          content: Text(
+            '$n alarm${n == 1 ? '' : 's'} use ${court.name} and will be '
+            'deleted too. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await c.removeCourt(court.id);
+  }
+
   Future<void> _addCourt() async {
-    final place = await showLocationSearch(context);
-    if (place != null) await c.addCourt(place);
+    final place = await showLocationSearch(context, validate: (lat, lon) {
+      final dup = c.existingCourtNear(lat, lon);
+      return dup == null ? null : 'Same spot as ${dup.name} — already added.';
+    });
+    if (place == null || !mounted) return;
+    await c.addCourt(place);
   }
 
   @override
@@ -82,21 +135,40 @@ class _CourtsSheetState extends State<_CourtsSheet> {
                   style: text.bodyMedium,
                 ),
               ),
-            ...c.courts.map(
-              (court) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(court.name),
-                subtitle: Text(
-                  '${court.lat.toStringAsFixed(3)}, ${court.lon.toStringAsFixed(3)}',
-                  style: text.bodyMedium,
+            // Bound + scroll the list so many courts don't overflow the sheet;
+            // scrollbar fades in on scroll and flashes once on open.
+            if (c.courts.isNotEmpty)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.45,
                 ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  color: AppPalette.textSecondary,
-                  onPressed: () => c.removeCourt(court.id),
+                child: Scrollbar(
+                  controller: _scroll,
+                  thumbVisibility: _flashScrollbar ? true : null,
+                  child: ListView(
+                    controller: _scroll,
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.only(right: 8),
+                    children: [
+                      for (final court in c.courts)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(court.name),
+                          subtitle: Text(
+                            '${court.lat.toStringAsFixed(3)}, '
+                            '${court.lon.toStringAsFixed(3)}',
+                            style: text.bodyMedium,
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            color: AppPalette.textSecondary,
+                            onPressed: () => _deleteCourt(court),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),

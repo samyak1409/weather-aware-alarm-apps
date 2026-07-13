@@ -51,7 +51,7 @@ class NivaatEngine {
         store: NivaatStore(),
         scheduler: await createAlarmScheduler(
           soundAssetForVolume: nivaatSoundForVolume,
-          tintColor: '#6FD6C8',
+          tintColor: '#6FB7EC',
         ),
         api: OpenMeteo(),
         checks: CheckScheduler.forPlatform(
@@ -142,8 +142,16 @@ class NivaatEngine {
           );
         }
       } else {
-        // Skip: cancel the pending ring (also stops a just-started one).
-        await scheduler.cancel(alarm.id);
+        // Skip: cancel a pending ring. But never cancel a ring already
+        // sounding for a *past* occurrence — once an occurrence fires its
+        // check-state clears, so `next` here is a future occurrence, and
+        // cancelling by the shared alarm id would silence the live ring
+        // (opening the app during a ring must not stop it). Only cancel when
+        // we're evaluating the current occurrence (at/near now).
+        final forCurrentOccurrence = next.difference(t) <= liveWindWindow;
+        if (!ringing || forCurrentOccurrence) {
+          await scheduler.cancel(alarm.id);
+        }
       }
     }
 
@@ -158,8 +166,10 @@ class NivaatEngine {
         CheckCascade.nextCheckTime(t, next, hadSuccessfulCheck: hadSuccess);
 
     // Final decision moment: at/after T with a result, or cascade exhausted.
+    // The grace covers scheduler jitter only; it must stay smaller than the
+    // gap between creating an alarm and its T, or the skip card fires early.
     final atOrPastAlarm =
-        !t.isBefore(next.subtract(const Duration(seconds: 30)));
+        !t.isBefore(next.subtract(const Duration(seconds: 5)));
     if (atOrPastAlarm && decision != null) {
       final record = HistoryRecord(
         alarmId: alarm.id,

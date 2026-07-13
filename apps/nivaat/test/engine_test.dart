@@ -1,6 +1,7 @@
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/check_scheduler.dart';
+import 'package:nivaat/src/controller.dart';
 import 'package:nivaat/src/engine.dart';
 import 'package:nivaat/src/skip_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +20,7 @@ class FakeNotifier extends SkipNotifier {
 
 class FakeRing implements AlarmScheduler {
   final Map<int, ({DateTime at, double volume, String body})> scheduled = {};
+  final Set<int> ringingIds = {};
 
   @override
   Future<void> ensureInitialized() async {}
@@ -41,7 +43,7 @@ class FakeRing implements AlarmScheduler {
   Future<Set<int>> scheduledIds() async => scheduled.keys.toSet();
 
   @override
-  Future<bool> isRinging(int id) async => false;
+  Future<bool> isRinging(int id) async => ringingIds.contains(id);
 }
 
 class FakeChecks implements CheckScheduler {
@@ -168,6 +170,22 @@ void main() {
     expect(notifier.shown.first.$2, 'Home Court');
   });
 
+  test('alarm created seconds before T: skip waits for T, never fires early',
+      () async {
+    api.sample = wind(9.0, 10.0); // court 5.4 > 4 -> windy
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(seconds: 20)));
+
+    expect(notifier.shown, isEmpty, reason: 'no skip card before T');
+    expect(await engine.store.loadHistory(), isEmpty);
+    expect(checks.booked[7], alarmAt, reason: 'final check booked at T');
+
+    await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+    expect(notifier.shown, hasLength(1));
+    final history = await engine.store.loadHistory();
+    expect(history.first.outcome, CheckOutcome.skippedWindy);
+  });
+
   test('API dead all the way to the +30m cap: skippedNoData recorded',
       () async {
     api.fail = true;
@@ -202,6 +220,78 @@ void main() {
     final history = await engine.store.loadHistory();
     expect(history.first.outcome, CheckOutcome.rang);
     expect(notifier.shown, isEmpty, reason: 'a ring needs no card');
+  });
+
+  group('NivaatController', () {
+    late NivaatController controller;
+    setUp(() => controller = NivaatController(engine: engine));
+
+    test('addCourt persists, courtById finds it, existingCourtNear (~100m)',
+        () async {
+      await controller.init();
+      await controller.addCourt(const GeoPlace(
+          name: 'Court A', region: 'x', lat: 12.9, lon: 77.6));
+      final saved = controller.courts.single;
+      expect(saved.name, 'Court A');
+      expect(controller.courtById(saved.id)!.name, 'Court A');
+      // ~50 m away → duplicate; a different city → not.
+      expect(controller.existingCourtNear(12.9003, 77.6003), isNotNull);
+      expect(controller.existingCourtNear(28.61, 77.20), isNull);
+    });
+
+    test('nextAlarmId increments; upsert adds then edits in place', () async {
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      expect(controller.nextAlarmId(), 1);
+      await controller.upsertAlarm(
+          const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
+      expect(controller.alarms.single.hour, 6);
+      expect(controller.nextAlarmId(), 2);
+      await controller.upsertAlarm(
+          const NivaatAlarm(id: 1, hour: 7, minute: 0, courtId: 'c1'));
+      expect(controller.alarms.length, 1, reason: 'edited in place');
+      expect(controller.alarms.single.hour, 7);
+    });
+
+    test('toggleAlarm flips enabled; deleteAlarm removes', () async {
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      await controller.upsertAlarm(alarm); // id 7
+      await controller.toggleAlarm(7, false);
+      expect(controller.alarms.single.enabled, isFalse);
+      await controller.deleteAlarm(7);
+      expect(controller.alarms, isEmpty);
+    });
+  });
+
+  test('opening the app during a ring never cancels it (future occurrence)',
+      () async {
+    // The alarm is currently ringing (a past occurrence fired and cleared).
+    ring.scheduled[7] =
+        (at: alarmAt, volume: 1.0, body: 'ringing now');
+    ring.ringingIds.add(7);
+
+    // Resume the app an hour later → re-evaluates the NEXT (future) occurrence,
+    // whose forecast is windy → skip. The live ring must survive.
+    api.sample = wind(12.0, 14.0); // court 7.2 > 4 → windy
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(hours: 1)));
+
+    expect(ring.scheduled.containsKey(7), isTrue,
+        reason: 'a resync for a future occurrence must not silence the ring');
+  });
+
+  test('removing a court deletes its alarms too', () async {
+    final controller = NivaatController(engine: engine);
+    await engine.store.saveCourts([court]);
+    await engine.store.saveAlarms([alarm]); // alarm.courtId == court.id
+    await controller.init();
+    expect(controller.alarmsForCourt(court.id), 1);
+
+    await controller.removeCourt(court.id);
+    expect(controller.courts, isEmpty);
+    expect(controller.alarms, isEmpty,
+        reason: 'orphaned alarms must not linger with a dead court id');
   });
 
   test('disabled alarm clears everything', () async {

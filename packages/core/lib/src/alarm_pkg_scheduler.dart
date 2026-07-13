@@ -38,6 +38,10 @@ class AlarmPkgScheduler implements AlarmScheduler {
         loopAudio: true,
         vibrate: true,
         androidFullScreenIntent: true,
+        // Alarms live in AlarmManager / UNNotification and survive the app
+        // being swiped from recents; the package's "may not ring" warning
+        // only applies to aggressive OEM task killers.
+        warningNotificationOnKill: false,
         volumeSettings: VolumeSettings.fixed(
           volume: volume.clamp(0.0, 1.0),
           volumeEnforced: true,
