@@ -90,7 +90,10 @@ WindSample wind(double rawSpeed, double rawGust) => WindSample(
     );
 
 const court = SavedLocation(id: 'c1', name: 'Home Court', lat: 26.17, lon: 75.79);
-const alarm = NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1');
+// Pin the limit (don't rely on the default) so these wind-decision scenarios
+// stay valid if the default changes: raw gust limit 4/0.6*2.2 = 14.667.
+const alarm =
+    NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1', courtSpeedLimitKmh: 4);
 final alarmAt = DateTime(2026, 7, 12, 6, 0); // 11 Jul 2026 is a Saturday
 
 void main() {

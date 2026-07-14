@@ -17,9 +17,17 @@ void main() {
       expect(t.rawGustLimit, closeTo(14.667, 0.01));
     });
 
-    test('gust floor: threshold 1 keeps gust limit at 12 raw', () {
-      const t = WindThresholds(courtSpeedLimitKmh: 1);
-      expect(t.rawGustLimit, 12.0);
+    test('gust limit is exactly 2.2x the raw speed limit — no floor', () {
+      expect(const WindThresholds(courtSpeedLimitKmh: 5).rawGustLimit,
+          closeTo(2.2 * 5 / 0.6, 0.01)); // 18.33, not a floored 12
+      expect(const WindThresholds(courtSpeedLimitKmh: 6).rawGustLimit,
+          closeTo(22.0, 0.01));
+    });
+
+    test('offered range is 4-6 (sub-4 dropped with the gust floor)', () {
+      expect(WindThresholds.minLimit, 4);
+      expect(WindThresholds.maxLimit, 6);
+      expect(WindThresholds.defaultLimit, 6);
     });
 
     test('API 10m wind converts to court level at x0.6', () {

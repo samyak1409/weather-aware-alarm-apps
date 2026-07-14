@@ -128,6 +128,18 @@ void main() {
       expect(a.weekdays, const {1, 2, 3, 4, 5, 6, 7});
       expect(a.enabled, isTrue);
     });
+
+    test('fromJson clamps a legacy out-of-range speed limit into 4-6', () {
+      // Settings 1-3 were dropped with the gust floor (2026-07-14); an alarm
+      // saved at "1" migrates up to the new minimum rather than crashing the
+      // dropdown with a value it no longer offers.
+      final legacy = NivaatAlarm.fromJson(
+          {'id': 1, 'hour': 6, 'minute': 0, 'courtId': 'c', 'courtSpeedLimitKmh': 1});
+      expect(legacy.courtSpeedLimitKmh, 4);
+      final high = NivaatAlarm.fromJson(
+          {'id': 2, 'hour': 6, 'minute': 0, 'courtId': 'c', 'courtSpeedLimitKmh': 9});
+      expect(high.courtSpeedLimitKmh, 6);
+    });
   });
 
   group('HistoryRecord', () {

@@ -37,8 +37,10 @@ class _AlarmSheetState extends State<_AlarmSheet> {
     if (id != null && widget.c.courts.any((c) => c.id == id)) return id;
     return widget.c.courts.first.id;
   }
+  // Clamp defensively so an out-of-range saved value never crashes the dropdown.
   late int _limit =
-      widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit;
+      (widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit)
+          .clamp(WindThresholds.minLimit, WindThresholds.maxLimit);
   late final Set<int> _weekdays =
       {...(widget.existing?.weekdays ?? const {1, 2, 3, 4, 5, 6, 7})};
 

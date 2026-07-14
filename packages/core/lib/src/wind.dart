@@ -1,29 +1,33 @@
-import 'dart:math' as math;
-
 /// Wind decision engine for Nivaat. All rules locked in SPEC.md and derived
 /// from real Open-Meteo data for Tonk and Bengaluru (2026-07-11 research).
+library;
 
 /// Weather APIs report wind at 10 m height; at court level (~2 m) wind is
 /// ~40% weaker (log wind profile over open/suburban terrain).
 const double apiToCourtFactor = 0.6;
 
+/// Gust ceiling as a multiple of the (10 m) speed limit — a typical low-wind
+/// gust factor, above the ~1.4–1.7 seen in the field, so only abnormal gusts
+/// block a ring. No additive floor: court-wind settings below 4 would have
+/// needed one (their 2.2× falls under the ~12–15 km/h near-surface gust
+/// baseline), so those settings are simply not offered — see SPEC.md.
+const double gustFactor = 2.2;
+
 class WindThresholds {
   const WindThresholds({required this.courtSpeedLimitKmh});
 
-  /// User-facing dropdown value, 1-6 km/h, semantic = wind felt at the court.
+  /// User-facing dropdown value, 4-6 km/h, semantic = wind felt at the court.
   final int courtSpeedLimitKmh;
 
-  static const int minLimit = 1;
+  static const int minLimit = 4;
   static const int maxLimit = 6;
-  static const int defaultLimit = 4;
+  static const int defaultLimit = 6;
 
   /// The 10 m API speed corresponding to the court-level limit.
   double get rawSpeedLimit => courtSpeedLimitKmh / apiToCourtFactor;
 
-  /// Auto gust rule (uneditable): max(2.2 x raw speed limit, 12 km/h raw).
-  /// On calm mornings gusts cluster at 11-14 km/h raw; this only blocks
-  /// mornings whose gusts are abnormal for a calm day.
-  double get rawGustLimit => math.max(2.2 * rawSpeedLimit, 12.0);
+  /// Auto gust rule (uneditable): [gustFactor] × the raw speed limit, no floor.
+  double get rawGustLimit => gustFactor * rawSpeedLimit;
 }
 
 class WindSample {

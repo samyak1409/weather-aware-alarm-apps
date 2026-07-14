@@ -211,8 +211,12 @@ class NivaatAlarm {
         hour: j['hour'] as int,
         minute: j['minute'] as int,
         courtId: j['courtId'] as String,
+        // Clamp into the offered range: alarms saved with the old 1-3 settings
+        // (dropped 2026-07-14 with the gust floor) migrate up to the new minimum
+        // instead of feeding the dropdown a value it no longer lists.
         courtSpeedLimitKmh:
-            j['courtSpeedLimitKmh'] as int? ?? WindThresholds.defaultLimit,
+            ((j['courtSpeedLimitKmh'] as int?) ?? WindThresholds.defaultLimit)
+                .clamp(WindThresholds.minLimit, WindThresholds.maxLimit),
         weekdays: (j['weekdays'] as List? ?? const [1, 2, 3, 4, 5, 6, 7])
             .cast<int>()
             .toSet(),
