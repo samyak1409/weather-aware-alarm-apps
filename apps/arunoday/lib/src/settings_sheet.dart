@@ -99,7 +99,7 @@ class _SettingsPageState extends State<_SettingsPage> {
     );
     await c.update(c.settings.copyWith(
       locations: [...c.settings.locations, loc],
-      activeLocationId: loc.id,
+      activeLocationId: () => loc.id,
     ));
   }
 
@@ -110,7 +110,7 @@ class _SettingsPageState extends State<_SettingsPage> {
           'Arunoday needs a real dawn.');
       return;
     }
-    await c.update(c.settings.copyWith(activeLocationId: l.id));
+    await c.update(c.settings.copyWith(activeLocationId: () => l.id));
   }
 
   void _snack(String msg) {
@@ -362,11 +362,16 @@ class _SettingsPageState extends State<_SettingsPage> {
   Future<void> _deleteLocation(SavedLocation l) async {
     final s = c.settings;
     final rest = s.locations.where((x) => x.id != l.id).toList();
+    // The effective active is activeLocationId, or the first location when it's
+    // null (the getter's fallback). Only rewrite the id when the active one is
+    // going — and use the Function() form so it can actually be set to null
+    // when nothing is left (the old plain setter treated null as "keep").
+    final deletingActive = (s.activeLocationId ?? s.locations.first.id) == l.id;
     await c.update(s.copyWith(
       locations: rest,
-      activeLocationId: s.activeLocationId == l.id
-          ? (rest.isEmpty ? null : rest.first.id)
-          : s.activeLocationId,
+      activeLocationId: deletingActive
+          ? () => (rest.isEmpty ? null : rest.first.id)
+          : null,
     ));
     // No locations left → settings is unreachable anyway; leave the page so
     // the user lands back on the empty home screen.

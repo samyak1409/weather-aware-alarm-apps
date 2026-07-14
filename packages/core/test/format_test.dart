@@ -40,4 +40,13 @@ void main() {
     expect(fmtShortDate(DateTime(2026, 1, 1)), '1 Jan');
     expect(fmtShortDate(DateTime(2026, 12, 31)), '31 Dec');
   });
+
+  test('fmtWindGust shows all four numbers as whole km/h', () {
+    expect(fmtWindGust(3.0, 4, 15.6, 14.6667),
+        'wind 3 (≤4) · gusts 16 (≤15) km/h');
+    // Rounding matches the decision's rounding, so a shown value never
+    // contradicts its cap: a gust that skips (15.6 > 14.667) shows 16 vs ≤15.
+    expect(fmtWindGust(1.8, 4, 6.0, 14.6667),
+        'wind 2 (≤4) · gusts 6 (≤15) km/h');
+  });
 }

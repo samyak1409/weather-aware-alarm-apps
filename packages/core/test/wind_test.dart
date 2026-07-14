@@ -34,24 +34,39 @@ void main() {
     test('at threshold = 50% floor', () => expect(volumeForWind(4, t), 0.5));
   });
 
-  group('decide — the chat example table (threshold 4)', () {
-    const t = WindThresholds(courtSpeedLimitKmh: 4);
+  group('decide — whole-km/h decision (threshold 4)', () {
+    const t = WindThresholds(courtSpeedLimitKmh: 4); // raw gust limit 14.667
 
     test('calm morning: court 3, gusts 5 raw -> ring at ~63%', () {
       final d = decide(sample(5.0, 5.0), t); // court = 3.0
       expect(d.verdict, WindVerdict.ring);
-      expect(d.volume, closeTo(0.625, 0.001));
+      expect(d.volume, closeTo(0.625, 0.001)); // ramp stays continuous
     });
 
-    test('sneaky morning: court 3 but gusts 15 raw -> skip (gusty)', () {
-      final d = decide(sample(5.0, 15.0), t);
+    test('sneaky morning: court 3 but gusts 16 raw -> skip (gusty)', () {
+      final d = decide(sample(5.0, 16.0), t); // gust 16 > round(14.667)=15
       expect(d.verdict, WindVerdict.tooGusty);
       expect(d.shouldRing, isFalse);
     });
 
     test('windy morning: court 5 -> skip regardless of gusts', () {
-      final d = decide(sample(8.4, 7.0), t); // court = 5.04
+      final d = decide(sample(8.4, 7.0), t); // court = 5.04 -> rounds to 5
       expect(d.verdict, WindVerdict.tooWindy);
+    });
+
+    // The whole-km/h boundaries: decision rounds the same way the UI shows,
+    // so a displayed number can never contradict its cap.
+    test('wind rounds: court 4.4 rings, court 4.5 skips', () {
+      expect(decide(sample(7.33, 5.0), t).verdict, // court 4.398 -> 4 ≤ 4
+          WindVerdict.ring);
+      expect(decide(sample(7.5, 5.0), t).verdict, // court 4.5 -> 5 > 4
+          WindVerdict.tooWindy);
+    });
+
+    test('gust rounds: 15 (=guard) rings, 16 skips', () {
+      // 15 rounds to 15, guard 14.667 rounds to 15 → 15 > 15 is false → ring.
+      expect(decide(sample(5.0, 15.0), t).verdict, WindVerdict.ring);
+      expect(decide(sample(5.0, 16.0), t).verdict, WindVerdict.tooGusty);
     });
   });
 

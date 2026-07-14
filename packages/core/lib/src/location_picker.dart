@@ -129,33 +129,37 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
     }
   }
 
-  Future<String?> _askName(BuildContext context) {
+  Future<String?> _askName(BuildContext context) async {
     final controller = TextEditingController(text: 'My location');
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('NAME THIS PLACE',
-            style: Theme.of(context).textTheme.labelSmall),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(border: InputBorder.none),
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('NAME THIS PLACE',
+              style: Theme.of(context).textTheme.labelSmall),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(border: InputBorder.none),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                final name = controller.text.trim();
+                Navigator.pop(context, name.isEmpty ? 'My location' : name);
+              },
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              Navigator.pop(context, name.isEmpty ? 'My location' : name);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override

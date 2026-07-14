@@ -28,7 +28,21 @@ class OpenMeteo {
     }
   }
 
-  /// Forecast 10 m wind for the hour containing [target] (device-local time).
+  /// The Open-Meteo hourly key for the instant [target]. We omit
+  /// `timezone=auto`, so the API's hourly grid is UTC and we match in UTC —
+  /// correct even when the court is in a different timezone than the phone.
+  /// (Keying off the device-local hour looked up the wrong hour at the court:
+  /// a 06:00 IST alarm for a Kinshasa court would have read Kinshasa's 06:00
+  /// local wind, ~4.5 h off from the actual alarm instant.)
+  static String forecastHourKey(DateTime target) {
+    final u = target.toUtc();
+    return '${u.year.toString().padLeft(4, '0')}-'
+        '${u.month.toString().padLeft(2, '0')}-'
+        '${u.day.toString().padLeft(2, '0')}T'
+        '${u.hour.toString().padLeft(2, '0')}:00';
+  }
+
+  /// Forecast 10 m wind for the hour containing [target].
   Future<WindSample> forecastWindAt(
     double lat,
     double lon,
@@ -39,7 +53,7 @@ class OpenMeteo {
       'longitude': '$lon',
       'hourly': 'wind_speed_10m,wind_gusts_10m',
       'forecast_days': '3',
-      'timezone': 'auto',
+      // No timezone=auto: keep the hourly grid in UTC and match in UTC.
     });
     final json = await _getJson(uri);
     final hourly = json['hourly'] as Map<String, dynamic>;
@@ -47,10 +61,7 @@ class OpenMeteo {
     final speeds = (hourly['wind_speed_10m'] as List);
     final gusts = (hourly['wind_gusts_10m'] as List);
 
-    final key = '${target.year.toString().padLeft(4, '0')}-'
-        '${target.month.toString().padLeft(2, '0')}-'
-        '${target.day.toString().padLeft(2, '0')}T'
-        '${target.hour.toString().padLeft(2, '0')}:00';
+    final key = forecastHourKey(target);
     final i = times.indexOf(key);
     if (i < 0 || speeds[i] == null || gusts[i] == null) {
       throw OpenMeteoException('no forecast for $key');

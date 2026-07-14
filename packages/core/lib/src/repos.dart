@@ -29,22 +29,63 @@ class CheckState {
     required this.alarmId,
     required this.alarmAt,
     required this.hadSuccessfulCheck,
+    this.ringScheduled = false,
+    this.ringCourtSpeedKmh,
+    this.ringRawGustKmh,
+    this.ringVolume,
   });
 
   final int alarmId;
   final DateTime alarmAt;
   final bool hadSuccessfulCheck;
 
+  /// True once a ring has been committed (scheduled) for this occurrence. If
+  /// the ring's time then passes without a live check overriding it, the ring
+  /// fired — so it is recorded as "rang" rather than re-decided against newer
+  /// wind (which would wrongly relabel a ring that already woke the user).
+  final bool ringScheduled;
+
+  /// The wind sample behind the committed ring, kept so a "rang" recorded
+  /// after the fact still carries real numbers.
+  final double? ringCourtSpeedKmh;
+  final double? ringRawGustKmh;
+  final double? ringVolume;
+
+  CheckState copyWith({
+    bool? hadSuccessfulCheck,
+    bool? ringScheduled,
+    double? ringCourtSpeedKmh,
+    double? ringRawGustKmh,
+    double? ringVolume,
+  }) =>
+      CheckState(
+        alarmId: alarmId,
+        alarmAt: alarmAt,
+        hadSuccessfulCheck: hadSuccessfulCheck ?? this.hadSuccessfulCheck,
+        ringScheduled: ringScheduled ?? this.ringScheduled,
+        ringCourtSpeedKmh: ringCourtSpeedKmh ?? this.ringCourtSpeedKmh,
+        ringRawGustKmh: ringRawGustKmh ?? this.ringRawGustKmh,
+        ringVolume: ringVolume ?? this.ringVolume,
+      );
+
   Map<String, dynamic> toJson() => {
         'alarmId': alarmId,
         'alarmAt': alarmAt.toIso8601String(),
         'hadSuccessfulCheck': hadSuccessfulCheck,
+        'ringScheduled': ringScheduled,
+        'ringCourtSpeedKmh': ringCourtSpeedKmh,
+        'ringRawGustKmh': ringRawGustKmh,
+        'ringVolume': ringVolume,
       };
 
   factory CheckState.fromJson(Map<String, dynamic> j) => CheckState(
         alarmId: j['alarmId'] as int,
         alarmAt: DateTime.parse(j['alarmAt'] as String),
         hadSuccessfulCheck: j['hadSuccessfulCheck'] as bool? ?? false,
+        ringScheduled: j['ringScheduled'] as bool? ?? false,
+        ringCourtSpeedKmh: (j['ringCourtSpeedKmh'] as num?)?.toDouble(),
+        ringRawGustKmh: (j['ringRawGustKmh'] as num?)?.toDouble(),
+        ringVolume: (j['ringVolume'] as num?)?.toDouble(),
       );
 }
 

@@ -46,19 +46,19 @@ class _HistorySheet extends StatelessWidget {
                     final (icon, line) = switch (h.outcome) {
                       CheckOutcome.rang => (
                           Icons.notifications_active_outlined,
-                          'Rang at ${(h.volume! * 100).round()}% · wind ${h.courtSpeedKmh!.toStringAsFixed(1)} km/h'
+                          'Rang ${(h.volume! * 100).round()}% · ${h.windGustSummary}'
                         ),
                       CheckOutcome.skippedWindy => (
                           Icons.air,
-                          'Skipped · wind ${h.courtSpeedKmh!.toStringAsFixed(1)} km/h at court'
+                          'Skipped (windy) · ${h.windGustSummary}'
                         ),
                       CheckOutcome.skippedGusty => (
                           Icons.air,
-                          'Skipped · gusts ${h.rawGustKmh!.toStringAsFixed(0)} km/h'
+                          'Skipped (gusty) · ${h.windGustSummary}'
                         ),
                       CheckOutcome.skippedNoData => (
                           Icons.cloud_off_outlined,
-                          'Skipped · could not check wind'
+                          'Skipped · could not check the wind'
                         ),
                     };
                     return ListTile(

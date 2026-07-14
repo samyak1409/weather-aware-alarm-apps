@@ -130,38 +130,84 @@ void main() {
     });
   });
 
-  test('HistoryRecord JSON round-trips, nullable metrics included', () {
-    final r = HistoryRecord(
-      alarmId: 7,
-      at: DateTime(2026, 7, 13, 6, 0),
-      outcome: CheckOutcome.skippedWindy,
-      courtSpeedKmh: 7.4,
-      rawGustKmh: 14,
-      volume: null,
-    );
-    final back = HistoryRecord.fromJson(r.toJson());
-    expect(back.outcome, CheckOutcome.skippedWindy);
-    expect(back.courtSpeedKmh, 7.4);
-    expect(back.rawGustKmh, 14.0);
-    expect(back.volume, isNull);
+  group('HistoryRecord', () {
+    test('JSON round-trips all metrics including stored limits', () {
+      final r = HistoryRecord(
+        alarmId: 7,
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.skippedGusty,
+        courtSpeedKmh: 3.0,
+        rawGustKmh: 15.6,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+        volume: null,
+      );
+      final back = HistoryRecord.fromJson(r.toJson());
+      expect(back.outcome, CheckOutcome.skippedGusty);
+      expect(back.courtSpeedKmh, 3.0);
+      expect(back.rawGustKmh, 15.6);
+      expect(back.courtSpeedLimitKmh, 4);
+      expect(back.rawGustLimitKmh, closeTo(14.667, 0.001));
+      expect(back.volume, isNull);
+    });
+
+    test('windGustSummary shows all four whole-km/h numbers', () {
+      final r = HistoryRecord(
+        alarmId: 7,
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.skippedGusty,
+        courtSpeedKmh: 3.0,
+        rawGustKmh: 15.6, // rounds to 16, above the ≤15 guard
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+      );
+      expect(r.windGustSummary, 'wind 3 (≤4) · gusts 16 (≤15) km/h');
+    });
+
+    test('windGustSummary degrades for old rows and no-data skips', () {
+      // Pre-limits row: values but no stored caps.
+      final old = HistoryRecord(
+        alarmId: 7,
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.skippedWindy,
+        courtSpeedKmh: 7.4,
+        rawGustKmh: 14.0,
+      );
+      expect(old.windGustSummary, 'wind 7 · gusts 14 km/h');
+      // No-data skip carries caps but nothing was measured.
+      final noData = HistoryRecord(
+        alarmId: 7,
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.skippedNoData,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+      );
+      expect(noData.windGustSummary, '');
+    });
   });
 
-  test('CheckState JSON round-trips', () {
+  test('CheckState JSON round-trips, incl. committed-ring fields', () {
     final s = CheckState(
       alarmId: 7,
       alarmAt: DateTime(2026, 7, 13, 6, 0),
       hadSuccessfulCheck: true,
+      ringScheduled: true,
+      ringCourtSpeedKmh: 3.0,
+      ringRawGustKmh: 12.0,
+      ringVolume: 0.625,
     );
     final back = CheckState.fromJson(s.toJson());
     expect(back.alarmId, 7);
     expect(back.alarmAt, DateTime(2026, 7, 13, 6, 0));
     expect(back.hadSuccessfulCheck, isTrue);
-    // Missing flag defaults to false.
-    expect(
-      CheckState.fromJson(
-              {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'})
-          .hadSuccessfulCheck,
-      isFalse,
-    );
+    expect(back.ringScheduled, isTrue);
+    expect(back.ringCourtSpeedKmh, 3.0);
+    expect(back.ringVolume, closeTo(0.625, 0.001));
+    // Old rows without the new keys default cleanly.
+    final bare = CheckState.fromJson(
+        {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'});
+    expect(bare.hadSuccessfulCheck, isFalse);
+    expect(bare.ringScheduled, isFalse);
+    expect(bare.ringCourtSpeedKmh, isNull);
   });
 }

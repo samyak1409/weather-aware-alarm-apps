@@ -111,13 +111,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _lastOutcome(TextTheme text) {
     final h = c.history.first;
     final line = switch (h.outcome) {
-      CheckOutcome.rang =>
-        'Rang at ${(h.volume! * 100).round()}% · wind ${h.courtSpeedKmh!.toStringAsFixed(1)} km/h',
-      CheckOutcome.skippedWindy =>
-        'Skipped · wind ${h.courtSpeedKmh!.toStringAsFixed(1)} km/h',
-      CheckOutcome.skippedGusty =>
-        'Skipped · gusts ${h.rawGustKmh!.toStringAsFixed(0)} km/h',
-      CheckOutcome.skippedNoData => 'Skipped · could not check wind',
+      CheckOutcome.rang => 'Rang ${(h.volume! * 100).round()}% · ${h.windGustSummary}',
+      CheckOutcome.skippedWindy => 'Skipped (windy) · ${h.windGustSummary}',
+      CheckOutcome.skippedGusty => 'Skipped (gusty) · ${h.windGustSummary}',
+      CheckOutcome.skippedNoData => 'Skipped · could not check the wind',
     };
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),

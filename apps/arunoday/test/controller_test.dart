@@ -150,7 +150,7 @@ void main() {
     const pole = SavedLocation(id: 'sp', name: 'South Pole', lat: -90, lon: 0);
     await c.update(c.settings.copyWith(
       locations: [tonk, pole],
-      activeLocationId: 'sp',
+      activeLocationId: () => 'sp',
     ));
     expect(c.activeLocationHasNoDawn, isTrue);
     expect(c.plan, isNull);

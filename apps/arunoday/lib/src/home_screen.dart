@@ -63,7 +63,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
     await c.update(c.settings.copyWith(
       locations: [...c.settings.locations, loc],
-      activeLocationId: loc.id,
+      activeLocationId: () => loc.id,
     ));
   }
 

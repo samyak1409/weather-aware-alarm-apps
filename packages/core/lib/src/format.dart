@@ -20,6 +20,20 @@ String fmtOffset(int minutes) {
   return '$sign${a ~/ 60}:${(a % 60).toString().padLeft(2, '0')}';
 }
 
+/// All four wind numbers on one line: "wind 3 (≤4) · gusts 16 (≤15) km/h".
+/// Everything is whole km/h — the decision rounds the same way (see [decide]),
+/// so a shown value can never contradict its limit. The reader sees the full
+/// picture (speed & gust, each against its cap) for every outcome, not just the
+/// one metric that tripped.
+String fmtWindGust(
+  double courtSpeedKmh,
+  int courtSpeedLimitKmh,
+  double rawGustKmh,
+  double rawGustLimitKmh,
+) =>
+    'wind ${courtSpeedKmh.round()} (≤$courtSpeedLimitKmh) · '
+    'gusts ${rawGustKmh.round()} (≤${rawGustLimitKmh.round()}) km/h';
+
 const _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /// [weekdays] uses DateTime.weekday values (1 = Mon .. 7 = Sun).

@@ -79,7 +79,14 @@ double volumeForWind(double courtSpeedKmh, WindThresholds t) {
 }
 
 WindDecision decide(WindSample sample, WindThresholds thresholds) {
-  if (sample.courtSpeedKmh > thresholds.courtSpeedLimitKmh) {
+  // Decide in whole km/h (2026-07-13). The API delivers 0.1-km/h wind, but a
+  // heuristic "is it calm enough to play" gate reads cleanest as integers — and
+  // rounding BOTH the reading and the limit before a strict `>` makes the
+  // decision and the displayed numbers agree by construction (no "skipped at 15
+  // vs ≤15" contradiction). Cost: ≤~0.8 km/h of threshold resolution, always
+  // on the lenient side — fine for a guard whose job is to sit above the normal
+  // gust band (see SPEC.md "wind model").
+  if (sample.courtSpeedKmh.round() > thresholds.courtSpeedLimitKmh) {
     return WindDecision(
       verdict: WindVerdict.tooWindy,
       volume: 0,
@@ -87,7 +94,7 @@ WindDecision decide(WindSample sample, WindThresholds thresholds) {
       thresholds: thresholds,
     );
   }
-  if (sample.rawGustKmh > thresholds.rawGustLimit) {
+  if (sample.rawGustKmh.round() > thresholds.rawGustLimit.round()) {
     return WindDecision(
       verdict: WindVerdict.tooGusty,
       volume: 0,

@@ -138,7 +138,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Max wind at court'),
               subtitle: Text(
-                'Gust guard auto: ≤${gustLimit.toStringAsFixed(0)} km/h',
+                'Gust guard auto: ≤${gustLimit.round()} km/h',
                 style: text.bodyMedium,
               ),
               trailing: DropdownButton<int>(

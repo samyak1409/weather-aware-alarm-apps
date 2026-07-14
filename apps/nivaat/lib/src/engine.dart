@@ -96,7 +96,8 @@ class NivaatEngine {
       if (c.id == alarm.courtId) court = c;
     }
 
-    final next = _resolveOccurrence(alarm, await store.loadCheckState(alarm.id), t);
+    final stored = await store.loadCheckState(alarm.id);
+    final next = _resolveOccurrence(alarm, stored, t);
     if (next == null || court == null) {
       await scheduler.cancel(alarm.id);
       await checks.cancelCheck(alarm.id);
@@ -104,14 +105,60 @@ class NivaatEngine {
       return;
     }
 
-    // Cascade state is per-occurrence.
-    var state = await store.loadCheckState(alarm.id);
-    if (state == null || state.alarmAt != next) {
-      state = CheckState(
+    // Rule 1: a ring physically sounding IS the decision, made real — never
+    // cancel it or relabel it on a resync/check. (Disabled alarms fall through
+    // above so an explicit delete/toggle-off can still stop a ring.) The pre-T
+    // ladder — not a split-second T-0 cancel — is what keeps a windy morning
+    // from ringing; once it's audible, it stays. This is what makes "open the
+    // app during a ring" safe on both platforms.
+    if (alarm.enabled && await scheduler.isRinging(alarm.id)) return;
+
+    // A committed ring from an occurrence we're no longer tracking as current
+    // (the app opened past the 30-min retry window, so `next` has already moved
+    // on) still fired — record its "rang" so a late open never loses it. This
+    // is mutually exclusive with Rule 2 below, which handles the in-window case
+    // (next == stored.alarmAt); the clear lets the fresh state for `next` take
+    // over. Without it, iOS (no exact T-0 check) drops the ring from history
+    // whenever the app is first opened >30 min after it rang.
+    if (stored != null &&
+        stored.ringScheduled &&
+        stored.alarmAt != next &&
+        t.isAfter(stored.alarmAt)) {
+      await store.addHistory(HistoryRecord(
         alarmId: alarm.id,
-        alarmAt: next,
-        hadSuccessfulCheck: false,
-      );
+        at: stored.alarmAt,
+        outcome: CheckOutcome.rang,
+        courtSpeedKmh: stored.ringCourtSpeedKmh,
+        rawGustKmh: stored.ringRawGustKmh,
+        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+        volume: stored.ringVolume,
+      ));
+      await store.clearCheckState(alarm.id);
+    }
+
+    // Cascade state is per-occurrence.
+    var state = (stored != null && stored.alarmAt == next)
+        ? stored
+        : CheckState(alarmId: alarm.id, alarmAt: next, hadSuccessfulCheck: false);
+
+    // Rule 2: a committed ring whose time has passed (and isn't sounding — see
+    // Rule 1) already fired. Record it as "rang" instead of re-deciding with
+    // newer wind. Without this, an app-open after the ring — the normal iOS
+    // path, where no exact T-0 check runs — could log a ring as "skipped".
+    if (state.ringScheduled && t.isAfter(next)) {
+      await store.addHistory(HistoryRecord(
+        alarmId: alarm.id,
+        at: next,
+        outcome: CheckOutcome.rang,
+        courtSpeedKmh: state.ringCourtSpeedKmh,
+        rawGustKmh: state.ringRawGustKmh,
+        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+        volume: state.ringVolume,
+      ));
+      await store.clearCheckState(alarm.id);
+      return;
     }
 
     WindDecision? decision;
@@ -126,41 +173,39 @@ class NivaatEngine {
     }
 
     if (decision != null) {
-      final ringing = await scheduler.isRinging(alarm.id);
       if (decision.shouldRing) {
-        if (!ringing) {
-          // A retry that succeeds just after T rings late (never in the past).
-          final ringAt =
-              next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
-          await scheduler.scheduleRing(
-            id: alarm.id,
-            at: ringAt,
-            title: 'Nivaat · ${court.name}',
-            body:
-                'Wind ~${decision.sample.courtSpeedKmh.toStringAsFixed(1)} km/h — play! 🏸',
-            volume: decision.volume,
-          );
-        }
+        // Not sounding here (Rule 1 returned above), so re-scheduling is safe.
+        // A retry that succeeds just after T rings late (never in the past).
+        final ringAt =
+            next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
+        await scheduler.scheduleRing(
+          id: alarm.id,
+          at: ringAt,
+          title: 'Nivaat · ${court.name}',
+          body: '${fmtWindGust(
+            decision.sample.courtSpeedKmh,
+            decision.thresholds.courtSpeedLimitKmh,
+            decision.sample.rawGustKmh,
+            decision.thresholds.rawGustLimit,
+          )} — play! 🏸',
+          volume: decision.volume,
+        );
+        state = state.copyWith(
+          ringScheduled: true,
+          ringCourtSpeedKmh: decision.sample.courtSpeedKmh,
+          ringRawGustKmh: decision.sample.rawGustKmh,
+          ringVolume: decision.volume,
+        );
       } else {
-        // Skip: cancel a pending ring. But never cancel a ring already
-        // sounding for a *past* occurrence — once an occurrence fires its
-        // check-state clears, so `next` here is a future occurrence, and
-        // cancelling by the shared alarm id would silence the live ring
-        // (opening the app during a ring must not stop it). Only cancel when
-        // we're evaluating the current occurrence (at/near now).
-        final forCurrentOccurrence = next.difference(t) <= liveWindWindow;
-        if (!ringing || forCurrentOccurrence) {
-          await scheduler.cancel(alarm.id);
-        }
+        // Not sounding here either, so cancelling the provisional ring is safe.
+        await scheduler.cancel(alarm.id);
+        state = state.copyWith(ringScheduled: false);
       }
     }
 
     final hadSuccess = state.hadSuccessfulCheck || decision != null;
-    await store.saveCheckState(CheckState(
-      alarmId: alarm.id,
-      alarmAt: next,
-      hadSuccessfulCheck: hadSuccess,
-    ));
+    state = state.copyWith(hadSuccessfulCheck: hadSuccess);
+    await store.saveCheckState(state);
 
     final nextCheck =
         CheckCascade.nextCheckTime(t, next, hadSuccessfulCheck: hadSuccess);
@@ -181,6 +226,8 @@ class NivaatEngine {
         },
         courtSpeedKmh: decision.sample.courtSpeedKmh,
         rawGustKmh: decision.sample.rawGustKmh,
+        courtSpeedLimitKmh: decision.thresholds.courtSpeedLimitKmh,
+        rawGustLimitKmh: decision.thresholds.rawGustLimit,
         volume: decision.shouldRing ? decision.volume : null,
       );
       await store.addHistory(record);
@@ -192,6 +239,8 @@ class NivaatEngine {
         alarmId: alarm.id,
         at: next,
         outcome: CheckOutcome.skippedNoData,
+        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
       );
       await store.addHistory(record);
       await store.clearCheckState(alarm.id);

@@ -1,3 +1,4 @@
+import 'format.dart';
 import 'wind.dart';
 
 /// A saved named place (court or home). No GPS in v1 — locked decision.
@@ -76,7 +77,7 @@ class ArunodaySettings {
 
   ArunodaySettings copyWith({
     List<SavedLocation>? locations,
-    String? activeLocationId,
+    String? Function()? activeLocationId,
     int? wakeOffsetMinutes,
     int? Function()? bedtimeOffsetMinutes,
     bool? wakeEnabled,
@@ -88,7 +89,9 @@ class ArunodaySettings {
   }) =>
       ArunodaySettings(
         locations: locations ?? this.locations,
-        activeLocationId: activeLocationId ?? this.activeLocationId,
+        activeLocationId: activeLocationId != null
+            ? activeLocationId()
+            : this.activeLocationId,
         wakeOffsetMinutes: wakeOffsetMinutes ?? this.wakeOffsetMinutes,
         bedtimeOffsetMinutes: bedtimeOffsetMinutes != null
             ? bedtimeOffsetMinutes()
@@ -228,6 +231,8 @@ class HistoryRecord {
     required this.outcome,
     this.courtSpeedKmh,
     this.rawGustKmh,
+    this.courtSpeedLimitKmh,
+    this.rawGustLimitKmh,
     this.volume,
   });
 
@@ -236,7 +241,27 @@ class HistoryRecord {
   final CheckOutcome outcome;
   final double? courtSpeedKmh;
   final double? rawGustKmh;
+
+  /// The thresholds in force at decision time, stored so an old entry still
+  /// shows all four numbers (speed & gust, each vs its cap) even after the
+  /// alarm's limit is edited or the alarm is deleted. Null only for the very
+  /// first builds' rows or a no-data skip that carried no thresholds.
+  final int? courtSpeedLimitKmh;
+  final double? rawGustLimitKmh;
   final double? volume;
+
+  /// All four numbers for this outcome: "wind 3 (≤4) · gusts 16 (≤15) km/h".
+  /// Falls back to a reduced "wind 3 · gusts 16 km/h" for older rows saved
+  /// before limits were stored, and '' for a no-data skip (nothing measured).
+  String get windGustSummary {
+    final court = courtSpeedKmh, gust = rawGustKmh;
+    if (court == null || gust == null) return '';
+    final courtLimit = courtSpeedLimitKmh, gustLimit = rawGustLimitKmh;
+    if (courtLimit == null || gustLimit == null) {
+      return 'wind ${court.round()} · gusts ${gust.round()} km/h';
+    }
+    return fmtWindGust(court, courtLimit, gust, gustLimit);
+  }
 
   Map<String, dynamic> toJson() => {
         'alarmId': alarmId,
@@ -244,6 +269,8 @@ class HistoryRecord {
         'outcome': outcome.name,
         'courtSpeedKmh': courtSpeedKmh,
         'rawGustKmh': rawGustKmh,
+        'courtSpeedLimitKmh': courtSpeedLimitKmh,
+        'rawGustLimitKmh': rawGustLimitKmh,
         'volume': volume,
       };
 
@@ -253,6 +280,8 @@ class HistoryRecord {
         outcome: CheckOutcome.values.byName(j['outcome'] as String),
         courtSpeedKmh: (j['courtSpeedKmh'] as num?)?.toDouble(),
         rawGustKmh: (j['rawGustKmh'] as num?)?.toDouble(),
+        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,
+        rawGustLimitKmh: (j['rawGustLimitKmh'] as num?)?.toDouble(),
         volume: (j['volume'] as num?)?.toDouble(),
       );
 }

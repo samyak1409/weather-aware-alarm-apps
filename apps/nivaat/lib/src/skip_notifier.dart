@@ -47,11 +47,13 @@ class SkipNotifier {
     // gets a hopeful, forward-looking sign-off (never one that sounds glad
     // the session is off).
     final signOff = record.at.hour < 12 ? 'sleep in 😴' : 'next time 🏸';
+    // Show all four numbers (speed & gust, each vs its cap) so the skip is
+    // fully self-explaining, not just the one metric that tripped.
     final body = switch (record.outcome) {
       CheckOutcome.skippedWindy =>
-        'Wind ${record.courtSpeedKmh!.toStringAsFixed(1)} km/h at $courtName — $signOff',
+        '$courtName too windy · ${record.windGustSummary} — $signOff',
       CheckOutcome.skippedGusty =>
-        'Gusts ${record.rawGustKmh!.toStringAsFixed(0)} km/h at $courtName — $signOff',
+        '$courtName too gusty · ${record.windGustSummary} — $signOff',
       CheckOutcome.skippedNoData =>
         'Could not check the wind at $courtName — alarm skipped',
       CheckOutcome.rang => '', // never notified; the ring speaks for itself

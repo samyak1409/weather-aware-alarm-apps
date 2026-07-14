@@ -281,6 +281,73 @@ void main() {
         reason: 'a resync for a future occurrence must not silence the ring');
   });
 
+  test('committed ring that fired (no T-0 check, iOS) is later logged rang, not skip',
+      () async {
+    // T-30m: a calm forecast commits the ring for THIS occurrence.
+    api.sample = wind(5.0, 5.0); // court 3.0 <= 4 -> ring, volume 0.625
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 30)));
+    expect(ring.scheduled.containsKey(7), isTrue);
+
+    // No exact T-0 check runs (iOS has none). The ring fired at T and the user
+    // stopped it. The app is opened 5 min later and the wind has since risen
+    // far past the limit — a naive re-check would call this a skip.
+    api.sample = wind(20.0, 24.0); // court 12 >> 4
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(minutes: 5)));
+
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(1));
+    expect(history.first.outcome, CheckOutcome.rang,
+        reason: 'the ring already fired — honour it, never relabel as skipped');
+    expect(history.first.volume, closeTo(0.625, 0.001));
+    expect(notifier.shown, isEmpty, reason: 'a ring must never send a skip card');
+    expect(await engine.store.loadCheckState(7), isNull);
+  });
+
+  test('committed ring is logged rang even when the app opens past the retry window',
+      () async {
+    // T-30m: calm forecast commits the ring for this occurrence.
+    api.sample = wind(5.0, 5.0); // court 3.0 -> ring, volume 0.625
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 30)));
+    expect(ring.scheduled.containsKey(7), isTrue);
+
+    // No T-0 check runs (iOS). The app is first opened 45 min after T — past
+    // the 30-min window, so the engine resolves TOMORROW's occurrence. The ring
+    // that fired must still land in history, not vanish.
+    api.sample = wind(3.0, 6.0); // tomorrow's forecast, calm
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(minutes: 45)));
+
+    final rangRows = (await engine.store.loadHistory())
+        .where((h) => h.outcome == CheckOutcome.rang && h.at == alarmAt);
+    expect(rangRows, hasLength(1),
+        reason: 'the fired ring is recorded exactly once, even on a late open');
+    expect(rangRows.first.volume, closeTo(0.625, 0.001));
+    expect(rangRows.first.courtSpeedLimitKmh, 4);
+  });
+
+  test('opening the app while its OWN ring still sounds never cancels or relabels it',
+      () async {
+    api.sample = wind(5.0, 5.0); // calm -> ring committed at T-30m
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 30)));
+
+    // The ring fired at T and is sounding now; wind has since risen.
+    ring.ringingIds.add(7);
+    api.sample = wind(20.0, 24.0);
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(minutes: 3)));
+
+    expect(ring.scheduled.containsKey(7), isTrue,
+        reason: 'a sounding ring must not be cancelled');
+    expect(notifier.shown, isEmpty);
+    final history = await engine.store.loadHistory();
+    expect(history.where((h) => h.outcome != CheckOutcome.rang), isEmpty,
+        reason: 'never a skip while the ring sounds');
+  });
+
   test('removing a court deletes its alarms too', () async {
     final controller = NivaatController(engine: engine);
     await engine.store.saveCourts([court]);
