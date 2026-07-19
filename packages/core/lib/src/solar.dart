@@ -133,6 +133,12 @@ class Solar {
     return true;
   }
 
-  static int _dayOfYear(DateTime d) =>
-      d.difference(DateTime.utc(d.year, 1, 1)).inDays + 1;
+  // From calendar components only: diffing the raw instant against UTC Jan 1
+  // shifts the result by one for local-zone inputs (the apps pass local
+  // DateTimes) depending on their time of day — which moved dawn by ~1 min
+  // between a pre-dawn and a daytime resync of the very same date.
+  static int _dayOfYear(DateTime d) => DateTime.utc(d.year, d.month, d.day)
+          .difference(DateTime.utc(d.year, 1, 1))
+          .inDays +
+      1;
 }

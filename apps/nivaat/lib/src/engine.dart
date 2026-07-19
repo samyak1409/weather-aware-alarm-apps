@@ -6,8 +6,10 @@ import 'package:flutter/widgets.dart';
 import 'check_scheduler.dart';
 import 'skip_notifier.dart';
 
-/// User-selected alarm tone; null = default Court Call. Loaded from the
-/// store at startup and in background entrypoints.
+/// User-selected alarm tone; null = default Court Call. Loaded by
+/// [NivaatEngine.standard], so every entrypoint — app start, the Android
+/// AlarmManager isolate, the iOS Workmanager isolate — sees it before any
+/// ring is scheduled.
 String? nivaatSelectedSound;
 
 const String nivaatDefaultSound = 'assets/sounds/nivaat_ring.wav';
@@ -32,7 +34,6 @@ Future<void> nivaatBackgroundCheck() async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
   final engine = await NivaatEngine.standard();
-  nivaatSelectedSound = await engine.store.loadSoundPath();
   await engine.evaluateAll();
 }
 
@@ -49,17 +50,24 @@ class NivaatEngine {
     this.notifier,
   });
 
-  static Future<NivaatEngine> standard() async => NivaatEngine(
-        store: NivaatStore(),
-        scheduler: await createAlarmScheduler(
-          soundAssetForVolume: nivaatSoundForVolume,
-          tintColor: '#6FB7EC',
-        ),
-        api: OpenMeteo(),
-        checks: CheckScheduler.forPlatform(
-            androidEntrypoint: nivaatBackgroundCheck),
-        notifier: SkipNotifier(),
-      );
+  static Future<NivaatEngine> standard() async {
+    final store = NivaatStore();
+    // Here, not per-entrypoint: a background isolate that forgets this line
+    // would schedule rings with the default tone instead of the user's pick
+    // (exactly the bug the iOS Workmanager entrypoint had).
+    nivaatSelectedSound = await store.loadSoundPath();
+    return NivaatEngine(
+      store: store,
+      scheduler: await createAlarmScheduler(
+        soundAssetForVolume: nivaatSoundForVolume,
+        tintColor: '#6FB7EC',
+      ),
+      api: OpenMeteo(),
+      checks:
+          CheckScheduler.forPlatform(androidEntrypoint: nivaatBackgroundCheck),
+      notifier: SkipNotifier(),
+    );
+  }
 
   final NivaatStore store;
   final AlarmScheduler scheduler;
@@ -86,7 +94,30 @@ class NivaatEngine {
     }
   }
 
+  /// One evaluation per alarm at a time. Two overlapping runs of the same
+  /// alarm — the app-open resync racing a toggle/edit made moments later, with
+  /// the first run parked on its wind fetch — would both read the persisted
+  /// cascade state before either writes it: duplicate history rows/cards, or
+  /// an edit's freshly cleared state re-saved by the older run. Queuing per
+  /// alarm id makes the later run see the earlier one's writes. (Same-isolate
+  /// only; an overlap with a background isolate remains possible and worst-cases
+  /// at a duplicate row — the next check reads fresh state and self-corrects.)
+  final Map<int, Future<void>> _evalQueue = {};
+
   Future<void> evaluateAlarm(
+    NivaatAlarm alarm,
+    List<SavedLocation> courts, {
+    DateTime? now,
+  }) {
+    final tail = _evalQueue[alarm.id] ?? Future<void>.value();
+    final run = tail.then((_) => _evaluate(alarm, courts, now: now));
+    // Park an error-swallowing copy so one failed run can't jam the lane;
+    // the caller still sees the failure through `run`.
+    _evalQueue[alarm.id] = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  Future<void> _evaluate(
     NivaatAlarm alarm,
     List<SavedLocation> courts, {
     DateTime? now,

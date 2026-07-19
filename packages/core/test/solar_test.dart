@@ -82,4 +82,24 @@ void main() {
       expect(e, isNotNull); // some days do have dawn
     });
   });
+
+  group('local-date inputs (the apps pass local DateTimes)', () {
+    test('same calendar date -> same dawn, whatever the input time of day', () {
+      // March: dawn drifts ~1 min/day, so a day-of-year off-by-one is visible.
+      // Regression for _dayOfYear diffing the raw instant against UTC Jan 1:
+      // on a UTC+ machine the 00:30 input mapped to the PREVIOUS day's number
+      // (on UTC− machines, the 23:30 one to the next), moving dawn ~1 min
+      // between a pre-dawn and a daytime resync of the same date.
+      final ref =
+          Solar.morningEventUtc(DateTime.utc(2026, 3, 1), tonkLat, tonkLon);
+      for (final local in [
+        DateTime(2026, 3, 1, 0, 30),
+        DateTime(2026, 3, 1, 12, 0),
+        DateTime(2026, 3, 1, 23, 30),
+      ]) {
+        expect(Solar.morningEventUtc(local, tonkLat, tonkLon), ref,
+            reason: 'input at ${local.hour}:${local.minute}');
+      }
+    });
+  });
 }

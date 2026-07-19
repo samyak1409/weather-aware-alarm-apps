@@ -127,7 +127,8 @@ class ArunodayController extends ChangeNotifier {
   }
 
   /// Next daily bedtime occurrence strictly after now (ignores AGAIN).
-  DateTime? _nextDailyBedtime(DateTime now) {
+  @visibleForTesting
+  DateTime? nextDailyBedtime(DateTime now) {
     final bed = bedtimeMinutes;
     if (bed == null) return null;
     var s = DateTime(now.year, now.month, now.day)
@@ -145,7 +146,7 @@ class ArunodayController extends ChangeNotifier {
     final times = <DateTime>[];
     final delayed = settings.bedtimeDelayedUntil;
     if (delayed != null && delayed.isAfter(now)) times.add(delayed);
-    final daily = _nextDailyBedtime(now);
+    final daily = nextDailyBedtime(now);
     if (daily != null) times.add(daily);
     if (times.isEmpty) return null;
     times.sort();

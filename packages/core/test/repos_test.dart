@@ -63,6 +63,31 @@ void main() {
       expect(await store.loadCheckState(7), isNull);
     });
 
+    test('CheckState.copyWith keeps every unpassed field', () {
+      // Load-bearing for the cascade: a later copyWith (e.g. a no-data retry
+      // stamping lastAttemptAt) must never wipe the ring/skip readings.
+      final full = CheckState(
+        alarmId: 7,
+        alarmAt: DateTime(2026, 7, 13, 6, 0),
+        ringScheduled: true,
+        ringCourtSpeedKmh: 2.4,
+        ringRawGustKmh: 9.0,
+        ringVolume: 0.85,
+        extendedCheckShown: true,
+        skipCourtSpeedKmh: 7.2,
+        skipRawGustKmh: 16.0,
+        skipGusty: true,
+        lastCheckAt: DateTime(2026, 7, 13, 5, 0),
+        lastAttemptAt: DateTime(2026, 7, 13, 5, 30),
+      );
+      final touched = full.copyWith(lastAttemptAt: DateTime(2026, 7, 13, 6, 1));
+      expect(touched.lastAttemptAt, DateTime(2026, 7, 13, 6, 1));
+      // Everything else survives untouched (compare via JSON for one shot).
+      final a = full.toJson()..remove('lastAttemptAt');
+      final b = touched.toJson()..remove('lastAttemptAt');
+      expect(b, a);
+    });
+
     test('history prepends newest and caps at 60', () async {
       for (var i = 0; i < 65; i++) {
         await store.addHistory(HistoryRecord(

@@ -24,8 +24,9 @@ void workmanagerDispatcher() {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // NivaatEngine.standard() also loads the selected alarm tone into
+  // nivaatSelectedSound (shared with the background entrypoints).
   final engine = await NivaatEngine.standard();
-  nivaatSelectedSound = await engine.store.loadSoundPath();
   await engine.scheduler.ensureInitialized();
 
   if (Platform.isIOS) {

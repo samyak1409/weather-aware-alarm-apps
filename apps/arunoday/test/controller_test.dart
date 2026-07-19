@@ -102,6 +102,27 @@ void main() {
     expect(c.existingLocationSameDawn(28.61, 77.20), isNull);
   });
 
+  test("daily bedtime rolls to tomorrow once tonight's has passed", () async {
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    final bed = c.bedtimeMinutes!.round();
+    // The scenario times below assume a pre-midnight evening bedtime.
+    expect(bed, inInclusiveRange(21 * 60, 23 * 60), reason: 'Tonk ~22:00 zone');
+
+    // At 06:00, tonight's bedtime is still ahead → today's occurrence.
+    expect(c.nextDailyBedtime(DateTime(2026, 7, 20, 6, 0)),
+        DateTime(2026, 7, 20).add(Duration(minutes: bed)));
+
+    // At 23:59 it has passed → rolls to tomorrow.
+    expect(c.nextDailyBedtime(DateTime(2026, 7, 20, 23, 59)),
+        DateTime(2026, 7, 21).add(Duration(minutes: bed)));
+  });
+
   test('nextBedtimeRing is the sooner of the daily bedtime and a pending AGAIN',
       () async {
     final fake = FakeScheduler();

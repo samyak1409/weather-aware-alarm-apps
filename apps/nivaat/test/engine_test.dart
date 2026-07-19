@@ -493,4 +493,50 @@ void main() {
     expect(ring.scheduled, isEmpty);
     expect(checks.booked, isEmpty);
   });
+
+  test('concurrent evaluations of one alarm serialize — no duplicate history',
+      () async {
+    // Yesterday's occurrence was skipped windy and never finalised (app closed
+    // through the retry window). Two overlapping evaluations — the app-open
+    // resync racing a toggle tapped moments later — would both read the
+    // unfinalised state and both write the "Skipped (windy)" row and card.
+    await engine.store.saveCheckState(CheckState(
+      alarmId: 7,
+      alarmAt: alarmAt,
+      skipCourtSpeedKmh: 7.2,
+      skipRawGustKmh: 14.0,
+      lastCheckAt: alarmAt,
+      lastAttemptAt: alarmAt,
+    ));
+    api.sample = wind(12.0, 14.0); // still windy for the next occurrence
+    final past = DateTime(2026, 7, 12, 7, 0); // an hour past T, beyond the cap
+
+    // Deliberately NOT awaited one-by-one — they must overlap to race.
+    await Future.wait([
+      engine.evaluateAlarm(alarm, [court], now: past),
+      engine.evaluateAlarm(alarm, [court], now: past),
+    ]);
+
+    final rows =
+        (await engine.store.loadHistory()).where((r) => r.at == alarmAt);
+    expect(rows.length, 1, reason: 'one occurrence, one history row');
+    expect(notifier.shown.length, 1, reason: 'one occurrence, one skip card');
+  });
+
+  test('standard() loads the selected tone — every entrypoint, not just main()',
+      () async {
+    // Regression: the iOS Workmanager entrypoint used to skip this load, so a
+    // background-scheduled ring fell back to the default Court Call.
+    SharedPreferences.setMockInitialValues({'nivaat.sound': '/tones/temple.ogg'});
+    nivaatSelectedSound = null; // fresh background isolate
+    await NivaatEngine.standard();
+    expect(nivaatSelectedSound, '/tones/temple.ogg');
+    expect(nivaatSoundForVolume(1.0), '/tones/temple.ogg');
+
+    // And with nothing stored, the wind-ramp default still applies.
+    SharedPreferences.setMockInitialValues({});
+    await NivaatEngine.standard();
+    expect(nivaatSelectedSound, isNull);
+    expect(nivaatSoundForVolume(0.75), 'assets/sounds/nivaat_ring_75.wav');
+  });
 }
