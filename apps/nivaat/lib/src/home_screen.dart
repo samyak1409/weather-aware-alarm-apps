@@ -1,16 +1,32 @@
+import 'dart:io';
+
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'alarm_sheet.dart';
+import 'background_banner.dart';
 import 'controller.dart';
 import 'courts_sheet.dart';
 import 'engine.dart';
 import 'history_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.controller});
+  const HomeScreen({
+    super.key,
+    required this.controller,
+    this.permissionFlow,
+    this.batteryFlow,
+  });
 
   final NivaatController controller;
+
+  /// The startup notification-permission request; its completion re-checks
+  /// the denied-banner (see [NotificationPermissionBanner.recheckAfter]).
+  final Future<void>? permissionFlow;
+
+  /// The startup battery-exemption once-ask; its completion re-checks the
+  /// background-checks banner (see [BackgroundChecksBanner.recheckAfter]).
+  final Future<void>? batteryFlow;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -100,6 +116,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const AlarmPermissionBanner(
                 appName: 'Nivaat', accent: AppPalette.wind),
+            NotificationPermissionBanner(
+              accent: AppPalette.wind,
+              denied: () =>
+                  c.engine.notifier?.notificationsDenied() ??
+                  Future.value(false),
+              recheckAfter: widget.permissionFlow,
+              message: Platform.isAndroid
+                  ? 'Notifications are off — a ringing alarm shows nothing '
+                      'on screen (sound only, no Stop), and Nivaat can\'t '
+                      'tell you when it skips an alarm for wind, or why.'
+                  : 'Notifications are off — Nivaat can\'t tell you when it '
+                      'skips an alarm for wind, or why.',
+            ),
+            BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
             if (c.history.isNotEmpty) _lastOutcome(text),
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
@@ -137,11 +167,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
     final verb = h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked';
     final court = c.courtById(h.courtId)?.name ?? '—';
+    final watching = nivaatStillWatchingNote(h);
     final when = '$court · ${fmtShortDate(h.at)} ${fmtClock(h.at)} · '
         '$verb ${fmtCheckTime(h.whenChecked, h.at)}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
-      child: Text('$when — $line', style: text.bodyMedium),
+      child: Text(
+        '$when — $line${watching == null ? '' : ' · $watching'}',
+        style: text.bodyMedium,
+      ),
     );
   }
 

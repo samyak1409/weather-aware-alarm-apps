@@ -2,6 +2,7 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'engine.dart';
 
 void showHistorySheet(BuildContext context, NivaatController c) {
   showModalBottomSheet<void>(
@@ -61,6 +62,9 @@ class _HistorySheet extends StatelessWidget {
                           'Skipped (no data)'
                         ),
                     };
+                    // A young skip row may still flip to "rang" (retry window)
+                    // — say so, with the same promise the heads-up card made.
+                    final watching = nivaatStillWatchingNote(h);
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: Icon(icon, size: 20),
@@ -69,7 +73,8 @@ class _HistorySheet extends StatelessWidget {
                         '${c.courtById(h.courtId)?.name ?? '—'} · '
                         '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
                         '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
-                        '${fmtCheckTime(h.whenChecked, h.at)}',
+                        '${fmtCheckTime(h.whenChecked, h.at)}'
+                        '${watching == null ? '' : ' · $watching'}',
                         style: text.bodyMedium,
                       ),
                     );

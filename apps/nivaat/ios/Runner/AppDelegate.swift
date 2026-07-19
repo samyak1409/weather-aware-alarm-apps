@@ -26,5 +26,20 @@ import workmanager_apple
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // Dart's backgroundWorkDenied() asks "nivaat/battery" isExempt on iOS
+    // too: the equivalent of Android's battery exemption here is Background
+    // App Refresh — off means the wind-check BGTasks are never granted, so
+    // the home screen shows the BackgroundChecksBanner.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NivaatBattery") {
+      FlutterMethodChannel(name: "nivaat/battery", binaryMessenger: registrar.messenger())
+        .setMethodCallHandler { call, result in
+          switch call.method {
+          case "isExempt":
+            result(UIApplication.shared.backgroundRefreshStatus == .available)
+          default:
+            result(FlutterMethodNotImplemented)
+          }
+        }
+    }
   }
 }

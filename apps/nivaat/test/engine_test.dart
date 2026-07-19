@@ -27,6 +27,10 @@ class FakeNotifier extends SkipNotifier {
 
 class FakeRing implements AlarmScheduler {
   final Map<int, ({DateTime at, double volume, String body})> scheduled = {};
+
+  /// Every scheduleRing call in order — [scheduled] only keeps the latest per
+  /// id, which hides e.g. a late ring that finalising then rolls over.
+  final List<({int id, DateTime at})> log = [];
   final Set<int> ringingIds = {};
 
   @override
@@ -41,6 +45,7 @@ class FakeRing implements AlarmScheduler {
     required double volume,
   }) async {
     scheduled[id] = (at: at, volume: volume, body: body);
+    log.add((id: id, at: at));
   }
 
   @override
@@ -147,7 +152,8 @@ void main() {
     expect(checks.booked[7], isNotNull);
   });
 
-  test('T-0 calm: live wind, ring, history "rang", cascade done', () async {
+  test('T-0 calm: live wind, ring, history "rang", rolls into tomorrow',
+      () async {
     api.sample = wind(3.0, 6.0); // court 1.8 -> volume 0.8875
     // T-2m check persists the in-flight occurrence...
     await engine.evaluateAlarm(alarm, [court],
@@ -160,8 +166,17 @@ void main() {
     expect(history, hasLength(1));
     expect(history.first.outcome, CheckOutcome.rang);
     expect(history.first.volume, closeTo(0.8875, 0.001));
-    expect(await engine.store.loadCheckState(7), isNull,
-        reason: 'occurrence complete');
+    // Finalising doesn't stop at the closed occurrence: the same pass
+    // evaluates tomorrow — pre-arms it (still calm) and books its ladder —
+    // so the cascade never sleeps until the next manual app open.
+    final rolled = await engine.store.loadCheckState(7);
+    expect(rolled!.alarmAt, alarmAt.add(const Duration(days: 1)),
+        reason: "today closed; tomorrow's occurrence is already in flight");
+    expect(ring.scheduled[7]!.at, alarmAt.add(const Duration(days: 1)),
+        reason: 'tomorrow pre-armed while the forecast is calm');
+    expect(checks.booked[7],
+        alarmAt.add(const Duration(days: 1, hours: -1)),
+        reason: "tomorrow's first rung (T-1h) booked");
   });
 
   test('turns windy at T-0: ring cancelled, heads-up posted (no final card yet)',
@@ -175,8 +190,15 @@ void main() {
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
 
     expect(ring.scheduled, isEmpty, reason: 'pending ring cancelled');
-    expect(await engine.store.loadHistory(), isEmpty,
-        reason: 'not final — still watching until +30m');
+    // The occurrence is in history from its first missed T (2026-07-19):
+    // a provisional row the retries keep fresh — dismissing the heads-up
+    // notification must not hide what happened.
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(1), reason: 'provisional row appears at T');
+    expect(history.single.outcome, CheckOutcome.skippedWindy);
+    expect(history.single.watchedUntil,
+        alarmAt.add(const Duration(minutes: 30)),
+        reason: 'marked as the heads-up snapshot (its final row comes later)');
     expect(notifier.shown, isEmpty, reason: 'no FINAL card until the cap');
     expect(notifier.extended, hasLength(1), reason: '"still checking" card at T');
     expect(notifier.extended.first.$1.outcome, CheckOutcome.skippedWindy);
@@ -201,25 +223,38 @@ void main() {
         now: alarmAt.subtract(const Duration(minutes: 1)));
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
     expect(notifier.extended, hasLength(1), reason: 'heads-up at T');
-    expect(await engine.store.loadHistory(), isEmpty);
+    expect((await engine.store.loadHistory()).single.outcome,
+        CheckOutcome.skippedWindy,
+        reason: 'provisional row from the missed T');
 
     // Wind drops 7 min after T -> ring late.
     api.sample = wind(5.0, 5.0); // court 3.0 -> ring
     final late = alarmAt.add(const Duration(minutes: 7));
     await engine.evaluateAlarm(alarm, [court], now: late);
 
-    expect(ring.scheduled[7]!.at.isAfter(late), isTrue,
+    expect(
+        ring.log.any((e) =>
+            e.at == late.add(const Duration(seconds: 10))),
+        isTrue,
         reason: 'rings late, never in the past');
+    // Append-only log (2026-07-20): the late ring is a NEW row; the heads-up
+    // snapshot stays below it — both moments really happened.
     final history = await engine.store.loadHistory();
-    expect(history, hasLength(1));
+    expect(history, hasLength(2));
     expect(history.first.outcome, CheckOutcome.rang);
+    expect(history.first.watchedUntil, isNull, reason: 'final rows carry no watch mark');
     expect(history.first.whenChecked, late,
         reason: 'records the check that drove the ring (06:07), not the anchor');
     expect(history.first.at, alarmAt, reason: 'anchor stays the alarm time');
+    expect(history.last.outcome, CheckOutcome.skippedWindy,
+        reason: 'the at-T snapshot survives the late ring');
+    expect(history.last.watchedUntil, isNotNull);
     expect(notifier.shown, isEmpty, reason: 'a ring needs no skip card');
     expect(notifier.extended, hasLength(1),
         reason: 'heads-up is not cleared by the late ring');
-    expect(await engine.store.loadCheckState(7), isNull);
+    expect((await engine.store.loadCheckState(7))!.alarmAt,
+        alarmAt.add(const Duration(days: 1)),
+        reason: 'rolled straight on to tomorrow (calm -> pre-armed)');
   });
 
   test('first wake past +30m cap (windy set-time forecast) -> skip logged + one card',
@@ -255,16 +290,23 @@ void main() {
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
     expect(notifier.extended, hasLength(1), reason: 'heads-up at T');
     expect(notifier.shown, isEmpty, reason: 'no final card yet');
-    expect(await engine.store.loadHistory(), isEmpty);
+    expect(await engine.store.loadHistory(), hasLength(1),
+        reason: 'provisional row from T onwards');
 
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.add(const Duration(minutes: 30)));
+    // Two rows now, like the two notifications: the heads-up snapshot from T
+    // and the cap's final verdict (append-only log, 2026-07-20).
     final history = await engine.store.loadHistory();
-    expect(history, hasLength(1));
+    expect(history, hasLength(2));
     expect(history.first.outcome, CheckOutcome.skippedWindy);
+    expect(history.first.watchedUntil, isNull, reason: 'the final row');
+    expect(history.last.watchedUntil, isNotNull, reason: 'the snapshot row');
     expect(notifier.shown, hasLength(1), reason: 'final card at the cap');
     expect(notifier.shown.first.$2, 'Home Court');
-    expect(await engine.store.loadCheckState(7), isNull);
+    expect((await engine.store.loadCheckState(7))!.alarmAt,
+        alarmAt.add(const Duration(days: 1)),
+        reason: "rolled on: tomorrow's occurrence already tracked");
   });
 
   test('windy, then API dies exactly at the cap -> still labelled windy',
@@ -279,7 +321,7 @@ void main() {
         now: alarmAt.add(const Duration(minutes: 30)));
 
     final history = await engine.store.loadHistory();
-    expect(history, hasLength(1));
+    expect(history, hasLength(2), reason: 'snapshot at T + final at the cap');
     expect(history.first.outcome, CheckOutcome.skippedWindy,
         reason: 'uses the last known reason, not the cap failure');
     expect(history.first.courtSpeedKmh, closeTo(5.4, 0.01));
@@ -303,7 +345,9 @@ void main() {
     expect(history.first.outcome, CheckOutcome.skippedNoData);
     expect(history.first.whenChecked, alarmAt.add(const Duration(minutes: 30)),
         reason: 'no-data records the last *attempt* (the cap), not a reading');
-    expect(await engine.store.loadCheckState(7), isNull);
+    expect((await engine.store.loadCheckState(7))!.alarmAt,
+        alarmAt.add(const Duration(days: 1)),
+        reason: 'rolled on to tomorrow even while the API is down');
     expect(notifier.shown, hasLength(1), reason: 'API failure also notifies');
   });
 
@@ -403,7 +447,9 @@ void main() {
         reason: 'the ring already fired — honour it, never relabel as skipped');
     expect(history.first.volume, closeTo(0.8125, 0.001));
     expect(notifier.shown, isEmpty, reason: 'a ring must never send a skip card');
-    expect(await engine.store.loadCheckState(7), isNull);
+    expect((await engine.store.loadCheckState(7))!.alarmAt,
+        alarmAt.add(const Duration(days: 1)),
+        reason: 'the same open rolls on to tomorrow (windy -> tracked, unarmed)');
   });
 
   test('committed ring is logged rang even when the app opens past the retry window',
@@ -429,7 +475,7 @@ void main() {
     expect(rangRows.first.courtSpeedLimitKmh, 4);
   });
 
-  test('opening the app while its OWN ring still sounds never cancels or relabels it',
+  test('opening the app while its OWN ring still sounds: logged rang NOW, never cancelled',
       () async {
     api.sample = wind(5.0, 5.0); // calm -> ring committed at T-30m
     await engine.evaluateAlarm(alarm, [court],
@@ -444,9 +490,26 @@ void main() {
     expect(ring.scheduled.containsKey(7), isTrue,
         reason: 'a sounding ring must not be cancelled');
     expect(notifier.shown, isEmpty);
-    final history = await engine.store.loadHistory();
-    expect(history.where((h) => h.outcome != CheckOutcome.rang), isEmpty,
-        reason: 'never a skip while the ring sounds');
+    // Audible = final: the row is in history from THIS moment — before the
+    // user stops the ring, not on some later open (2026-07-19).
+    var history = await engine.store.loadHistory();
+    expect(history, hasLength(1));
+    expect(history.single.outcome, CheckOutcome.rang);
+    expect(history.single.volume, closeTo(0.8125, 0.001));
+    expect(await engine.store.loadCheckState(7), isNull,
+        reason: 'occurrence finalised while still audible');
+    // And the cascade survives the mid-ring return: with no post-T checks
+    // left to book themselves, the next occurrence's first rung is booked
+    // here (its own id space — never touches the sounding ring).
+    expect(checks.booked[7],
+        alarmAt.add(const Duration(days: 1, hours: -1)),
+        reason: "tomorrow's T-1h check keeps Android's cascade alive");
+
+    // A second mid-ring pass (another resync) must not double-log.
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(minutes: 4)));
+    history = await engine.store.loadHistory();
+    expect(history, hasLength(1), reason: 'idempotent while sounding');
   });
 
   test('removing a court deletes its alarms and history, sparing other courts',
@@ -492,6 +555,110 @@ void main() {
         now: DateTime(2026, 7, 11, 18, 1));
     expect(ring.scheduled, isEmpty);
     expect(checks.booked, isEmpty);
+    expect(await engine.store.loadHistory(), isEmpty,
+        reason: 'the pre-armed ring never FIRED — nothing to record');
+  });
+
+  test('toggle-off after an unlogged fired ring still lands the rang row',
+      () async {
+    // The ring fired while the app was closed; its committed state is the
+    // only evidence (no evaluate ran in between). Disabling the alarm used to
+    // clear that state unread — the ring vanished from history forever.
+    await engine.store.saveCheckState(CheckState(
+      alarmId: 7,
+      alarmAt: alarmAt,
+      ringScheduled: true,
+      ringCourtSpeedKmh: 1.8,
+      ringRawGustKmh: 6.0,
+      ringVolume: 0.8875,
+      lastCheckAt: alarmAt.subtract(const Duration(minutes: 30)),
+    ));
+    await engine.evaluateAlarm(alarm.copyWith(enabled: false), [court],
+        now: alarmAt.add(const Duration(minutes: 2)));
+
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(1));
+    expect(history.single.outcome, CheckOutcome.rang);
+    expect(history.single.at, alarmAt);
+    expect(history.single.volume, closeTo(0.8875, 0.001));
+    expect(await engine.store.loadCheckState(7), isNull);
+  });
+
+  test("the reput bug: editing after a fired ring doesn't lose its history",
+      () async {
+    // Device-reproduced 2026-07-19: set alarm -> rang -> re-set ("reput") ->
+    // that ring never appeared in history, ever. The edit's blind
+    // clearCheckState destroyed the un-logged committed ring.
+    await engine.store.saveCourts([court]);
+    await engine.store.saveAlarms([alarm]);
+    await engine.store.saveCheckState(CheckState(
+      alarmId: 7,
+      alarmAt: alarmAt,
+      ringScheduled: true,
+      ringCourtSpeedKmh: 0.6,
+      ringRawGustKmh: 2.0,
+      ringVolume: 1.0,
+    ));
+    final controller = NivaatController(engine: engine);
+    controller.alarms = await engine.store.loadAlarms();
+    controller.courts = await engine.store.loadCourts();
+
+    api.sample = wind(5.0, 5.0); // whatever tomorrow's forecast says
+    await controller.upsertAlarm(alarm.copyWith(hour: 7));
+
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(1),
+        reason: 'the fired ring survives the edit');
+    expect(history.single.outcome, CheckOutcome.rang);
+    expect(history.single.at, alarmAt,
+        reason: 'anchored to the occurrence that rang, pre-edit');
+    expect(history.single.volume, closeTo(1.0, 0.001));
+  });
+
+  test('retries never rewrite the heads-up snapshot row', () async {
+    api.sample = wind(9.0, 10.0); // court 5.4 -> windy
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 1)));
+    await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+    expect((await engine.store.loadHistory()).single.courtSpeedKmh,
+        closeTo(5.4, 0.01));
+
+    api.sample = wind(12.0, 14.0); // court 7.2 — a stronger reading
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.add(const Duration(minutes: 5)));
+
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(1), reason: 'retries append nothing');
+    expect(history.single.courtSpeedKmh, closeTo(5.4, 0.01),
+        reason: 'the snapshot keeps exactly what the heads-up card said');
+    expect(history.single.watchedUntil, isNotNull);
+  });
+
+  test('nivaatStillWatchingNote: snapshot rows watch then remember; final rows stay quiet',
+      () {
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    expect(
+        nivaatStillWatchingNote(snapshot,
+            now: alarmAt.add(const Duration(minutes: 10))),
+        'watching until 06:30',
+        reason: 'inside the retry window — a late ring may still follow');
+    expect(
+        nivaatStillWatchingNote(snapshot,
+            now: alarmAt.add(const Duration(minutes: 30))),
+        'watched until 06:30',
+        reason: 'stays forever as the mark of the at-T moment');
+    final finalSkip = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        outcome: CheckOutcome.skippedWindy);
+    expect(nivaatStillWatchingNote(finalSkip, now: alarmAt), isNull,
+        reason: 'final rows carry no watch note');
   });
 
   test('concurrent evaluations of one alarm serialize — no duplicate history',

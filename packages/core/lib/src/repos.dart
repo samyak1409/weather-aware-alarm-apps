@@ -150,6 +150,16 @@ class NivaatStore {
   static const _soundKey = 'nivaat.sound';
   static const _historyLimit = 60;
 
+  /// Re-reads the on-disk prefs into THIS isolate's cache. SharedPreferences
+  /// caches per isolate, so history/check-state written by a background wind
+  /// check stays invisible to the already-running app until a cold start —
+  /// the foreground app must call this at the top of every resync. (Fresh
+  /// background isolates read from disk anyway and don't need it.)
+  Future<void> refresh() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+  }
+
   /// Selected alarm tone path; null = default (Court Call).
   Future<String?> loadSoundPath() async {
     final prefs = await SharedPreferences.getInstance();
@@ -191,6 +201,31 @@ class NivaatStore {
     final all = await loadHistory();
     final trimmed = [record, ...all].take(_historyLimit);
     await _saveList(_historyKey, trimmed.map((r) => r.toJson()));
+  }
+
+  /// Inserts [record], REPLACING any existing row for the same EVENT — same
+  /// occurrence (alarmId + at) and same kind (heads-up snapshot vs final,
+  /// told apart by `watchedUntil`). History is an append-only log (user
+  /// decision 2026-07-20): the "still checking" row written at T and the
+  /// final outcome row (cap skip, or a late ring) are separate entries that
+  /// both stay — the replace half exists ONLY so a foreground/background
+  /// double-write of the same event converges on one row instead of
+  /// duplicating it. New events prepend (newest first). Keeps the newest
+  /// [_historyLimit] entries.
+  Future<void> upsertHistory(HistoryRecord record) async {
+    final all = await loadHistory();
+    final i = all.indexWhere((r) =>
+        r.alarmId == record.alarmId &&
+        r.at == record.at &&
+        (r.watchedUntil != null) == (record.watchedUntil != null));
+    final rows = [...all];
+    if (i >= 0) {
+      rows[i] = record;
+    } else {
+      rows.insert(0, record);
+    }
+    await _saveList(
+        _historyKey, rows.take(_historyLimit).map((r) => r.toJson()));
   }
 
   /// Drops every history row for [courtId] — used when a court is deleted, so

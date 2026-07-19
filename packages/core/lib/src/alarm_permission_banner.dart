@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import 'alarmkit_scheduler.dart';
-import 'theme.dart';
+import 'nudge_banner.dart';
+import 'system_settings.dart';
 
 /// Shown when the user has **denied** AlarmKit on iOS. Since iOS has no
 /// `alarm`-package fallback (by design), a denied permission means nothing can
@@ -64,35 +64,14 @@ class _AlarmPermissionBannerState extends State<AlarmPermissionBanner>
   @override
   Widget build(BuildContext context) {
     if (!_denied) return const SizedBox.shrink();
-    final text = Theme.of(context).textTheme;
-    return Container(
+    return NudgeBanner(
+      message: 'Alarms are turned off — ${widget.appName} can\'t ring until '
+          'you allow alarms for it in Settings.',
+      actionLabel: 'Open Settings',
+      // The banner is iOS-only, so this never runs on Android.
+      onAction: openIosAppSettings,
+      accent: widget.accent,
       margin: widget.margin,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppPalette.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppPalette.hairline),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Alarms are turned off — ${widget.appName} can\'t ring until you '
-            'allow alarms for it in Settings.',
-            style: text.bodyMedium!.copyWith(color: AppPalette.textPrimary),
-          ),
-          const SizedBox(height: 12),
-          GestureDetector(
-            // iOS `app-settings:` opens this app's Settings page (the banner is
-            // iOS-only, so this never runs on Android).
-            onTap: () => launchUrl(Uri.parse('app-settings:')),
-            child: Text(
-              'Open Settings',
-              style: text.labelSmall!.copyWith(color: widget.accent),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

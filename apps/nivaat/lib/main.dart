@@ -36,19 +36,37 @@ Future<void> main() async {
 
   final controller = NivaatController(engine: engine);
   unawaited(controller.init());
-  // Android 13+ notification permission for skip cards (no-op elsewhere).
-  unawaited(engine.notifier?.requestPermissionIfNeeded() ?? Future.value());
+  // Notification permission, both platforms (skip cards; Android also the
+  // ring card). The future resolves when the dialog is answered — kept so the
+  // home screen's denied-banner can re-check at that exact moment.
+  final permissionFlow =
+      engine.notifier?.requestPermissionIfNeeded() ?? Future.value();
+  unawaited(permissionFlow);
   // Android: ask once to skip battery optimisation, so off-charger Doze doesn't
-  // throttle the background wind checks (no-op on iOS).
-  unawaited(requestBatteryExemptionOnce());
+  // throttle the background wind checks (no-op on iOS). If denied, the
+  // BackgroundChecksBanner takes over from here (it stays hidden while this
+  // flow's dialog is up, then re-checks).
+  final batteryFlow = requestBatteryExemptionOnce();
+  unawaited(batteryFlow);
 
-  runApp(NivaatApp(controller: controller));
+  runApp(NivaatApp(
+    controller: controller,
+    permissionFlow: permissionFlow,
+    batteryFlow: batteryFlow,
+  ));
 }
 
 class NivaatApp extends StatelessWidget {
-  const NivaatApp({super.key, required this.controller});
+  const NivaatApp({
+    super.key,
+    required this.controller,
+    required this.permissionFlow,
+    required this.batteryFlow,
+  });
 
   final NivaatController controller;
+  final Future<void> permissionFlow;
+  final Future<void> batteryFlow;
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +76,14 @@ class NivaatApp extends StatelessWidget {
       theme: buildOledTheme(AppPalette.wind),
       home: RingGate(
         appName: 'NIVAAT',
-        child: HomeScreen(controller: controller),
+        // A ring starting or being stopped resyncs immediately, so the rang
+        // row is in history while the alarm still sounds (Rule 1 logs it).
+        onRingingChanged: () => unawaited(controller.resync()),
+        child: HomeScreen(
+          controller: controller,
+          permissionFlow: permissionFlow,
+          batteryFlow: batteryFlow,
+        ),
       ),
     );
   }

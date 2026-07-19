@@ -1,15 +1,25 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'notifications.dart';
 import 'settings_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.controller});
+  const HomeScreen({
+    super.key,
+    required this.controller,
+    this.permissionFlow,
+  });
 
   final ArunodayController controller;
+
+  /// The startup notification-permission request; its completion re-checks
+  /// the denied-banner (see [NotificationPermissionBanner.recheckAfter]).
+  final Future<void>? permissionFlow;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -197,6 +207,20 @@ class _HomeScreenState extends State<HomeScreen>
           accent: AppPalette.dawn,
           margin: EdgeInsets.only(top: 16, bottom: 4),
         ),
+        // Android-only: the iOS rings are AlarmKit's own full-screen alerts,
+        // so Arunoday posts nothing through this permission there. On Android
+        // a denied permission leaves the ring as bare sound — no card, no
+        // full-screen, no Stop outside the app.
+        if (Platform.isAndroid)
+          NotificationPermissionBanner(
+            accent: AppPalette.dawn,
+            margin: const EdgeInsets.only(top: 16, bottom: 4),
+            denied: notificationsDenied,
+            recheckAfter: widget.permissionFlow,
+            message: 'Notifications are off — a ringing alarm shows nothing '
+                'on screen (sound only, no Stop), and bedtime reminders '
+                'can\'t appear.',
+          ),
         const Spacer(),
         Text(
           nextWake == null ? '—' : fmtClock(nextWake),

@@ -1,7 +1,8 @@
 # Screenshots
 
-Numbered in suggested viewing order per app/platform. Refreshed on every UI
-change (simulator + emulator captures; see CLAUDE.md).
+Numbered in suggested viewing order per app/platform. Refreshed **only when
+Samyak explicitly asks** ("update screenshots") — never automatically after a
+UI change (simulator + emulator captures; rule in CLAUDE.md).
 
 - **arunoday/** — 01 home (Tonk: dawn wake + auto bedtime) → 02 AlarmKit
   permission (iOS) / settings (Android) → 03 sound picker → 04 location search

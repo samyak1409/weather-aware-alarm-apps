@@ -229,7 +229,10 @@ class NivaatAlarm {
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
 
 /// One line of Nivaat history: what happened and why. The trust mechanism —
-/// a skipped alarm must always be explainable.
+/// a skipped alarm must always be explainable. History is an append-only log
+/// of events, like the notifications (user decision 2026-07-20): the
+/// "still checking" moment at T and the final outcome are SEPARATE rows that
+/// both stay forever — nothing is overwritten.
 class HistoryRecord {
   const HistoryRecord({
     required this.alarmId,
@@ -237,6 +240,7 @@ class HistoryRecord {
     required this.at,
     required this.outcome,
     this.checkedAt,
+    this.watchedUntil,
     this.courtSpeedKmh,
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
@@ -261,6 +265,12 @@ class HistoryRecord {
   /// 22:00 reading). Null when no check ever succeeded (no-data) or on older
   /// rows → falls back to [at]. See [whenChecked].
   final DateTime? checkedAt;
+
+  /// Set only on the provisional "still checking" row written at T (= the
+  /// +30m retry cap it kept watching toward). Marks the row as the heads-up
+  /// snapshot — its final counterpart (a late ring, or the cap's skip) is a
+  /// separate later row. Null on every final row.
+  final DateTime? watchedUntil;
   final double? courtSpeedKmh;
   final double? rawGustKmh;
 
@@ -298,6 +308,7 @@ class HistoryRecord {
         'at': at.toIso8601String(),
         'outcome': outcome.name,
         'checkedAt': checkedAt?.toIso8601String(),
+        'watchedUntil': watchedUntil?.toIso8601String(),
         'courtSpeedKmh': courtSpeedKmh,
         'rawGustKmh': rawGustKmh,
         'courtSpeedLimitKmh': courtSpeedLimitKmh,
@@ -311,6 +322,10 @@ class HistoryRecord {
         at: DateTime.parse(j['at'] as String),
         outcome: CheckOutcome.values.byName(j['outcome'] as String),
         checkedAt: switch (j['checkedAt']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
+        watchedUntil: switch (j['watchedUntil']) {
           final String s => DateTime.parse(s),
           _ => null,
         },

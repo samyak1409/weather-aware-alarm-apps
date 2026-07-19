@@ -65,8 +65,12 @@ class NivaatController extends ChangeNotifier {
     history = await store.loadHistory();
   }
 
-  /// Re-runs the whole cascade (app open / resume / after edits).
+  /// Re-runs the whole cascade (app open / resume / ring start-stop / edits).
   Future<void> resync() async {
+    // First pull in what background isolates wrote (rows, check state) —
+    // this isolate's SharedPreferences cache doesn't see them otherwise, and
+    // the engine would re-decide from stale state.
+    await store.refresh();
     await engine.evaluateAll();
     history = await store.loadHistory();
     notifyListeners();
@@ -116,6 +120,7 @@ class NivaatController extends ChangeNotifier {
 
   Future<void> upsertAlarm(NivaatAlarm alarm) async {
     final i = alarms.indexWhere((a) => a.id == alarm.id);
+    final previous = i >= 0 ? alarms[i] : null;
     alarms = [...alarms];
     if (i >= 0) {
       alarms[i] = alarm;
@@ -124,7 +129,10 @@ class NivaatController extends ChangeNotifier {
     }
     await store.saveAlarms(alarms);
     // Edits invalidate the in-flight occurrence: start the cascade fresh.
-    await store.clearCheckState(alarm.id);
+    // Through the engine (not a blind clearCheckState) so a ring that already
+    // fired is finalised into history first — and against the PRE-edit alarm,
+    // whose court/thresholds that ring belongs to.
+    await engine.discardOccurrence(previous ?? alarm);
     notifyListeners();
     // The wind evaluation hits the network — never block the UI on it.
     unawaited(_evaluateInBackground(alarm));

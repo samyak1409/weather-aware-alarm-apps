@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alarm/alarm.dart';
 import 'package:alarm/utils/alarm_set.dart';
 import 'package:flutter/material.dart';
@@ -10,12 +12,13 @@ import 'theme.dart';
 ///
 /// [actionsBuilder] lets an app add per-alarm actions above the STOP button
 /// (e.g. Arunoday's bedtime ritual: delay bedtime, adjust tomorrow's wake).
-class RingGate extends StatelessWidget {
+class RingGate extends StatefulWidget {
   const RingGate({
     super.key,
     required this.appName,
     required this.child,
     this.actionsBuilder,
+    this.onRingingChanged,
   });
 
   final String appName;
@@ -23,17 +26,54 @@ class RingGate extends StatelessWidget {
   final Widget Function(BuildContext context, AlarmSettings alarm)?
       actionsBuilder;
 
+  /// Called whenever the set of ringing alarms changes — a ring starting, or
+  /// ending (incl. the STOP button here). Apps hook their resync so history
+  /// and next-alarm state update the moment a ring begins/ends instead of on
+  /// the next app open. Never fires on iOS: rings there are AlarmKit's, so
+  /// `Alarm.ringing` stays empty (resync-on-resume covers that platform).
+  final VoidCallback? onRingingChanged;
+
+  @override
+  State<RingGate> createState() => _RingGateState();
+}
+
+class _RingGateState extends State<RingGate> {
+  StreamSubscription<AlarmSet>? _sub;
+  Set<int> _lastIds = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Alarm.ringing replays its current value on subscribe: a quiet mount
+    // (empty set == _lastIds) fires nothing, while mounting DURING a ring —
+    // opening the app from the ring notification — fires immediately, which
+    // is exactly when the app wants a resync.
+    _sub = Alarm.ringing.listen((set) {
+      final ids = set.alarms.map((a) => a.id).toSet();
+      final changed =
+          ids.length != _lastIds.length || !ids.containsAll(_lastIds);
+      _lastIds = ids;
+      if (changed) widget.onRingingChanged?.call();
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AlarmSet>(
       stream: Alarm.ringing,
       builder: (context, snapshot) {
         final ringing = snapshot.data?.alarms ?? const <AlarmSettings>{};
-        if (ringing.isEmpty) return child;
+        if (ringing.isEmpty) return widget.child;
         return _RingScreen(
-          appName: appName,
+          appName: widget.appName,
           alarms: ringing.toList(),
-          actionsBuilder: actionsBuilder,
+          actionsBuilder: widget.actionsBuilder,
         );
       },
     );

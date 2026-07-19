@@ -27,16 +27,24 @@ Future<void> main() async {
     scheduler: scheduler,
   );
   unawaited(controller.init());
-  // Android 13+ notification permission for the ring UI (no-op elsewhere).
-  unawaited(requestNotificationPermission());
+  // Notification permission (Android: the ring's card/full-screen UI). The
+  // future resolves when the dialog is answered — kept so the home screen's
+  // denied-banner can re-check at that exact moment.
+  final permissionFlow = requestNotificationPermission();
+  unawaited(permissionFlow);
 
-  runApp(ArunodayApp(controller: controller));
+  runApp(ArunodayApp(controller: controller, permissionFlow: permissionFlow));
 }
 
 class ArunodayApp extends StatelessWidget {
-  const ArunodayApp({super.key, required this.controller});
+  const ArunodayApp({
+    super.key,
+    required this.controller,
+    required this.permissionFlow,
+  });
 
   final ArunodayController controller;
+  final Future<void> permissionFlow;
 
   @override
   Widget build(BuildContext context) {
@@ -46,11 +54,17 @@ class ArunodayApp extends StatelessWidget {
       theme: buildOledTheme(AppPalette.dawn),
       home: RingGate(
         appName: 'ARUNODAY',
+        // Stopping (or starting) a ring re-arms the next wake/bedtime right
+        // away instead of waiting for the next app open.
+        onRingingChanged: () => unawaited(controller.resync()),
         actionsBuilder: (context, alarm) =>
             BedtimeActions.isBedtimeAlarm(alarm)
                 ? BedtimeActions(controller: controller, ringingAlarm: alarm)
                 : const SizedBox.shrink(),
-        child: HomeScreen(controller: controller),
+        child: HomeScreen(
+          controller: controller,
+          permissionFlow: permissionFlow,
+        ),
       ),
     );
   }

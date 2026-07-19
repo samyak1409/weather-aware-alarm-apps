@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:core/core.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// The trust mechanism, part 2 (SPEC.md): every skipped alarm leaves a
 /// notification saying exactly why — windy, gusty, or no data.
@@ -26,6 +29,11 @@ class SkipNotifier {
     _initialized = true;
   }
 
+  /// Set only after [requestPermissionIfNeeded] has completed at least once —
+  /// i.e. the user has ANSWERED the system prompt. Before that, a "not
+  /// granted" status means undetermined, not denied.
+  static const String _askedKey = 'nivaat.notifPermissionAsked';
+
   /// Request notification permission on BOTH platforms. iOS is essential: the
   /// alarm package never requests it (it only checks and silently drops the
   /// notification), so without this the skip cards never appear on iOS.
@@ -39,6 +47,32 @@ class SkipNotifier {
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, sound: true, badge: false);
+    // Only now — the request futures resolve when the dialog is answered (or
+    // was never needed), which is when "denied" becomes a meaningful verdict.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_askedKey, true);
+  }
+
+  /// True only when the user has answered the permission prompt with no —
+  /// undetermined (never asked) is NOT "denied", or the home-screen banner
+  /// would flash behind the first-run dialog. Feeds
+  /// [NotificationPermissionBanner].
+  Future<bool> notificationsDenied() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(_askedKey) ?? false)) return false;
+    await ensureInitialized();
+    if (Platform.isAndroid) {
+      final enabled = await _plugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.areNotificationsEnabled();
+      return enabled == false;
+    }
+    final options = await _plugin
+        .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>()
+        ?.checkPermissions();
+    return options != null && !options.isEnabled;
   }
 
   // The "still checking" heads-up (at T) and the final skip card (at the cap)

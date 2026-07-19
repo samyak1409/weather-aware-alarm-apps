@@ -94,4 +94,4 @@ flutter run                             # builds + installs + launches on it
 
 A build note: `flutter run` prints a harmless `KGP` deprecation warning that originates inside the `alarm` plugin's own Gradle script — nothing on our side, safe to ignore until the plugin updates upstream.
 
-See `SPEC.md` for the full locked v1 specification and the research behind every number.
+See `SPEC.md` for the full locked v1 specification and the research behind every number, and `RUNNING.md` for how to run both apps on the local emulator/simulator.

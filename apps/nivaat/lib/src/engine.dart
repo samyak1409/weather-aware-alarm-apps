@@ -27,6 +27,19 @@ String nivaatSoundForVolume(double volume) {
   return 'assets/sounds/nivaat_ring_$pct.wav';
 }
 
+/// The note for a heads-up snapshot row (`watchedUntil` set): "watching until
+/// HH:MM" while the retry window still runs — the same promise the heads-up
+/// card makes — then "watched until HH:MM" forever, marking it as the
+/// at-T moment whose final outcome is its own later row. Null for final rows.
+String? nivaatStillWatchingNote(HistoryRecord record, {DateTime? now}) {
+  final until = record.watchedUntil;
+  if (until == null) return null;
+  final t = now ?? DateTime.now();
+  return t.isBefore(until)
+      ? 'watching until ${fmtClock(until)}'
+      : 'watched until ${fmtClock(until)}';
+}
+
 /// Background entrypoint for Android AlarmManager wakeups. Runs in a fresh
 /// isolate: rebuild the whole graph, evaluate every alarm, reschedule.
 @pragma('vm:entry-point')
@@ -94,28 +107,50 @@ class NivaatEngine {
     }
   }
 
-  /// One evaluation per alarm at a time. Two overlapping runs of the same
-  /// alarm — the app-open resync racing a toggle/edit made moments later, with
-  /// the first run parked on its wind fetch — would both read the persisted
-  /// cascade state before either writes it: duplicate history rows/cards, or
-  /// an edit's freshly cleared state re-saved by the older run. Queuing per
-  /// alarm id makes the later run see the earlier one's writes. (Same-isolate
-  /// only; an overlap with a background isolate remains possible and worst-cases
-  /// at a duplicate row — the next check reads fresh state and self-corrects.)
+  /// One state-touching job per alarm at a time. Two overlapping runs of the
+  /// same alarm — the app-open resync racing a toggle/edit made moments later,
+  /// with the first run parked on its wind fetch — would both read the
+  /// persisted cascade state before either writes it: duplicate history
+  /// rows/cards, or an edit's freshly cleared state re-saved by the older run.
+  /// Queuing per alarm id makes the later job see the earlier one's writes.
+  /// (Same-isolate only; an overlap with a background isolate remains possible
+  /// and worst-cases at a re-written row — upsertHistory converges both writes
+  /// onto the same occurrence row, and the next check self-corrects.)
   final Map<int, Future<void>> _evalQueue = {};
+
+  Future<void> _enqueue(int alarmId, Future<void> Function() job) {
+    final tail = _evalQueue[alarmId] ?? Future<void>.value();
+    final run = tail.then((_) => job());
+    // Park an error-swallowing copy so one failed run can't jam the lane;
+    // the caller still sees the failure through `run`.
+    _evalQueue[alarmId] = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
 
   Future<void> evaluateAlarm(
     NivaatAlarm alarm,
     List<SavedLocation> courts, {
     DateTime? now,
-  }) {
-    final tail = _evalQueue[alarm.id] ?? Future<void>.value();
-    final run = tail.then((_) => _evaluate(alarm, courts, now: now));
-    // Park an error-swallowing copy so one failed run can't jam the lane;
-    // the caller still sees the failure through `run`.
-    _evalQueue[alarm.id] = run.then((_) {}, onError: (Object _) {});
-    return run;
-  }
+  }) =>
+      _enqueue(alarm.id, () => _evaluate(alarm, courts, now: now));
+
+  /// The controller's edit path: an edit invalidates the in-flight occurrence,
+  /// but its state may hold the only evidence of a ring that already FIRED —
+  /// blind-clearing here was how an edited alarm's ring vanished from history
+  /// for good (2026-07-19 device testing). Finalise that ring into history,
+  /// then drop the state. Pass the PRE-edit alarm: the fired ring belongs to
+  /// its old court/thresholds.
+  Future<void> discardOccurrence(NivaatAlarm alarm, {DateTime? now}) =>
+      _enqueue(alarm.id, () async {
+        final t = now ?? DateTime.now();
+        final stored = await store.loadCheckState(alarm.id);
+        if (stored != null &&
+            stored.ringScheduled &&
+            t.isAfter(stored.alarmAt)) {
+          await store.upsertHistory(_rangRecord(alarm, stored));
+        }
+        await store.clearCheckState(alarm.id);
+      });
 
   Future<void> _evaluate(
     NivaatAlarm alarm,
@@ -134,6 +169,12 @@ class NivaatEngine {
     if (next == null || court == null) {
       await scheduler.cancel(alarm.id);
       await checks.cancelCheck(alarm.id);
+      // A committed ring that already fired must reach history even while its
+      // alarm is being disabled/deleted — clearing first silently dropped it
+      // ("rang but never showed up in history", 2026-07-19 device testing).
+      if (stored != null && stored.ringScheduled && t.isAfter(stored.alarmAt)) {
+        await store.upsertHistory(_rangRecord(alarm, stored));
+      }
       await store.clearCheckState(alarm.id);
       return;
     }
@@ -144,7 +185,27 @@ class NivaatEngine {
     // ladder — not a split-second T-0 cancel — is what keeps a windy morning
     // from ringing; once it's audible, it stays. This is what makes "open the
     // app during a ring" safe on both platforms.
-    if (alarm.enabled && await scheduler.isRinging(alarm.id)) return;
+    if (alarm.enabled && await scheduler.isRinging(alarm.id)) {
+      // Audible = final, so the "rang" row is written HERE — the first moment
+      // the app can see the ring — not whenever the user gets around to
+      // stopping it (history must show the ring while it still sounds).
+      // Idempotent: the cleared state stops a second mid-ring pass relogging.
+      if (stored != null && stored.ringScheduled) {
+        await store.upsertHistory(_rangRecord(alarm, stored));
+        await store.clearCheckState(alarm.id);
+      }
+      // Keep the cascade alive without touching the scheduler (cancelling or
+      // re-setting the ring's id would silence it): checks live in their own
+      // id space, so book the NEXT occurrence's first rung. Without this, the
+      // T-0 check ending here left Android with no future wakeup at all —
+      // checks only ever reschedule themselves.
+      final upcoming = alarm.nextOccurrence(t);
+      if (upcoming != null) {
+        final firstRung = CheckCascade.nextCheckTime(t, upcoming);
+        if (firstRung != null) await checks.scheduleCheck(alarm.id, firstRung);
+      }
+      return;
+    }
 
     // An occurrence we're no longer tracking as current (the app first ran past
     // its 30-min retry window, so `next` has already rolled on) still needs
@@ -158,21 +219,10 @@ class NivaatEngine {
         stored.alarmAt != next &&
         t.isAfter(stored.alarmAt)) {
       if (stored.ringScheduled) {
-        await store.addHistory(HistoryRecord(
-          alarmId: alarm.id,
-          courtId: alarm.courtId,
-          at: stored.alarmAt,
-          checkedAt: stored.lastCheckAt,
-          outcome: CheckOutcome.rang,
-          courtSpeedKmh: stored.ringCourtSpeedKmh,
-          rawGustKmh: stored.ringRawGustKmh,
-          courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
-          rawGustLimitKmh: alarm.thresholds.rawGustLimit,
-          volume: stored.ringVolume,
-        ));
+        await store.upsertHistory(_rangRecord(alarm, stored));
       } else {
         final record = _skipRecord(alarm, stored.alarmAt, stored);
-        await store.addHistory(record);
+        await store.upsertHistory(record);
         await _notifySkip(record, court.name);
       }
       await store.clearCheckState(alarm.id);
@@ -188,20 +238,9 @@ class NivaatEngine {
     // newer wind. Without this, an app-open after the ring — the normal iOS
     // path, where no exact T-0 check runs — could log a ring as "skipped".
     if (state.ringScheduled && t.isAfter(next)) {
-      await store.addHistory(HistoryRecord(
-        alarmId: alarm.id,
-        courtId: alarm.courtId,
-        at: next,
-        checkedAt: state.lastCheckAt,
-        outcome: CheckOutcome.rang,
-        courtSpeedKmh: state.ringCourtSpeedKmh,
-        rawGustKmh: state.ringRawGustKmh,
-        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
-        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
-        volume: state.ringVolume,
-      ));
+      await store.upsertHistory(_rangRecord(alarm, state));
       await store.clearCheckState(alarm.id);
-      return;
+      return _rollOn(alarm, courts, t, next);
     }
 
     // Every check counts as an attempt (this timestamps a no-data skip's
@@ -268,13 +307,15 @@ class NivaatEngine {
     // At/after T and ringing → final; we never retry a ring. A leftover "still
     // checking" heads-up is left in place — the ring itself is the update.
     if (atOrPastAlarm && decision != null && decision.shouldRing) {
-      await store.addHistory(HistoryRecord(
+      await store.upsertHistory(HistoryRecord(
         alarmId: alarm.id,
         courtId: alarm.courtId,
         at: next,
         // The check behind this ring is the one that just ran now (`t`) — on
         // time at T, or a later retry-until-calm check. Recorded so history
         // can show "checked 06:07" when that differs from the 06:00 alarm.
+        // A late ring APPENDS this row; the heads-up snapshot row stays too
+        // (append-only log — both moments really happened).
         checkedAt: t,
         outcome: CheckOutcome.rang,
         courtSpeedKmh: decision.sample.courtSpeedKmh,
@@ -284,7 +325,7 @@ class NivaatEngine {
         volume: decision.volume,
       ));
       await store.clearCheckState(alarm.id);
-      return;
+      return _rollOn(alarm, courts, t, next);
     }
 
     // At/after T but NOT ringing (windy/gusty/no-data): the skip is provisional.
@@ -294,23 +335,65 @@ class NivaatEngine {
     // reports "windy" rather than "couldn't check".
     if (atOrPastAlarm && nextCheck == null) {
       final record = _skipRecord(alarm, next, state);
-      await store.addHistory(record);
+      await store.upsertHistory(record);
       await store.clearCheckState(alarm.id);
       await _notifySkip(record, court.name);
-      return;
+      return _rollOn(alarm, courts, t, next);
     }
 
     // Before T (ladder), or a provisional post-T skip → keep the cascade going.
-    // On the first at/after-T skip, post the "still checking" heads-up (once).
+    // On the first at/after-T skip, post the "still checking" heads-up (once)
+    // AND its permanent history row: the at-T moment is in the app from the
+    // moment it happens (user decision 2026-07-19), as its own entry — the
+    // final outcome (cap skip / late ring) will be a separate later row, so
+    // dismissing the heads-up notification never hides what happened
+    // (append-only log, 2026-07-20). Retries touch neither: this row is the
+    // snapshot of what the heads-up said.
     if (atOrPastAlarm && !state.extendedCheckShown) {
       final until =
           next.add(const Duration(minutes: CheckCascade.retryCapMinutesAfter));
-      await _notifyExtendedCheck(
-          _skipRecord(alarm, next, state), court.name, until);
+      final snapshot = _skipRecord(alarm, next, state, watchedUntil: until);
+      await _notifyExtendedCheck(snapshot, court.name, until);
+      await store.upsertHistory(snapshot);
       state = state.copyWith(extendedCheckShown: true);
     }
     await store.saveCheckState(state);
     if (nextCheck != null) await checks.scheduleCheck(alarm.id, nextCheck);
+  }
+
+  /// The "rang" row for a committed ring, built from its persisted [state] —
+  /// used everywhere a ring is finalised after the fact (audible ring, past
+  /// ring on app open, stale occurrence, alarm being edited/disabled).
+  HistoryRecord _rangRecord(NivaatAlarm alarm, CheckState state) =>
+      HistoryRecord(
+        alarmId: alarm.id,
+        courtId: alarm.courtId,
+        at: state.alarmAt,
+        checkedAt: state.lastCheckAt,
+        outcome: CheckOutcome.rang,
+        courtSpeedKmh: state.ringCourtSpeedKmh,
+        rawGustKmh: state.ringRawGustKmh,
+        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+        volume: state.ringVolume,
+      );
+
+  /// After finalising [closed], immediately evaluate the alarm's NEXT
+  /// occurrence in the same pass: this very open/wakeup pre-arms it (iOS may
+  /// never get a background slot before T) and books its first check (on
+  /// Android nothing else would — checks only reschedule themselves, so
+  /// returning here left the cascade dead until the next manual app open).
+  /// Skipped when the "next" occurrence is still [closed] itself (a T-0 check
+  /// running inside the pre-T grace), which also guarantees the recursion
+  /// terminates: a genuinely future occurrence can't finalise again.
+  Future<void> _rollOn(
+    NivaatAlarm alarm,
+    List<SavedLocation> courts,
+    DateTime t,
+    DateTime closed,
+  ) {
+    if (alarm.nextOccurrence(t) == closed) return Future.value();
+    return _evaluate(alarm, courts, now: t);
   }
 
   /// The skip record for [alarm]'s occurrence [at], from the last known skip
@@ -318,13 +401,20 @@ class NivaatEngine {
   /// ever read a skip-worthy wind. `checkedAt` is [state.lastCheckAt] for a
   /// windy/gusty skip (the reading behind it) but [state.lastAttemptAt] for a
   /// no-data skip (its last try — there was no successful reading).
-  HistoryRecord _skipRecord(NivaatAlarm alarm, DateTime at, CheckState state) {
+  /// [watchedUntil] marks the heads-up snapshot row (see HistoryRecord).
+  HistoryRecord _skipRecord(
+    NivaatAlarm alarm,
+    DateTime at,
+    CheckState state, {
+    DateTime? watchedUntil,
+  }) {
     if (state.skipCourtSpeedKmh == null) {
       return HistoryRecord(
         alarmId: alarm.id,
         courtId: alarm.courtId,
         at: at,
         checkedAt: state.lastAttemptAt,
+        watchedUntil: watchedUntil,
         outcome: CheckOutcome.skippedNoData,
         courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
         rawGustLimitKmh: alarm.thresholds.rawGustLimit,
@@ -335,6 +425,7 @@ class NivaatEngine {
       courtId: alarm.courtId,
       at: at,
       checkedAt: state.lastCheckAt,
+      watchedUntil: watchedUntil,
       outcome: state.skipGusty
           ? CheckOutcome.skippedGusty
           : CheckOutcome.skippedWindy,

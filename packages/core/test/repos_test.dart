@@ -88,6 +88,53 @@ void main() {
       expect(b, a);
     });
 
+    test('upsertHistory: same event converges; heads-up and final stay apart',
+        () async {
+      final at = DateTime(2026, 7, 13, 6, 0);
+      final cap = at.add(const Duration(minutes: 30));
+      HistoryRecord row(CheckOutcome outcome,
+              {DateTime? watched, DateTime? when, int alarm = 7}) =>
+          HistoryRecord(
+              alarmId: alarm,
+              courtId: 'c1',
+              at: when ?? at,
+              watchedUntil: watched,
+              outcome: outcome);
+
+      // The heads-up snapshot written twice (racing isolates) -> ONE row.
+      await store.upsertHistory(row(CheckOutcome.skippedWindy, watched: cap));
+      await store.upsertHistory(row(CheckOutcome.skippedWindy, watched: cap));
+      var h = await store.loadHistory();
+      expect(h, hasLength(1), reason: 'double-write of one event converges');
+
+      // The final outcome is a SEPARATE row — the snapshot survives it
+      // (append-only log, user decision 2026-07-20).
+      await store.upsertHistory(row(CheckOutcome.rang));
+      h = await store.loadHistory();
+      expect(h, hasLength(2));
+      expect(h.first.outcome, CheckOutcome.rang, reason: 'final prepends');
+      expect(h.last.watchedUntil, cap, reason: 'snapshot row still there');
+
+      // A racing double-write of the final converges onto it too.
+      await store.upsertHistory(row(CheckOutcome.rang));
+      expect(await store.loadHistory(), hasLength(2));
+
+      // Different occurrence / different alarm = new rows.
+      await store.upsertHistory(
+          row(CheckOutcome.skippedGusty, when: at.add(const Duration(days: 1))));
+      await store.upsertHistory(row(CheckOutcome.skippedWindy, alarm: 8));
+      expect(await store.loadHistory(), hasLength(4));
+    });
+
+    test('refresh() reloads prefs without disturbing stored data', () async {
+      // The real point of refresh() — seeing another isolate's writes — needs
+      // two isolates and is device territory; here we pin that a reload is
+      // non-destructive and safe to call at every resync.
+      await store.saveSoundPath('/tones/x.ogg');
+      await store.refresh();
+      expect(await store.loadSoundPath(), '/tones/x.ogg');
+    });
+
     test('history prepends newest and caps at 60', () async {
       for (var i = 0; i < 65; i++) {
         await store.addHistory(HistoryRecord(

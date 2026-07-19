@@ -110,6 +110,8 @@ _In every Nivaat title below, `{HH:MM}` is the **alarm time you set** (e.g. `06:
 
 Shown in two places: the **history sheet** (a scrollable list of past outcomes) and the home screen's single **"last outcome"** line. Each entry has a **line** — the primary text (outcome + numbers) — and a **sub** — the smaller secondary line beneath it (court + when + freshness). Both lead with the **court name**.
 
+History is an **append-only log mirroring the notifications** (2026-07-20): an occurrence that misses its T leaves the heads-up **snapshot row** right then (what N2 said, marked with N17's watch note), and its **final outcome** — the cap's skip, or a late ring — is a **separate second row**. Both stay forever; nothing is overwritten.
+
 | Outcome        | Line (template → example)                                                              | Sheet sub (example)                                 |
 | -------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | **N5** rang    | `Rang (at {vol}%) · {windgust}` → `Rang (at 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`  | `Society Court · 18 Jul · 06:00 · checked 06:00`    |
@@ -117,9 +119,15 @@ Shown in two places: the **history sheet** (a scrollable list of past outcomes) 
 | **N7** gusty   | `Skipped (gusty) · {windgust}` → `Skipped (gusty) · wind 3 (≤4) · gusts 16 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
 | **N8** no-data | `Skipped (no data)`                                                                    | `Society Court · 18 Jul · 06:00 · last tried 06:29` |
 
-- Sheet **sub** = `{court} · {date} · {HH:MM} · {checked|last tried} {checktime}`.
-- Home **last outcome** = `{court} · {date} {HH:MM} · {checked|last tried} {checktime} — {line}` → `Society Court · 18 Jul 06:00 · checked 06:00 — Rang (at 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`.
+- Sheet **sub** = `{court} · {date} · {HH:MM} · {checked|last tried} {checktime}{ · watch note}`.
+- Home **last outcome** = `{court} · {date} {HH:MM} · {checked|last tried} {checktime} — {line}{ · watch note}` → `Society Court · 18 Jul 06:00 · checked 06:00 — Rang (at 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`.
 - `HH:MM` is the **alarm time**; "checked" = last successful reading, "last tried" = last attempt for a no-data skip.
+
+### N17 — Watch note (heads-up snapshot rows only)
+
+- While the +30m retry window runs: ` · watching until {HH:MM}` → ` · watching until 06:30`
+- Forever after: ` · watched until {HH:MM}` → ` · watched until 06:30`
+- Appended to the sheet sub and the home last-outcome line; marks the row as the at-T snapshot whose final outcome is its own later row (N5–N8). Final rows never carry it.
 
 ## Home screen
 
@@ -127,6 +135,9 @@ Shown in two places: the **history sheet** (a scrollable list of past outcomes) 
 - **N10 — Background note (footer):** `Keep the phone charged and online before your alarm — the background wind check needs both.`
 - **N11 — Empty state:** title `The windless alarm.` · body `Rings only when the wind at your court is low enough to play. The calmer the morning, the louder it rings.`
 - **N12 — Alarm list row (sub):** `{weekdays} · {court} · ≤{limit} km/h` → `Every day · Society Court · ≤4 km/h` — court deleted → `court removed`
+- **N18 — Background-checks banner** (shown while the OS throttles background wind checks; hidden while the first-run exemption dialog is up):
+  - **Android:** `Battery optimisation can delay or skip Nivaat's background wind checks — it could miss a wind change and ring on a windy morning, or stay silent on a calm one.` · button `Allow background use` (re-opens the system exemption dialog)
+  - **iOS:** `Background App Refresh is off — Nivaat can only check the wind while the app is open.` · button `Open Settings`
 
 ## Sheets & dialogs
 
@@ -159,3 +170,10 @@ Shown in two places: the **history sheet** (a scrollable list of past outcomes) 
 
 - Header: `ALARM SOUND` · section (Android) `DEVICE ALARM SOUNDS`
 - Default tone names: Nivaat `Court Call` · Arunoday `Dawn Bells`
+
+### X4 — Notifications-off banner (home screen; only after the user has ANSWERED the permission prompt with a deny)
+
+- **Nivaat, Android:** `Notifications are off — a ringing alarm shows nothing on screen (sound only, no Stop), and Nivaat can't tell you when it skips an alarm for wind, or why.`
+- **Nivaat, iOS:** `Notifications are off — Nivaat can't tell you when it skips an alarm for wind, or why.`
+- **Arunoday, Android only** (no iOS banner or permission request — it posts no iOS notifications): `Notifications are off — a ringing alarm shows nothing on screen (sound only, no Stop), and bedtime reminders can't appear.`
+- **Button (all):** `Turn on notifications` (Android → the app's notification settings page; iOS → the app's Settings page)

@@ -149,6 +149,7 @@ void main() {
         courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
         checkedAt: DateTime(2026, 7, 12, 22, 0),
+        watchedUntil: DateTime(2026, 7, 13, 6, 30),
         outcome: CheckOutcome.skippedGusty,
         courtSpeedKmh: 3.0,
         rawGustKmh: 15.6,
@@ -159,12 +160,16 @@ void main() {
       final back = HistoryRecord.fromJson(r.toJson());
       expect(back.courtId, 'c1');
       expect(back.checkedAt, DateTime(2026, 7, 12, 22, 0));
+      expect(back.watchedUntil, DateTime(2026, 7, 13, 6, 30));
       expect(back.outcome, CheckOutcome.skippedGusty);
       expect(back.courtSpeedKmh, 3.0);
       expect(back.rawGustKmh, 15.6);
       expect(back.courtSpeedLimitKmh, 4);
       expect(back.rawGustLimitKmh, closeTo(14.667, 0.001));
       expect(back.volume, isNull);
+      // Rows saved before the field existed load as final rows (null).
+      final old = HistoryRecord.fromJson(r.toJson()..remove('watchedUntil'));
+      expect(old.watchedUntil, isNull);
     });
 
     test('whenChecked is the recorded check time, else falls back to at', () {
