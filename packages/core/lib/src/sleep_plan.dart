@@ -3,8 +3,9 @@ import 'solar.dart';
 /// Computes the fixed bedtime for Arunoday.
 ///
 /// Rule locked in SPEC.md: bedtime = midpoint(earliest yearly wake, latest
-/// yearly wake) - 8h, then clamped so nightly sleep always stays within
-/// [minSleepHours, maxSleepHours]. Wake = civil dawn + user offset.
+/// yearly wake) - 8h, clamped toward [minSleepHours, maxSleepHours] — holdable
+/// only when the yearly wake swing ≤ 2h (else `feasible` is false). Wake =
+/// civil dawn + user offset.
 class SleepPlan {
   SleepPlan._();
 
@@ -31,10 +32,13 @@ class SleepPlan {
     final lowest = latestWakeMinutes + 1440.0 - maxSleepHours * 60.0;
     final highest = earliestWakeMinutes + 1440.0 - minSleepHours * 60.0;
 
+    // This branch is load-bearing, not just informational: clamp() throws when
+    // lowest > highest, so the infeasible case must be handled here regardless
+    // of whether `feasible` is ever read.
     var feasible = true;
     if (lowest > highest) {
       feasible = false;
-      bedtime = (lowest + highest) / 2.0;
+      bedtime = (lowest + highest) / 2.0; // closest compromise
     } else {
       bedtime = bedtime.clamp(lowest, highest);
     }
@@ -86,5 +90,10 @@ class SleepPlanResult {
   /// Longest night of the year (winter), in minutes.
   final double maxSleepMinutes;
 
+  /// True when a single fixed bedtime keeps every night within
+  /// [SleepPlan.minSleepHours, SleepPlan.maxSleepHours] (yearly wake swing ≤ 2h).
+  /// Not surfaced in the UI yet — deliberately kept as the hook for the deferred
+  /// "seasonal-swing capping" feature in SPEC.md (which would use the [min,max]
+  /// window to nudge wake off dawn on the extreme days). Not dead code.
   final bool feasible;
 }

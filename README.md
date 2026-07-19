@@ -3,21 +3,23 @@
 Two minimal, pitch-black alarm apps. One Flutter monorepo.
 
 ## 🌄 Arunoday (अरुणोदय)
+
 Wakes you at **civil dawn** — every day, at your location's real dawn, like humans woke for millions of years. Dynamic wake, fixed bedtime, computed so you naturally sleep ~7h in summer and ~9h in winter.
 
 ## 🌬️ Nivaat (निवात)
-The badminton alarm. Rings **only if the wind at your court is low enough to play** — and the calmer the morning, the louder it rings. *"yathā dīpo nivāta-stho neṅgate"* — like a lamp in a windless place that doesn't flicker (Gita 6.19).
+
+The badminton alarm. Rings **only if the wind at your court is low enough to play** — and the calmer the morning, the louder it rings. _"yathā dīpo nivāta-stho neṅgate"_ — like a lamp in a windless place that doesn't flicker (Gita 6.19).
 
 ## Why waking with the dawn works
 
 Your body clock runs on one master signal: **morning light**. Decades of circadian
-research keep landing on the same two levers for better sleep — a *consistent wake
-time* and *morning light exposure* — and Arunoday hands you both in a single act.
+research keep landing on the same two levers for better sleep — a _consistent wake
+time_ and _morning light exposure_ — and Arunoday hands you both in a single act.
 
 - **Consistency you never have to think about.** Civil dawn drifts only ~1 minute
   per day, so "wake at dawn" is, in practice, a rock-steady wake time — one that also
   happens to arrive exactly when the light that sets your clock does. You get the
-  regularity sleep scientists prize *and* perfect light-alignment, for free. In a
+  regularity sleep scientists prize _and_ perfect light-alignment, for free. In a
   landmark camping study, waking near sunrise pulled people's melatonin timing into
   natural alignment with sunset — about the tightest, healthiest circadian rhythm
   there is.<sup>[1][2]</sup>
@@ -69,7 +71,7 @@ flutter devices                         # several connected: list ids…
 flutter run -d <device-id>              # …and pick one
 ```
 
-Simulators are perfect for UI and flows; alarm *reliability* (Silent mode, locked-screen ring, battery behavior) still needs a real device.
+Simulators are perfect for UI and flows; alarm _reliability_ (Silent mode, locked-screen ring, battery behavior) still needs a real device.
 
 ### Real Android phone (`adb`)
 
@@ -87,8 +89,8 @@ flutter run                             # builds + installs + launches on it
 
 **Wireless (no cable).** On the phone: Developer options → **Wireless debugging → On** (phone and Mac on the same Wi-Fi).
 
-- *First time only* — pair: open "Pair device with pairing code", then on the Mac `adb pair <IP:PORT>` (the IP:PORT and 6-digit code shown *in that pairing dialog*). Once the Mac appears under the phone's "Paired devices", never pair again.
-- *Each session* — connect: take the IP:PORT from the **main** Wireless-debugging screen (different port than pairing) and run `adb connect <IP:PORT>`. Often `adb` auto-reconnects to a paired phone, so try `adb devices` first — if it's already listed, you're done.
+- _First time only_ — pair: open "Pair device with pairing code", then on the Mac `adb pair <IP:PORT>` (the IP:PORT and 6-digit code shown _in that pairing dialog_). Once the Mac appears under the phone's "Paired devices", never pair again.
+- _Each session_ — connect: take the IP:PORT from the **main** Wireless-debugging screen (different port than pairing) and run `adb connect <IP:PORT>`. Often `adb` auto-reconnects to a paired phone, so try `adb devices` first — if it's already listed, you're done.
 
 A build note: `flutter run` prints a harmless `KGP` deprecation warning that originates inside the `alarm` plugin's own Gradle script — nothing on our side, safe to ignore until the plugin updates upstream.
 

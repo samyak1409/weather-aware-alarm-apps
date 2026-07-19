@@ -55,10 +55,10 @@ void main() {
       await store.saveCheckState(CheckState(
         alarmId: 7,
         alarmAt: DateTime(2026, 7, 13, 6, 0),
-        hadSuccessfulCheck: true,
+        ringScheduled: true,
       ));
       final s = await store.loadCheckState(7);
-      expect(s!.hadSuccessfulCheck, isTrue);
+      expect(s!.ringScheduled, isTrue);
       await store.clearCheckState(7);
       expect(await store.loadCheckState(7), isNull);
     });
@@ -67,6 +67,7 @@ void main() {
       for (var i = 0; i < 65; i++) {
         await store.addHistory(HistoryRecord(
           alarmId: i,
+          courtId: 'c1',
           at: DateTime(2026, 7, 13, 6, i % 60),
           outcome: CheckOutcome.rang,
           courtSpeedKmh: 1,
@@ -77,6 +78,23 @@ void main() {
       expect(h.length, 60, reason: 'capped at the 60 newest');
       expect(h.first.alarmId, 64, reason: 'newest is first');
       expect(h.last.alarmId, 5, reason: 'oldest kept is #5 (0-4 dropped)');
+    });
+
+    test('removeHistoryForCourt drops every row for that court, keeps others',
+        () async {
+      // Two rows for c1 (one from an alarm that no longer matters), one for c2.
+      for (final (id, courtId) in [(1, 'c1'), (9, 'c1'), (2, 'c2')]) {
+        await store.addHistory(HistoryRecord(
+          alarmId: id,
+          courtId: courtId,
+          at: DateTime(2026, 7, 13, 6, id),
+          outcome: CheckOutcome.rang,
+        ));
+      }
+      await store.removeHistoryForCourt('c1');
+      final h = await store.loadHistory();
+      expect(h.map((r) => r.courtId), ['c2'],
+          reason: 'every c1 row gone, incl. the orphaned-alarm one; c2 kept');
     });
   });
 }

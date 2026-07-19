@@ -16,6 +16,11 @@ import workmanager_apple
       withIdentifier: "com.samyak.nivaat.refresh",
       frequency: NSNumber(value: 30 * 60)
     )
+    // Overnight/idle trigger for the wind-check cascade; earliestBeginDate is
+    // set per cascade rung from Dart (see IosCheckScheduler.scheduleCheck).
+    WorkmanagerPlugin.registerBGProcessingTask(
+      withIdentifier: "com.samyak.nivaat.processing"
+    )
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

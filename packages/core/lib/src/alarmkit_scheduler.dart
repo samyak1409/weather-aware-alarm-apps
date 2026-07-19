@@ -21,7 +21,7 @@ class AlarmKitScheduler implements AlarmScheduler {
     required this.tintColor,
   });
 
-  /// e.g. volume 0.6 -> 'assets/sounds/nivaat_ring_60.wav'
+  /// e.g. volume 0.9 -> 'assets/sounds/nivaat_ring_90.wav'
   final String Function(double volume) soundAssetForVolume;
 
   /// '#RRGGBB' accent used on the system alarm UI.
@@ -30,20 +30,6 @@ class AlarmKitScheduler implements AlarmScheduler {
   final FlutterAlarmkit _ak = FlutterAlarmkit();
   static const String _mapKey = 'alarmkit.idmap';
   bool _authRequested = false;
-
-  /// True when AlarmKit is present and not denied (iOS 26+). On older iOS
-  /// the plugin throws — callers fall back to [AlarmPkgScheduler].
-  static Future<bool> isSupported() async {
-    if (!Platform.isIOS) return false;
-    try {
-      final state = await FlutterAlarmkit().getAuthorizationState();
-      return state != AlarmAuthorizationState.denied;
-    } on PlatformException {
-      return false; // iOS < 26
-    } on MissingPluginException {
-      return false;
-    }
-  }
 
   @override
   Future<void> ensureInitialized() async {
@@ -77,12 +63,21 @@ class AlarmKitScheduler implements AlarmScheduler {
   }) async {
     await ensureInitialized();
     await cancel(id); // replace semantics, same as the alarm package
-    final uuid = await _ak.scheduleOneShotAlarm(
-      timestamp: at.millisecondsSinceEpoch.toDouble(),
-      label: title,
-      tintColor: tintColor,
-      soundPath: soundAssetForVolume(volume),
-    );
+    final String uuid;
+    try {
+      uuid = await _ak.scheduleOneShotAlarm(
+        timestamp: at.millisecondsSinceEpoch.toDouble(),
+        label: title,
+        tintColor: tintColor,
+        soundPath: soundAssetForVolume(volume),
+      );
+    } on PlatformException {
+      // AlarmKit denied or unavailable. By design there is NO `alarm`-package
+      // fallback on iOS (2026-07-18 decision) — instead [alarmSchedulingDenied]
+      // drives the permission banner to send the user to Settings. A failed
+      // schedule must never crash the engine/controller.
+      return;
+    }
     final map = await _loadMap();
     map['$id'] = uuid;
     await _saveMap(map);
@@ -135,17 +130,36 @@ class AlarmKitScheduler implements AlarmScheduler {
   }
 }
 
-/// Picks the best scheduler for the platform: AlarmKit on iOS 26+,
-/// otherwise the `alarm` package (Android, older iOS, or AlarmKit denied).
+/// Picks the scheduler for the platform: **AlarmKit on iOS** (min target 26,
+/// so always present), the `alarm` package on Android. iOS has **no**
+/// `alarm`-package fallback (2026-07-18): if the user denies AlarmKit,
+/// scheduling silently no-ops and [alarmSchedulingDenied] lets the UI nudge
+/// them to Settings — we never ship the `alarm` package's unreliable
+/// Timer-based iOS ring.
 Future<AlarmScheduler> createAlarmScheduler({
   required String Function(double volume) soundAssetForVolume,
   required String tintColor,
 }) async {
-  if (await AlarmKitScheduler.isSupported()) {
+  if (Platform.isIOS) {
     return AlarmKitScheduler(
       soundAssetForVolume: soundAssetForVolume,
       tintColor: tintColor,
     );
   }
   return AlarmPkgScheduler(soundAssetForVolume: soundAssetForVolume);
+}
+
+/// True only when the user has **denied** AlarmKit on iOS — the signal for
+/// [AlarmPermissionBanner]. Android, and any non-denied iOS state
+/// (authorized / not-yet-asked), → false.
+Future<bool> alarmSchedulingDenied() async {
+  if (!Platform.isIOS) return false;
+  try {
+    final state = await FlutterAlarmkit().getAuthorizationState();
+    return state == AlarmAuthorizationState.denied;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
 }

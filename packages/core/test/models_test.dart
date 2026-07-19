@@ -146,7 +146,9 @@ void main() {
     test('JSON round-trips all metrics including stored limits', () {
       final r = HistoryRecord(
         alarmId: 7,
+        courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
+        checkedAt: DateTime(2026, 7, 12, 22, 0),
         outcome: CheckOutcome.skippedGusty,
         courtSpeedKmh: 3.0,
         rawGustKmh: 15.6,
@@ -155,6 +157,8 @@ void main() {
         volume: null,
       );
       final back = HistoryRecord.fromJson(r.toJson());
+      expect(back.courtId, 'c1');
+      expect(back.checkedAt, DateTime(2026, 7, 12, 22, 0));
       expect(back.outcome, CheckOutcome.skippedGusty);
       expect(back.courtSpeedKmh, 3.0);
       expect(back.rawGustKmh, 15.6);
@@ -163,9 +167,31 @@ void main() {
       expect(back.volume, isNull);
     });
 
+    test('whenChecked is the recorded check time, else falls back to at', () {
+      final noneRecorded = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.rang,
+        volume: 1,
+      );
+      expect(noneRecorded.whenChecked, DateTime(2026, 7, 13, 6, 0));
+      // Stale evening check behind a morning ring.
+      final stale = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 7, 13, 6, 0),
+        checkedAt: DateTime(2026, 7, 12, 22, 0),
+        outcome: CheckOutcome.rang,
+        volume: 1,
+      );
+      expect(stale.whenChecked, DateTime(2026, 7, 12, 22, 0));
+    });
+
     test('windGustSummary shows all four whole-km/h numbers', () {
       final r = HistoryRecord(
         alarmId: 7,
+        courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
         outcome: CheckOutcome.skippedGusty,
         courtSpeedKmh: 3.0,
@@ -180,6 +206,7 @@ void main() {
       // Pre-limits row: values but no stored caps.
       final old = HistoryRecord(
         alarmId: 7,
+        courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
         outcome: CheckOutcome.skippedWindy,
         courtSpeedKmh: 7.4,
@@ -189,6 +216,7 @@ void main() {
       // No-data skip carries caps but nothing was measured.
       final noData = HistoryRecord(
         alarmId: 7,
+        courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
         outcome: CheckOutcome.skippedNoData,
         courtSpeedLimitKmh: 4,
@@ -198,28 +226,39 @@ void main() {
     });
   });
 
-  test('CheckState JSON round-trips, incl. committed-ring fields', () {
+  test('CheckState JSON round-trips, incl. committed-ring + skip fields', () {
     final s = CheckState(
       alarmId: 7,
       alarmAt: DateTime(2026, 7, 13, 6, 0),
-      hadSuccessfulCheck: true,
       ringScheduled: true,
       ringCourtSpeedKmh: 3.0,
       ringRawGustKmh: 12.0,
-      ringVolume: 0.625,
+      ringVolume: 0.875,
+      extendedCheckShown: true,
+      skipCourtSpeedKmh: 5.4,
+      skipRawGustKmh: 22.0,
+      skipGusty: true,
+      lastCheckAt: DateTime(2026, 7, 12, 22, 0),
+      lastAttemptAt: DateTime(2026, 7, 13, 6, 29),
     );
     final back = CheckState.fromJson(s.toJson());
     expect(back.alarmId, 7);
     expect(back.alarmAt, DateTime(2026, 7, 13, 6, 0));
-    expect(back.hadSuccessfulCheck, isTrue);
     expect(back.ringScheduled, isTrue);
     expect(back.ringCourtSpeedKmh, 3.0);
-    expect(back.ringVolume, closeTo(0.625, 0.001));
+    expect(back.ringVolume, closeTo(0.875, 0.001));
+    expect(back.extendedCheckShown, isTrue);
+    expect(back.skipCourtSpeedKmh, 5.4);
+    expect(back.skipGusty, isTrue);
+    expect(back.lastCheckAt, DateTime(2026, 7, 12, 22, 0));
+    expect(back.lastAttemptAt, DateTime(2026, 7, 13, 6, 29));
     // Old rows without the new keys default cleanly.
     final bare = CheckState.fromJson(
         {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'});
-    expect(bare.hadSuccessfulCheck, isFalse);
     expect(bare.ringScheduled, isFalse);
     expect(bare.ringCourtSpeedKmh, isNull);
+    expect(bare.extendedCheckShown, isFalse);
+    expect(bare.skipCourtSpeedKmh, isNull);
+    expect(bare.lastCheckAt, isNull);
   });
 }

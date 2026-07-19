@@ -2,8 +2,10 @@ import 'package:alarm/alarm.dart';
 
 import 'scheduler.dart';
 
-/// v1 [AlarmScheduler] backed by the `alarm` pub package (both platforms).
-/// v1.1 swaps the iOS path to flutter_alarmkit behind this same interface.
+/// [AlarmScheduler] backed by the `alarm` pub package — **Android only**. On
+/// iOS `createAlarmScheduler` always picks `AlarmKitScheduler` and there is no
+/// `alarm`-package fallback (a denied AlarmKit no-ops + nudges to Settings),
+/// so this never runs on iOS.
 class AlarmPkgScheduler implements AlarmScheduler {
   AlarmPkgScheduler({required this.soundAssetForVolume});
 
@@ -38,9 +40,11 @@ class AlarmPkgScheduler implements AlarmScheduler {
         loopAudio: true,
         vibrate: true,
         androidFullScreenIntent: true,
-        // Alarms live in AlarmManager / UNNotification and survive the app
-        // being swiped from recents; the package's "may not ring" warning
-        // only applies to aggressive OEM task killers.
+        // Android-only path: the ring is a foreground service + AlarmManager
+        // alarm that genuinely survives the app being swiped/killed, so the
+        // package's "may not ring" warning would be a false alarm here. Off.
+        // (The iOS unreliability that warning is for no longer applies — iOS
+        // uses AlarmKit, never this scheduler.)
         warningNotificationOnKill: false,
         volumeSettings: VolumeSettings.fixed(
           volume: volume.clamp(0.0, 1.0),

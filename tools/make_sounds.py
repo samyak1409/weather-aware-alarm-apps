@@ -152,3 +152,18 @@ for rep in range(int(dur // bar_len)):
             place(canvas, marimba(note / 2, dur=0.5, punch=0.4), at, gain=0.25)
 
 finish(canvas, "nivaat_ring.wav", crescendo=(0.7, 1.0))
+
+# ---------- Nivaat: loudness variants for the wind ramp (iOS AlarmKit) ----------
+# AlarmKit has no volume knob, so the wind-ramp volume (100% dead calm -> 75%
+# floor at the wind limit; SPEC.md) is baked into amplitude-scaled copies of the
+# base tone. 5% steps over the 75-100% band -> nivaat_ring_{75..100}.wav.
+with wave.open("nivaat_ring.wav", "rb") as _w:
+    _base = np.frombuffer(_w.readframes(_w.getnframes()), dtype="<i2").astype(np.float64)
+for _pct in (75, 80, 85, 90, 95, 100):
+    _scaled = np.round(_base * (_pct / 100)).astype("<i2")
+    with wave.open(f"nivaat_ring_{_pct}.wav", "wb") as _w:
+        _w.setnchannels(1)
+        _w.setsampwidth(2)
+        _w.setframerate(SR)
+        _w.writeframes(_scaled.tobytes())
+    print(f"nivaat_ring_{_pct}.wav")

@@ -28,16 +28,31 @@ class CheckState {
   const CheckState({
     required this.alarmId,
     required this.alarmAt,
-    required this.hadSuccessfulCheck,
     this.ringScheduled = false,
     this.ringCourtSpeedKmh,
     this.ringRawGustKmh,
     this.ringVolume,
+    this.extendedCheckShown = false,
+    this.skipCourtSpeedKmh,
+    this.skipRawGustKmh,
+    this.skipGusty = false,
+    this.lastCheckAt,
+    this.lastAttemptAt,
   });
 
   final int alarmId;
   final DateTime alarmAt;
-  final bool hadSuccessfulCheck;
+
+  /// When the last *successful* wind check ran (calm or skip-worthy; a failed
+  /// fetch doesn't update it). Carried into a ring/windy/gusty history row's
+  /// `checkedAt`, so it records the freshness of the reading it acted on —
+  /// e.g. a 22:00 check behind a 06:00 ring.
+  final DateTime? lastCheckAt;
+
+  /// When the last check was *attempted*, success or failure. Used for a
+  /// no-data skip's `checkedAt` ("last tried HH:MM"), since there was no
+  /// successful reading to timestamp.
+  final DateTime? lastAttemptAt;
 
   /// True once a ring has been committed (scheduled) for this occurrence. If
   /// the ring's time then passes without a live check overriding it, the ring
@@ -51,41 +66,79 @@ class CheckState {
   final double? ringRawGustKmh;
   final double? ringVolume;
 
+  /// True once the "extended check" heads-up card has been posted for this
+  /// occurrence (at T), so the minute-by-minute retries don't re-post it.
+  final bool extendedCheckShown;
+
+  /// The last KNOWN skip reading — kept across no-data retries so the +30m
+  /// card reports the real reason even if the cap check itself has no data.
+  /// Null until a check actually reads a skip-worthy wind. [skipGusty]
+  /// distinguishes gusty from windy (only meaningful when the speeds are set).
+  final double? skipCourtSpeedKmh;
+  final double? skipRawGustKmh;
+  final bool skipGusty;
+
   CheckState copyWith({
-    bool? hadSuccessfulCheck,
     bool? ringScheduled,
     double? ringCourtSpeedKmh,
     double? ringRawGustKmh,
     double? ringVolume,
+    bool? extendedCheckShown,
+    double? skipCourtSpeedKmh,
+    double? skipRawGustKmh,
+    bool? skipGusty,
+    DateTime? lastCheckAt,
+    DateTime? lastAttemptAt,
   }) =>
       CheckState(
         alarmId: alarmId,
         alarmAt: alarmAt,
-        hadSuccessfulCheck: hadSuccessfulCheck ?? this.hadSuccessfulCheck,
         ringScheduled: ringScheduled ?? this.ringScheduled,
         ringCourtSpeedKmh: ringCourtSpeedKmh ?? this.ringCourtSpeedKmh,
         ringRawGustKmh: ringRawGustKmh ?? this.ringRawGustKmh,
         ringVolume: ringVolume ?? this.ringVolume,
+        extendedCheckShown: extendedCheckShown ?? this.extendedCheckShown,
+        skipCourtSpeedKmh: skipCourtSpeedKmh ?? this.skipCourtSpeedKmh,
+        skipRawGustKmh: skipRawGustKmh ?? this.skipRawGustKmh,
+        skipGusty: skipGusty ?? this.skipGusty,
+        lastCheckAt: lastCheckAt ?? this.lastCheckAt,
+        lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
       );
 
   Map<String, dynamic> toJson() => {
         'alarmId': alarmId,
         'alarmAt': alarmAt.toIso8601String(),
-        'hadSuccessfulCheck': hadSuccessfulCheck,
         'ringScheduled': ringScheduled,
         'ringCourtSpeedKmh': ringCourtSpeedKmh,
         'ringRawGustKmh': ringRawGustKmh,
         'ringVolume': ringVolume,
+        'extendedCheckShown': extendedCheckShown,
+        'skipCourtSpeedKmh': skipCourtSpeedKmh,
+        'skipRawGustKmh': skipRawGustKmh,
+        'skipGusty': skipGusty,
+        'lastCheckAt': lastCheckAt?.toIso8601String(),
+        'lastAttemptAt': lastAttemptAt?.toIso8601String(),
       };
 
   factory CheckState.fromJson(Map<String, dynamic> j) => CheckState(
         alarmId: j['alarmId'] as int,
         alarmAt: DateTime.parse(j['alarmAt'] as String),
-        hadSuccessfulCheck: j['hadSuccessfulCheck'] as bool? ?? false,
         ringScheduled: j['ringScheduled'] as bool? ?? false,
         ringCourtSpeedKmh: (j['ringCourtSpeedKmh'] as num?)?.toDouble(),
         ringRawGustKmh: (j['ringRawGustKmh'] as num?)?.toDouble(),
         ringVolume: (j['ringVolume'] as num?)?.toDouble(),
+        extendedCheckShown: j['extendedCheckShown'] as bool? ?? false,
+        skipCourtSpeedKmh: (j['skipCourtSpeedKmh'] as num?)?.toDouble(),
+        skipRawGustKmh: (j['skipRawGustKmh'] as num?)?.toDouble(),
+        skipGusty: j['skipGusty'] as bool? ?? false,
+        lastCheckAt: switch (j['lastCheckAt']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
+        lastAttemptAt: switch (j['lastAttemptAt']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
       );
 }
 
@@ -138,6 +191,15 @@ class NivaatStore {
     final all = await loadHistory();
     final trimmed = [record, ...all].take(_historyLimit);
     await _saveList(_historyKey, trimmed.map((r) => r.toJson()));
+  }
+
+  /// Drops every history row for [courtId] — used when a court is deleted, so
+  /// its whole skip/ring log goes with it. Keyed by court, so this reaches
+  /// *every* row for the court, including those from alarms deleted earlier.
+  Future<void> removeHistoryForCourt(String courtId) async {
+    final kept =
+        (await loadHistory()).where((r) => r.courtId != courtId);
+    await _saveList(_historyKey, kept.map((r) => r.toJson()));
   }
 
   Future<CheckState?> loadCheckState(int alarmId) async {

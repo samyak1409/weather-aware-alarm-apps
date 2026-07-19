@@ -35,20 +35,20 @@ void main() {
     });
   });
 
-  group('volume ramp (100% at calm -> 50% floor at threshold)', () {
+  group('volume ramp (100% at calm -> 75% floor at threshold)', () {
     const t = WindThresholds(courtSpeedLimitKmh: 4);
     test('calm = full volume', () => expect(volumeForWind(0, t), 1.0));
-    test('half threshold = 75%', () => expect(volumeForWind(2, t), 0.75));
-    test('at threshold = 50% floor', () => expect(volumeForWind(4, t), 0.5));
+    test('half threshold = 87.5%', () => expect(volumeForWind(2, t), 0.875));
+    test('at threshold = 75% floor', () => expect(volumeForWind(4, t), 0.75));
   });
 
   group('decide — whole-km/h decision (threshold 4)', () {
     const t = WindThresholds(courtSpeedLimitKmh: 4); // raw gust limit 14.667
 
-    test('calm morning: court 3, gusts 5 raw -> ring at ~63%', () {
+    test('calm morning: court 3, gusts 5 raw -> ring at ~81%', () {
       final d = decide(sample(5.0, 5.0), t); // court = 3.0
       expect(d.verdict, WindVerdict.ring);
-      expect(d.volume, closeTo(0.625, 0.001)); // ramp stays continuous
+      expect(d.volume, closeTo(0.8125, 0.001)); // ramp stays continuous
     });
 
     test('sneaky morning: court 3 but gusts 16 raw -> skip (gusty)', () {
@@ -81,43 +81,31 @@ void main() {
   group('check cascade', () {
     final alarmAt = DateTime(2026, 7, 12, 6, 0);
 
-    test('walks the ladder from T-12h', () {
-      var now = DateTime(2026, 7, 11, 17, 0);
+    test('ladder is T-1h down to T-0 (8 rungs, far pre-arms dropped)', () {
+      var now = DateTime(2026, 7, 12, 4, 0); // before the first rung (T-1h)
       final points = <DateTime>[];
-      while (true) {
-        final next = CheckCascade.nextCheckTime(now, alarmAt,
-            hadSuccessfulCheck: true);
-        if (next == null || points.length > 20) break;
+      for (var i = 0; i < CheckCascade.ladderMinutesBefore.length; i++) {
+        final next = CheckCascade.nextCheckTime(now, alarmAt)!;
         points.add(next);
         now = next;
       }
-      expect(points.first, DateTime(2026, 7, 11, 18, 0)); // T-12h
-      expect(points, contains(DateTime(2026, 7, 12, 5, 30))); // T-30m
+      expect(points.first, DateTime(2026, 7, 12, 5, 0)); // T-1h
+      expect(points, contains(DateTime(2026, 7, 12, 5, 50))); // T-10m
       expect(points, contains(DateTime(2026, 7, 12, 5, 59))); // T-1m
       expect(points.last, alarmAt); // T-0
       expect(points.length, CheckCascade.ladderMinutesBefore.length);
     });
 
-    test('after T-0 with a successful check: cascade ends', () {
-      expect(
-        CheckCascade.nextCheckTime(alarmAt, alarmAt, hadSuccessfulCheck: true),
-        isNull,
-      );
-    });
-
-    test('after T-0 with NO successful check: retries 1/min, capped +30m', () {
-      final first = CheckCascade.nextCheckTime(alarmAt, alarmAt,
-          hadSuccessfulCheck: false);
+    test('after T-0: retries every minute, capped at +30m (for any skip)', () {
+      final first = CheckCascade.nextCheckTime(alarmAt, alarmAt);
       expect(first, alarmAt.add(const Duration(minutes: 1)));
 
       final nearCap = CheckCascade.nextCheckTime(
-          alarmAt.add(const Duration(minutes: 29)), alarmAt,
-          hadSuccessfulCheck: false);
+          alarmAt.add(const Duration(minutes: 29)), alarmAt);
       expect(nearCap, alarmAt.add(const Duration(minutes: 30)));
 
       final past = CheckCascade.nextCheckTime(
-          alarmAt.add(const Duration(minutes: 30)), alarmAt,
-          hadSuccessfulCheck: false);
+          alarmAt.add(const Duration(minutes: 30)), alarmAt);
       expect(past, isNull);
     });
   });

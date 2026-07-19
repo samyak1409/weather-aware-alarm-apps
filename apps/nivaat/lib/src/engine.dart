@@ -19,7 +19,9 @@ const String nivaatDefaultSound = 'assets/sounds/nivaat_ring.wav';
 String nivaatSoundForVolume(double volume) {
   final selected = nivaatSelectedSound;
   if (selected != null && selected != nivaatDefaultSound) return selected;
-  final pct = ((volume * 10).round() * 10).clamp(50, 100);
+  // The ramp spans 75-100% (SPEC.md), so the variants are 5%-stepped over
+  // that band: nivaat_ring_{75,80,85,90,95,100}.wav.
+  final pct = ((volume * 20).round() * 5).clamp(75, 100);
   return 'assets/sounds/nivaat_ring_$pct.wav';
 }
 
@@ -113,34 +115,42 @@ class NivaatEngine {
     // app during a ring" safe on both platforms.
     if (alarm.enabled && await scheduler.isRinging(alarm.id)) return;
 
-    // A committed ring from an occurrence we're no longer tracking as current
-    // (the app opened past the 30-min retry window, so `next` has already moved
-    // on) still fired — record its "rang" so a late open never loses it. This
-    // is mutually exclusive with Rule 2 below, which handles the in-window case
-    // (next == stored.alarmAt); the clear lets the fresh state for `next` take
-    // over. Without it, iOS (no exact T-0 check) drops the ring from history
-    // whenever the app is first opened >30 min after it rang.
+    // An occurrence we're no longer tracking as current (the app first ran past
+    // its 30-min retry window, so `next` has already rolled on) still needs
+    // finalising — the app may never have run during [T, T+30]. A committed
+    // ring fired → log "rang"; anything else (windy / gusty / no-data) is a
+    // skip → log it AND post its one card, so a late first-open never silently
+    // drops the occurrence. (Mutually exclusive with Rule 2, the in-window case
+    // where next == stored.alarmAt.) Without this, iOS — no exact wakeups —
+    // loses the whole occurrence when first opened >30 min after T.
     if (stored != null &&
-        stored.ringScheduled &&
         stored.alarmAt != next &&
         t.isAfter(stored.alarmAt)) {
-      await store.addHistory(HistoryRecord(
-        alarmId: alarm.id,
-        at: stored.alarmAt,
-        outcome: CheckOutcome.rang,
-        courtSpeedKmh: stored.ringCourtSpeedKmh,
-        rawGustKmh: stored.ringRawGustKmh,
-        courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
-        rawGustLimitKmh: alarm.thresholds.rawGustLimit,
-        volume: stored.ringVolume,
-      ));
+      if (stored.ringScheduled) {
+        await store.addHistory(HistoryRecord(
+          alarmId: alarm.id,
+          courtId: alarm.courtId,
+          at: stored.alarmAt,
+          checkedAt: stored.lastCheckAt,
+          outcome: CheckOutcome.rang,
+          courtSpeedKmh: stored.ringCourtSpeedKmh,
+          rawGustKmh: stored.ringRawGustKmh,
+          courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+          rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+          volume: stored.ringVolume,
+        ));
+      } else {
+        final record = _skipRecord(alarm, stored.alarmAt, stored);
+        await store.addHistory(record);
+        await _notifySkip(record, court.name);
+      }
       await store.clearCheckState(alarm.id);
     }
 
     // Cascade state is per-occurrence.
     var state = (stored != null && stored.alarmAt == next)
         ? stored
-        : CheckState(alarmId: alarm.id, alarmAt: next, hadSuccessfulCheck: false);
+        : CheckState(alarmId: alarm.id, alarmAt: next);
 
     // Rule 2: a committed ring whose time has passed (and isn't sounding — see
     // Rule 1) already fired. Record it as "rang" instead of re-deciding with
@@ -149,7 +159,9 @@ class NivaatEngine {
     if (state.ringScheduled && t.isAfter(next)) {
       await store.addHistory(HistoryRecord(
         alarmId: alarm.id,
+        courtId: alarm.courtId,
         at: next,
+        checkedAt: state.lastCheckAt,
         outcome: CheckOutcome.rang,
         courtSpeedKmh: state.ringCourtSpeedKmh,
         rawGustKmh: state.ringRawGustKmh,
@@ -160,6 +172,10 @@ class NivaatEngine {
       await store.clearCheckState(alarm.id);
       return;
     }
+
+    // Every check counts as an attempt (this timestamps a no-data skip's
+    // "last tried"); a successful one also updates lastCheckAt below.
+    state = state.copyWith(lastAttemptAt: t);
 
     WindDecision? decision;
     try {
@@ -181,7 +197,7 @@ class NivaatEngine {
         await scheduler.scheduleRing(
           id: alarm.id,
           at: ringAt,
-          title: 'Nivaat · ${court.name}',
+          title: 'Nivaat ${fmtClock(next)} · ${court.name}',
           body: '${fmtWindGust(
             decision.sample.courtSpeedKmh,
             decision.thresholds.courtSpeedLimitKmh,
@@ -195,60 +211,115 @@ class NivaatEngine {
           ringCourtSpeedKmh: decision.sample.courtSpeedKmh,
           ringRawGustKmh: decision.sample.rawGustKmh,
           ringVolume: decision.volume,
+          lastCheckAt: t,
         );
       } else {
         // Not sounding here either, so cancelling the provisional ring is safe.
+        // Remember the reading behind this skip (kept across later no-data
+        // retries) so the final card can report the real reason.
         await scheduler.cancel(alarm.id);
-        state = state.copyWith(ringScheduled: false);
+        state = state.copyWith(
+          ringScheduled: false,
+          skipCourtSpeedKmh: decision.sample.courtSpeedKmh,
+          skipRawGustKmh: decision.sample.rawGustKmh,
+          skipGusty: decision.verdict == WindVerdict.tooGusty,
+          lastCheckAt: t,
+        );
       }
     }
 
-    final hadSuccess = state.hadSuccessfulCheck || decision != null;
-    state = state.copyWith(hadSuccessfulCheck: hadSuccess);
-    await store.saveCheckState(state);
-
-    final nextCheck =
-        CheckCascade.nextCheckTime(t, next, hadSuccessfulCheck: hadSuccess);
-
-    // Final decision moment: at/after T with a result, or cascade exhausted.
-    // The grace covers scheduler jitter only; it must stay smaller than the
-    // gap between creating an alarm and its T, or the skip card fires early.
+    final nextCheck = CheckCascade.nextCheckTime(t, next);
+    // The grace covers scheduler jitter only; it must stay smaller than the gap
+    // between creating an alarm and its T, or a skip would finalise early.
     final atOrPastAlarm =
         !t.isBefore(next.subtract(const Duration(seconds: 5)));
-    if (atOrPastAlarm && decision != null) {
-      final record = HistoryRecord(
+
+    // At/after T and ringing → final; we never retry a ring. A leftover "still
+    // checking" heads-up is left in place — the ring itself is the update.
+    if (atOrPastAlarm && decision != null && decision.shouldRing) {
+      await store.addHistory(HistoryRecord(
         alarmId: alarm.id,
+        courtId: alarm.courtId,
         at: next,
-        outcome: switch (decision.verdict) {
-          WindVerdict.ring => CheckOutcome.rang,
-          WindVerdict.tooWindy => CheckOutcome.skippedWindy,
-          WindVerdict.tooGusty => CheckOutcome.skippedGusty,
-        },
+        // The check behind this ring is the one that just ran now (`t`) — on
+        // time at T, or a later retry-until-calm check. Recorded so history
+        // can show "checked 06:07" when that differs from the 06:00 alarm.
+        checkedAt: t,
+        outcome: CheckOutcome.rang,
         courtSpeedKmh: decision.sample.courtSpeedKmh,
         rawGustKmh: decision.sample.rawGustKmh,
         courtSpeedLimitKmh: decision.thresholds.courtSpeedLimitKmh,
         rawGustLimitKmh: decision.thresholds.rawGustLimit,
-        volume: decision.shouldRing ? decision.volume : null,
-      );
+        volume: decision.volume,
+      ));
+      await store.clearCheckState(alarm.id);
+      return;
+    }
+
+    // At/after T but NOT ringing (windy/gusty/no-data): the skip is provisional.
+    // Keep re-checking every minute until the +30m cap, ringing late if the wind
+    // drops. Only at the cap do we finalise the skip and fire its card — using
+    // the last KNOWN reason (state), so a network blip exactly at the cap still
+    // reports "windy" rather than "couldn't check".
+    if (atOrPastAlarm && nextCheck == null) {
+      final record = _skipRecord(alarm, next, state);
       await store.addHistory(record);
       await store.clearCheckState(alarm.id);
-      if (!decision.shouldRing) await _notifySkip(record, court.name);
-    } else if (atOrPastAlarm && nextCheck == null) {
-      // Every check of this occurrence failed and the retry cap has passed.
-      final record = HistoryRecord(
+      await _notifySkip(record, court.name);
+      return;
+    }
+
+    // Before T (ladder), or a provisional post-T skip → keep the cascade going.
+    // On the first at/after-T skip, post the "still checking" heads-up (once).
+    if (atOrPastAlarm && !state.extendedCheckShown) {
+      final until =
+          next.add(const Duration(minutes: CheckCascade.retryCapMinutesAfter));
+      await _notifyExtendedCheck(
+          _skipRecord(alarm, next, state), court.name, until);
+      state = state.copyWith(extendedCheckShown: true);
+    }
+    await store.saveCheckState(state);
+    if (nextCheck != null) await checks.scheduleCheck(alarm.id, nextCheck);
+  }
+
+  /// The skip record for [alarm]'s occurrence [at], from the last known skip
+  /// reading in [state] (windy/gusty with numbers), or "no data" if no check
+  /// ever read a skip-worthy wind. `checkedAt` is [state.lastCheckAt] for a
+  /// windy/gusty skip (the reading behind it) but [state.lastAttemptAt] for a
+  /// no-data skip (its last try — there was no successful reading).
+  HistoryRecord _skipRecord(NivaatAlarm alarm, DateTime at, CheckState state) {
+    if (state.skipCourtSpeedKmh == null) {
+      return HistoryRecord(
         alarmId: alarm.id,
-        at: next,
+        courtId: alarm.courtId,
+        at: at,
+        checkedAt: state.lastAttemptAt,
         outcome: CheckOutcome.skippedNoData,
         courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
         rawGustLimitKmh: alarm.thresholds.rawGustLimit,
       );
-      await store.addHistory(record);
-      await store.clearCheckState(alarm.id);
-      await _notifySkip(record, court.name);
     }
+    return HistoryRecord(
+      alarmId: alarm.id,
+      courtId: alarm.courtId,
+      at: at,
+      checkedAt: state.lastCheckAt,
+      outcome: state.skipGusty
+          ? CheckOutcome.skippedGusty
+          : CheckOutcome.skippedWindy,
+      courtSpeedKmh: state.skipCourtSpeedKmh,
+      rawGustKmh: state.skipRawGustKmh,
+      courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+      rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+    );
+  }
 
-    if (nextCheck != null && !(atOrPastAlarm && decision != null)) {
-      await checks.scheduleCheck(alarm.id, nextCheck);
+  Future<void> _notifyExtendedCheck(
+      HistoryRecord record, String courtName, DateTime until) async {
+    try {
+      await notifier?.showExtendedCheck(record, courtName, until);
+    } on Exception {
+      // A notification failure must never break the cascade.
     }
   }
 

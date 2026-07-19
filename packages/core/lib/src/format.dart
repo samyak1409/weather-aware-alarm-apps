@@ -52,3 +52,15 @@ String fmtWeekdays(Set<int> weekdays) {
 
 String fmtShortDate(DateTime d) =>
     '${d.day} ${const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.month - 1]}';
+
+/// A wind-check time, prefixed with its date only when it falls on a different
+/// calendar day from [alarmAt] — so an evening check before a morning alarm
+/// reads "17 Jul 22:00", never a bare "22:00" that looks like the alarm day.
+String fmtCheckTime(DateTime checkedAt, DateTime alarmAt) {
+  final sameDay = checkedAt.year == alarmAt.year &&
+      checkedAt.month == alarmAt.month &&
+      checkedAt.day == alarmAt.day;
+  return sameDay
+      ? fmtClock(checkedAt)
+      : '${fmtShortDate(checkedAt)} ${fmtClock(checkedAt)}';
+}

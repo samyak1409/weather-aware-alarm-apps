@@ -98,12 +98,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
+            const AlarmPermissionBanner(
+                appName: 'Nivaat', accent: AppPalette.wind),
             if (c.history.isNotEmpty) _lastOutcome(text),
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
+            _bgNote(text),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Standing caveat, both platforms: the pre-alarm wind check is background
+  /// work, so it needs power and a network. Android throttles background
+  /// wakeups under battery saver; iOS only grants BGAppRefresh opportunistically
+  /// and Low Power Mode suppresses it outright. Right-padded to clear the FAB.
+  Widget _bgNote(TextTheme text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 0, 88, 12),
+      child: Text(
+        'Keep the phone charged and online before your alarm — '
+        'the background wind check needs both.',
+        style: text.bodyMedium!.copyWith(fontSize: 12),
       ),
     );
   }
@@ -111,17 +129,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _lastOutcome(TextTheme text) {
     final h = c.history.first;
     final line = switch (h.outcome) {
-      CheckOutcome.rang => 'Rang ${(h.volume! * 100).round()}% · ${h.windGustSummary}',
+      CheckOutcome.rang =>
+        'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}',
       CheckOutcome.skippedWindy => 'Skipped (windy) · ${h.windGustSummary}',
       CheckOutcome.skippedGusty => 'Skipped (gusty) · ${h.windGustSummary}',
-      CheckOutcome.skippedNoData => 'Skipped · could not check the wind',
+      CheckOutcome.skippedNoData => 'Skipped (no data)',
     };
+    final verb = h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked';
+    final court = c.courtById(h.courtId)?.name ?? '—';
+    final when = '$court · ${fmtShortDate(h.at)} ${fmtClock(h.at)} · '
+        '$verb ${fmtCheckTime(h.whenChecked, h.at)}';
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
-      child: Text(
-        '${fmtShortDate(h.at)} ${fmtClock(h.at)} — $line',
-        style: text.bodyMedium,
-      ),
+      child: Text('$when — $line', style: text.bodyMedium),
     );
   }
 

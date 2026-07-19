@@ -310,13 +310,22 @@ class ArunodayController extends ChangeNotifier {
       }
     }
 
+    // A pending re-ring (below) wins a same-minute slot: skip the daily bedtime
+    // that lands on it so only one alarm sounds. Cancelling the re-ring restores
+    // the daily bedtime on the next resync (it's recomputed from scratch).
+    final delayed = settings.bedtimeDelayedUntil;
+    final reRing = (settings.bedtimeEnabled && delayed != null &&
+            delayed.isAfter(now))
+        ? _floorToMinute(delayed)
+        : null;
+
     final bed = bedtimeMinutes;
     if (settings.bedtimeEnabled && bed != null) {
       for (var i = 0; i <= windowDays; i++) {
         final day = now.add(Duration(days: i));
         final at = DateTime(day.year, day.month, day.day)
             .add(Duration(minutes: bed.round()));
-        if (at.isAfter(now)) {
+        if (at.isAfter(now) && at != reRing) {
           wanted[2000 + i] = (
             at: at,
             title: 'Arunoday · bedtime',
@@ -327,10 +336,9 @@ class ArunodayController extends ChangeNotifier {
     }
 
     // "Not sleepy yet" delayed bedtime reminder from the ring screen.
-    final delayed = settings.bedtimeDelayedUntil;
-    if (settings.bedtimeEnabled && delayed != null && delayed.isAfter(now)) {
+    if (reRing != null) {
       wanted[2999] = (
-        at: delayed,
+        at: delayed!,
         title: 'Arunoday · bedtime',
         body: 'Second call — dawn does not snooze.',
       );

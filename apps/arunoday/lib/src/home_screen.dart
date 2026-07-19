@@ -192,6 +192,11 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
         ),
+        const AlarmPermissionBanner(
+          appName: 'Arunoday',
+          accent: AppPalette.dawn,
+          margin: EdgeInsets.only(top: 16, bottom: 4),
+        ),
         const Spacer(),
         Text(
           nextWake == null ? '—' : fmtClock(nextWake),

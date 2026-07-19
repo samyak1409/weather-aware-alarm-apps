@@ -7,22 +7,18 @@ import 'src/bedtime_actions.dart';
 import 'src/controller.dart';
 import 'src/home_screen.dart';
 import 'src/notifications.dart';
-import 'src/routing_scheduler.dart';
 import 'src/sound_selection.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Wake alarms ride AlarmKit on iOS 26 (system-grade, Silent-proof);
-  // bedtime alarms stay on the alarm package for the in-app ritual UI.
-  final wake = await createAlarmScheduler(
+  // One scheduler for BOTH wake and bedtime. On Android → the alarm package
+  // (its ring screen still hosts the bedtime +1h ritual). On iOS 26+ →
+  // AlarmKit: a real system alarm that survives force-quit and reboot, so a
+  // bedtime nudge can never silently fail to fire. The iOS trade-off is the
+  // in-app ritual button (AlarmKit alerts are Stop-only) — reliability wins.
+  final scheduler = await createAlarmScheduler(
     soundAssetForVolume: arunodaySoundForVolume,
     tintColor: '#FFB067',
-  );
-  final bedtimePkg =
-      AlarmPkgScheduler(soundAssetForVolume: arunodaySoundForVolume);
-  final scheduler = RoutingScheduler(
-    wake: wake,
-    bedtime: wake is AlarmPkgScheduler ? wake : bedtimePkg,
   );
   await scheduler.ensureInitialized();
 

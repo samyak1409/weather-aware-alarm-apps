@@ -1,7 +1,9 @@
 import 'format.dart';
 import 'wind.dart';
 
-/// A saved named place (court or home). No GPS in v1 — locked decision.
+/// A saved named place (court or home). Stored as fixed lat/lon — no continuous
+/// GPS tracking (auto-location is the rejected feature); "add current location"
+/// uses a one-shot GPS fix, see location_picker.
 class SavedLocation {
   const SavedLocation({
     required this.id,
@@ -231,8 +233,10 @@ enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
 class HistoryRecord {
   const HistoryRecord({
     required this.alarmId,
+    required this.courtId,
     required this.at,
     required this.outcome,
+    this.checkedAt,
     this.courtSpeedKmh,
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
@@ -241,8 +245,22 @@ class HistoryRecord {
   });
 
   final int alarmId;
+
+  /// The court this check was for. History is grouped and deleted by court
+  /// (independently of whether the alarm still exists), so this is the durable
+  /// link — [alarmId] can be reused or deleted, [courtId] stays put.
+  final String courtId;
+
+  /// The alarm's scheduled time (which alarm this row is about).
   final DateTime at;
   final CheckOutcome outcome;
+
+  /// When the wind check that drove this outcome actually ran — the freshness
+  /// of the reading behind the ring/skip. May be well *before* [at] (e.g. an
+  /// alarm set at 22:00 whose only check was then, ringing at 06:00 on that
+  /// 22:00 reading). Null when no check ever succeeded (no-data) or on older
+  /// rows → falls back to [at]. See [whenChecked].
+  final DateTime? checkedAt;
   final double? courtSpeedKmh;
   final double? rawGustKmh;
 
@@ -253,6 +271,13 @@ class HistoryRecord {
   final int? courtSpeedLimitKmh;
   final double? rawGustLimitKmh;
   final double? volume;
+
+  /// The wind-check time, defaulting to [at] when unrecorded. For a no-data
+  /// skip this is the last *attempt* (there was no successful reading); for
+  /// every other outcome it's the last successful check. Always surfaced (even
+  /// when equal to [at]) as reinforcement that the result came from a real
+  /// check — the UI labels it "checked" or, for no-data, "last tried".
+  DateTime get whenChecked => checkedAt ?? at;
 
   /// All four numbers for this outcome: "wind 3 (≤4) · gusts 16 (≤15) km/h".
   /// Falls back to a reduced "wind 3 · gusts 16 km/h" for older rows saved
@@ -269,8 +294,10 @@ class HistoryRecord {
 
   Map<String, dynamic> toJson() => {
         'alarmId': alarmId,
+        'courtId': courtId,
         'at': at.toIso8601String(),
         'outcome': outcome.name,
+        'checkedAt': checkedAt?.toIso8601String(),
         'courtSpeedKmh': courtSpeedKmh,
         'rawGustKmh': rawGustKmh,
         'courtSpeedLimitKmh': courtSpeedLimitKmh,
@@ -280,8 +307,13 @@ class HistoryRecord {
 
   factory HistoryRecord.fromJson(Map<String, dynamic> j) => HistoryRecord(
         alarmId: j['alarmId'] as int,
+        courtId: j['courtId'] as String? ?? '',
         at: DateTime.parse(j['at'] as String),
         outcome: CheckOutcome.values.byName(j['outcome'] as String),
+        checkedAt: switch (j['checkedAt']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
         courtSpeedKmh: (j['courtSpeedKmh'] as num?)?.toDouble(),
         rawGustKmh: (j['rawGustKmh'] as num?)?.toDouble(),
         courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,

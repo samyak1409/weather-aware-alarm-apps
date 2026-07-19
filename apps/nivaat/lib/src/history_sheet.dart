@@ -46,7 +46,7 @@ class _HistorySheet extends StatelessWidget {
                     final (icon, line) = switch (h.outcome) {
                       CheckOutcome.rang => (
                           Icons.notifications_active_outlined,
-                          'Rang ${(h.volume! * 100).round()}% · ${h.windGustSummary}'
+                          'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
                         ),
                       CheckOutcome.skippedWindy => (
                           Icons.air,
@@ -58,7 +58,7 @@ class _HistorySheet extends StatelessWidget {
                         ),
                       CheckOutcome.skippedNoData => (
                           Icons.cloud_off_outlined,
-                          'Skipped · could not check the wind'
+                          'Skipped (no data)'
                         ),
                     };
                     return ListTile(
@@ -66,7 +66,10 @@ class _HistorySheet extends StatelessWidget {
                       leading: Icon(icon, size: 20),
                       title: Text(line, style: text.titleMedium),
                       subtitle: Text(
-                        '${fmtShortDate(h.at)} · ${fmtClock(h.at)}',
+                        '${c.courtById(h.courtId)?.name ?? '—'} · '
+                        '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
+                        '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
+                        '${fmtCheckTime(h.whenChecked, h.at)}',
                         style: text.bodyMedium,
                       ),
                     );

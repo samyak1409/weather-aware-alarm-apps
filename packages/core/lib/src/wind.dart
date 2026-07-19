@@ -75,11 +75,11 @@ class WindDecision {
 }
 
 /// Volume ramp locked in SPEC.md: 100% at 0 wind, sliding linearly down to a
-/// 50% floor at the threshold. The alarm's loudness tells you how good the
+/// 75% floor at the threshold. The alarm's loudness tells you how good the
 /// badminton weather is before you open your eyes.
 double volumeForWind(double courtSpeedKmh, WindThresholds t) {
   final frac = (courtSpeedKmh / t.courtSpeedLimitKmh).clamp(0.0, 1.0);
-  return 1.0 - 0.5 * frac;
+  return 1.0 - 0.25 * frac;
 }
 
 WindDecision decide(WindSample sample, WindThresholds thresholds) {
@@ -114,35 +114,34 @@ WindDecision decide(WindSample sample, WindThresholds thresholds) {
   );
 }
 
-/// Check cascade: T-12h, -6h, -3h, -2h, -1h, -30m, -15m, -8m, -4m, -2m, -1m,
-/// T-0, then (only if no check has succeeded yet) every minute up to +30 min.
+/// Check cascade (2026-07-15): T-1h, -30m, -15m, -10m, -5m, -2m, -1m, T-0, then
+/// every minute up to +30 min. The far pre-arm rungs (T-12h…-2h) were dropped —
+/// they only ever ran on Android (exact wakeups), where the near ladder + T-0
+/// carry it, and on iOS the whole ladder is opportunistic anyway. The post-T
+/// retries now run after *any* skip (windy/gusty/no-data), not just no-data, so
+/// a morning that calms within 30 min still rings (late) — see [NivaatEngine].
 class CheckCascade {
   CheckCascade._();
 
   static const List<int> ladderMinutesBefore = [
-    720, 360, 180, 120, 60, 30, 15, 8, 4, 2, 1, 0,
+    60, 30, 15, 10, 5, 2, 1, 0,
   ];
 
-  /// Post-alarm retry window when every pre-alarm check failed.
+  /// Post-alarm retry window: keep re-checking a skipped occurrence for this
+  /// long, ringing late if the wind drops below the limit.
   static const int retryCapMinutesAfter = 30;
 
   /// The next moment a check should run, strictly after [now], for an alarm
-  /// firing at [alarmAt]. Returns null when the cascade is over.
-  ///
-  /// [hadSuccessfulCheck] suppresses the post-alarm retry window: retries
-  /// after T-0 exist only to recover from "no data at all".
-  static DateTime? nextCheckTime(
-    DateTime now,
-    DateTime alarmAt, {
-    required bool hadSuccessfulCheck,
-  }) {
+  /// firing at [alarmAt]. Returns null when the cascade is over (past the +30m
+  /// cap). Post-T retries always run to the cap — the engine stops early by
+  /// finalising the occurrence once it rings.
+  static DateTime? nextCheckTime(DateTime now, DateTime alarmAt) {
     DateTime? best;
     for (final m in ladderMinutesBefore) {
       final t = alarmAt.subtract(Duration(minutes: m));
       if (t.isAfter(now) && (best == null || t.isBefore(best))) best = t;
     }
     if (best != null) return best;
-    if (hadSuccessfulCheck) return null;
     // Post-alarm minute-by-minute retries, capped.
     final cap = alarmAt.add(const Duration(minutes: retryCapMinutesAfter));
     if (now.isBefore(cap)) {

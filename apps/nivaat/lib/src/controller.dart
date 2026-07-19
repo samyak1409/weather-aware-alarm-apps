@@ -88,6 +88,12 @@ class NivaatController extends ChangeNotifier {
   int alarmsForCourt(String courtId) =>
       alarms.where((a) => a.courtId == courtId).length;
 
+  /// How many history rows belong to [courtId] (for the delete confirmation).
+  /// Keyed by court, so it counts every row for the court — even ones whose
+  /// alarm was deleted earlier.
+  int historyForCourt(String courtId) =>
+      history.where((h) => h.courtId == courtId).length;
+
   Future<void> removeCourt(String id) async {
     final orphaned = alarms.where((a) => a.courtId == id).toList();
     courts = courts.where((c) => c.id != id).toList();
@@ -98,6 +104,10 @@ class NivaatController extends ChangeNotifier {
     for (final a in orphaned) {
       await engine.evaluateAlarm(a.copyWith(enabled: false), courts);
     }
+    // Then delete the court's whole skip/ring log — after the cancels, so
+    // nothing re-adds a row for an alarm we just removed.
+    await store.removeHistoryForCourt(id);
+    history = await store.loadHistory();
     notifyListeners();
   }
 

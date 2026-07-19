@@ -68,18 +68,31 @@ class _CourtsSheetState extends State<_CourtsSheet> {
     if (mounted) setState(() {});
   }
 
+  /// Warns what deleting [name] takes with it: its alarms and its history log
+  /// (both are removed). History only exists once an alarm has fired at least
+  /// once, so a fresh court names just its alarms.
+  String _deleteWarning(String name, int alarms, int history) {
+    final a = '$alarms alarm${alarms == 1 ? '' : 's'}';
+    final h = '$history history ${history == 1 ? 'entry' : 'entries'}';
+    if (alarms > 0 && history > 0) {
+      return '$a use $name and will be deleted too, along with $h. Continue?';
+    }
+    if (alarms > 0) {
+      return '$a use $name and will be deleted too. Continue?';
+    }
+    return '$h for $name will be deleted too. Continue?';
+  }
+
   Future<void> _deleteCourt(SavedLocation court) async {
     final n = c.alarmsForCourt(court.id);
-    if (n > 0) {
+    final h = c.historyForCourt(court.id);
+    if (n > 0 || h > 0) {
       final text = Theme.of(context).textTheme;
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text('DELETE COURT', style: text.labelSmall),
-          content: Text(
-            '$n alarm${n == 1 ? '' : 's'} use ${court.name} and will be '
-            'deleted too. Continue?',
-          ),
+          content: Text(_deleteWarning(court.name, n, h)),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),

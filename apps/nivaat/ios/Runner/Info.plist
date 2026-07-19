@@ -11,6 +11,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.samyak.nivaat.refresh</string>
+		<string>com.samyak.nivaat.processing</string>
 		<string>com.gdelataillade.fetch</string>
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>

@@ -40,6 +40,7 @@ dependencies:
   core:
     path: ../../packages/core
   flutter_local_notifications: ^22.0.1
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -51,7 +52,6 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
-  shared_preferences: ^2.5.5
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

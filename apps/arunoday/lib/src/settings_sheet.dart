@@ -124,10 +124,9 @@ class _SettingsPageState extends State<_SettingsPage> {
     if (nw != null && nw.hour * 60 + nw.minute == minuteOfDay) {
       return "Bedtime can't be the same as the wake alarm.";
     }
-    final again = _delayedUntil;
-    if (again != null && again.hour * 60 + again.minute == minuteOfDay) {
-      return "Bedtime can't be the same as the pending re-ring.";
-    }
+    // Bedtime IS allowed to land on a pending re-ring's minute: the re-ring
+    // wins that slot so only one alarm sounds (see _recomputeAndResync), and
+    // if the re-ring is later cancelled the daily bedtime takes it back.
     return null;
   }
 
@@ -348,7 +347,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               Text(
                 'Year here: sleep ${fmtDuration(plan.minSleepMinutes)} '
                 '(summer) to ${fmtDuration(plan.maxSleepMinutes)} (winter) — '
-                'the natural swing of daylight at this latitude.',
+                'the natural swing of dawn at this latitude.',
                 style: text.bodyMedium,
               ),
             ],

@@ -119,6 +119,34 @@ void main() {
     expect(c.nextBedtimeRing, soon.isBefore(daily) ? soon : daily);
   });
 
+  test('bedtime colliding with a pending re-ring: re-ring wins the slot; '
+      'cancelling it restores the daily bedtime', () async {
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+
+    final daily = c.nextBedtimeRing!; // next daily bedtime, no AGAIN yet
+    // Park a re-ring on that exact minute (what the old validation forbade).
+    await c.update(c.settings.copyWith(bedtimeDelayedUntil: () => daily));
+
+    expect(fake.scheduled[2999], daily, reason: 're-ring holds the slot');
+    final collidingDaily = fake.scheduled.entries
+        .where((e) => e.key >= 2000 && e.key < 2999 && e.value == daily);
+    expect(collidingDaily, isEmpty,
+        reason: 'the daily bedtime that shares the minute is suppressed');
+
+    // Cancel the re-ring → the daily bedtime takes the slot back.
+    await c.update(c.settings.copyWith(bedtimeDelayedUntil: () => null));
+    expect(fake.scheduled.containsKey(2999), isFalse);
+    final restored = fake.scheduled.entries
+        .where((e) => e.key >= 2000 && e.key < 2999 && e.value == daily);
+    expect(restored, isNotEmpty, reason: 'daily bedtime returns, now alone');
+  });
+
   test('an expired one-time wake extra auto-clears on resync', () async {
     final fake = FakeScheduler();
     final c = ArunodayController(store: ArunodayStore(), scheduler: fake);

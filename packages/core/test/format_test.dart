@@ -41,6 +41,14 @@ void main() {
     expect(fmtShortDate(DateTime(2026, 12, 31)), '31 Dec');
   });
 
+  test('fmtCheckTime adds the date only across a day boundary', () {
+    final alarm = DateTime(2026, 7, 18, 6, 0);
+    // Same day → time only.
+    expect(fmtCheckTime(DateTime(2026, 7, 18, 5, 59), alarm), '05:59');
+    // Previous evening → dated, so "22:00" can't read as the alarm day.
+    expect(fmtCheckTime(DateTime(2026, 7, 17, 22, 0), alarm), '17 Jul 22:00');
+  });
+
   test('fmtWindGust shows all four numbers as whole km/h', () {
     expect(fmtWindGust(3.0, 4, 15.6, 14.6667),
         'wind 3 (≤4) · gusts 16 (≤15) km/h');

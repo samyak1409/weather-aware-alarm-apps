@@ -1,5 +1,6 @@
 library;
 
+export 'src/alarm_permission_banner.dart';
 export 'src/alarm_pkg_scheduler.dart';
 export 'src/alarmkit_scheduler.dart';
 export 'src/format.dart';

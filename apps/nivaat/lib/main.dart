@@ -6,6 +6,7 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
 
+import 'src/battery_optimization.dart';
 import 'src/controller.dart';
 import 'src/engine.dart';
 import 'src/home_screen.dart';
@@ -36,6 +37,9 @@ Future<void> main() async {
   unawaited(controller.init());
   // Android 13+ notification permission for skip cards (no-op elsewhere).
   unawaited(engine.notifier?.requestPermissionIfNeeded() ?? Future.value());
+  // Android: ask once to skip battery optimisation, so off-charger Doze doesn't
+  // throttle the background wind checks (no-op on iOS).
+  unawaited(requestBatteryExemptionOnce());
 
   runApp(NivaatApp(controller: controller));
 }

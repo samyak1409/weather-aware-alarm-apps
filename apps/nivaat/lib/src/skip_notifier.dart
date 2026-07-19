@@ -41,45 +41,88 @@ class SkipNotifier {
         ?.requestPermissions(alert: true, sound: true, badge: false);
   }
 
+  // The "still checking" heads-up (at T) and the final skip card (at the cap)
+  // are SEPARATE notifications with distinct ids — so the cap fires a fresh,
+  // alerting card and does NOT overwrite the heads-up. Per-alarm ids, so a new
+  // day's occurrence replaces its own kind.
+  static const int _headsUpId = 600000;
+  static const int _skipId = 610000;
+
+  // Shared card style — a normal audible notification.
+  static const NotificationDetails _details = NotificationDetails(
+    android: AndroidNotificationDetails(
+      // v2: was a silent low-importance channel; made a normal audible
+      // notification 2026-07-12 (user decision). Android freezes a channel's
+      // importance at first creation, hence the new id.
+      'nivaat_skips_v2',
+      'Skipped alarms',
+      channelDescription: 'Why an alarm did not ring',
+      importance: Importance.high,
+      priority: Priority.high,
+    ),
+    iOS: DarwinNotificationDetails(presentBadge: false),
+  );
+
+  // One reason phrase, shared by both cards (within-notification consistency).
+  String _reason(HistoryRecord record, String courtName) =>
+      switch (record.outcome) {
+        CheckOutcome.skippedWindy => '$courtName too windy',
+        CheckOutcome.skippedGusty => '$courtName too gusty',
+        CheckOutcome.skippedNoData => "Couldn't reach the wind at $courtName",
+        CheckOutcome.rang => '',
+      };
+
+  // "· checked HH:MM" (or "· last tried HH:MM" for no-data) — always shown, as
+  // reinforcement that the result came from a real check. Same data the history
+  // row shows, for notification↔history parity.
+  String _checked(HistoryRecord record) {
+    final verb =
+        record.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked';
+    return ' · $verb ${fmtCheckTime(record.whenChecked, record.at)}';
+  }
+
+  /// Heads-up posted at T for a skipped occurrence: the reason so far, plus a
+  /// note that the app keeps checking in the background until [until] and will
+  /// ring if it clears. Left in place afterwards (a late ring, or the separate
+  /// final card at the cap, follows it — it isn't cleared).
+  Future<void> showExtendedCheck(
+      HistoryRecord record, String courtName, DateTime until) async {
+    await ensureInitialized();
+    final nums = record.windGustSummary;
+    // No-data can't "calm" — it's a connectivity problem — so its promise is
+    // to ring once the wind is reachable again, not once it drops.
+    final promise = record.outcome == CheckOutcome.skippedNoData
+        ? "will ring once it's reachable"
+        : 'will ring if it calms';
+    await _plugin.show(
+      id: _headsUpId + record.alarmId,
+      title: 'Nivaat ${fmtClock(record.at)} · still checking',
+      body: '${_reason(record, courtName)}${nums.isEmpty ? '' : ' · $nums'}'
+          '${_checked(record)} · '
+          'keeping watch until ${fmtClock(until)}, $promise 🏸',
+      notificationDetails: _details,
+    );
+  }
+
+  /// The final "here's why it didn't ring" card, at the +30m cap — a separate,
+  /// alerting notification (does not replace the heads-up).
   Future<void> showSkip(HistoryRecord record, String courtName) async {
     await ensureInitialized();
-    // "Sleep in" is a genuine silver lining for a morning game; a later game
-    // gets a hopeful, forward-looking sign-off (never one that sounds glad
-    // the session is off).
-    final signOff = record.at.hour < 12 ? 'sleep in 😴' : 'next time 🏸';
-    // Show all four numbers (speed & gust, each vs its cap) so the skip is
-    // fully self-explaining, not just the one metric that tripped.
     final body = switch (record.outcome) {
-      CheckOutcome.skippedWindy =>
-        '$courtName too windy · ${record.windGustSummary} — $signOff',
-      CheckOutcome.skippedGusty =>
-        '$courtName too gusty · ${record.windGustSummary} — $signOff',
+      CheckOutcome.skippedWindy || CheckOutcome.skippedGusty =>
+        '${_reason(record, courtName)} · ${record.windGustSummary}'
+            '${_checked(record)} — next time 🏸',
       CheckOutcome.skippedNoData =>
-        'Could not check the wind at $courtName — alarm skipped',
+        '${_reason(record, courtName)}${_checked(record)}',
       CheckOutcome.rang => '', // never notified; the ring speaks for itself
     };
     if (body.isEmpty) return;
 
     await _plugin.show(
-      // One card per alarm per day; a later skip replaces the older card.
-      id: 600000 + record.alarmId,
-      title: 'Nivaat skipped ${fmtClock(record.at)}',
+      id: _skipId + record.alarmId,
+      title: 'Nivaat ${fmtClock(record.at)} · skipped',
       body: body,
-      notificationDetails: const NotificationDetails(
-        android: AndroidNotificationDetails(
-          // v2: was a silent low-importance channel; made a normal audible
-          // notification 2026-07-12 (user decision). Android freezes a
-          // channel's importance at first creation, hence the new id.
-          'nivaat_skips_v2',
-          'Skipped alarms',
-          channelDescription: 'Why an alarm did not ring',
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
-        iOS: DarwinNotificationDetails(
-          presentBadge: false,
-        ),
-      ),
+      notificationDetails: _details,
     );
   }
 }

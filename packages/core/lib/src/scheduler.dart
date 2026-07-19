@@ -1,6 +1,9 @@
 /// Platform-alarm abstraction. Screens and engines talk to this interface
-/// only; the `alarm` pub package implementation lives in each app so the
-/// iOS AlarmKit swap (v1.1) stays a contained change.
+/// only; the concrete impls (`AlarmPkgScheduler`, `AlarmKitScheduler`) live in
+/// core and are picked by `createAlarmScheduler` — AlarmKit on iOS (min
+/// target 26), the `alarm` package on Android. There is NO iOS `alarm`-package
+/// fallback: a denied AlarmKit silently no-ops and `AlarmPermissionBanner`
+/// (driven by `alarmSchedulingDenied`) nudges the user to Settings.
 abstract class AlarmScheduler {
   Future<void> ensureInitialized();
 
