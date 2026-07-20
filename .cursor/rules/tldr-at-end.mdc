@@ -1,0 +1,8 @@
+---
+description: End longer replies with a short TLDR
+alwaysApply: true
+---
+
+# TLDR at the end
+
+When a response is not already short (more than roughly a short paragraph or a few tight bullets), end with a brief **TLDR** section: 1–3 lines that state the bottom line only. Do not restate the whole answer. Skip the TLDR when the whole reply is already that short.

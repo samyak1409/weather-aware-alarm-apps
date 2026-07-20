@@ -16,6 +16,15 @@ build/
 **/android/local.properties
 **/macos/Flutter/ephemeral/
 
+# Release binaries for GitHub Releases (never commit — attach on the release page)
+dist/
+
+# Android release signing (never commit — losing these bricks updates)
+android-signing/
+**/android/key.properties
+**/*.jks
+**/*.keystore
+
 # Misc
 .DS_Store
 *.log

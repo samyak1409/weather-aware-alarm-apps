@@ -81,6 +81,16 @@ xcrun simctl erase "iPhone 17"                   # factory-reset a simulator (it
 
 Release-mode note: `flutter run --release` works on the Android emulator; the iOS **simulator supports debug only** — release/profile need a real iPhone (profile mode is device-only on Android too).
 
+### Android release signing (GitHub sideload)
+
+Both apps share one permanent keystore under `android-signing/` (gitignored). Passwords live in each app’s `android/key.properties` and in `android-signing/BACKUP_THIS.txt`. **Back that folder up off this Mac** — lose it and users cannot update; they must uninstall. Without those files, release builds fall back to the debug key (fine for local runs; never ship that). Rebuild:
+
+```sh
+cd apps/arunoday   # or apps/nivaat
+flutter build apk --release --split-per-abi --target-platform android-arm64
+# → build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
 **After switching the app icon in Settings (Android):** `flutter run` can fail with `Error: Activity class …MainActivity does not exist` — picking icon 2/3 disables MainActivity as the launcher entry (that's how alternate icons work), and the tool always cold-starts that exact component. Fix either way:
 
 ```sh
