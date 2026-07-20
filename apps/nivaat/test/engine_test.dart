@@ -58,6 +58,12 @@ class FakeRing implements AlarmScheduler {
   Future<bool> isRinging(int id) async => ringingIds.contains(id);
 }
 
+/// Throws on the first scheduler touch — guards resync/init soft-fail paths.
+class BoomRing extends FakeRing {
+  @override
+  Future<void> cancel(int id) async => throw StateError('scheduler boom');
+}
+
 class FakeChecks implements CheckScheduler {
   final Map<int, DateTime> booked = {};
 
@@ -406,6 +412,36 @@ void main() {
       expect(controller.alarms.single.enabled, isFalse);
       await controller.deleteAlarm(7);
       expect(controller.alarms, isEmpty);
+    });
+
+    test('init stays loaded when resync hits a scheduler error', () async {
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      final boomEngine = NivaatEngine(
+        store: engine.store,
+        scheduler: BoomRing(),
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      final c = NivaatController(engine: boomEngine);
+      await expectLater(c.init(), completes);
+      expect(c.loaded, isTrue);
+    });
+
+    test('resync swallows evaluateAll failures', () async {
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      final boomEngine = NivaatEngine(
+        store: engine.store,
+        scheduler: BoomRing(),
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      final c = NivaatController(engine: boomEngine);
+      await c.init();
+      await expectLater(c.resync(), completes);
     });
   });
 

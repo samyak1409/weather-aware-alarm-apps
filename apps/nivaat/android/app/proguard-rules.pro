@@ -19,3 +19,22 @@
 # registers on every FlutterEngine (including the alarm-manager background
 # isolate). Keep it so R8 can't mangle the pigeon host the same way.
 -keep class dev.fluttercommunity.workmanager.** { *; }
+
+# workmanager_android pulls in androidx.work (WorkManager). Startup's
+# InitializationProvider runs WorkManagerInitializer before Flutter — R8 was
+# stripping Room's WorkDatabase_Impl (NoSuchMethodException on <init>), so
+# release APKs died instantly while `flutter run` (debug, no minify) looked
+# fine. work-runtime's consumer rules weren't making it into our R8 config.
+-keep class androidx.work.** { *; }
+-keep class * extends androidx.work.ListenableWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+-keep class * extends androidx.work.InputMerger { void <init>(); }
+-keep class androidx.work.WorkerParameters { *; }
+-keep class * extends androidx.room.RoomDatabase { *; }
+-keep @androidx.room.Entity class *
+-keepclassmembers class * {
+    @androidx.room.* <methods>;
+}
+-keep class * extends androidx.startup.Initializer { <init>(); }
+-keepnames class * extends androidx.startup.Initializer

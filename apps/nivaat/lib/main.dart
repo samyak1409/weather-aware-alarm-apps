@@ -29,15 +29,18 @@ Future<void> main() async {
   // NivaatEngine.standard() also loads the selected alarm tone into
   // nivaatSelectedSound (shared with the background entrypoints).
   final engine = await NivaatEngine.standard();
-  await engine.scheduler.ensureInitialized();
+  try {
+    await engine.scheduler.ensureInitialized();
+  } catch (e) {
+    // Never brick launch on a plugin hiccup — same policy as CheckScheduler.
+    debugPrint('nivaat Alarm.init failed (non-fatal): $e');
+  }
 
   if (Platform.isIOS) {
     await Workmanager().initialize(workmanagerDispatcher);
   }
-  await engine.checks.initialize();
 
   final controller = NivaatController(engine: engine);
-  unawaited(controller.init());
   // Notification permission, both platforms (skip cards; Android also the
   // ring card). The future resolves when the dialog is answered — kept so the
   // home screen's denied-banner can re-check at that exact moment.
@@ -57,6 +60,31 @@ Future<void> main() async {
     permissionFlow: permissionFlow,
     batteryFlow: batteryFlow,
   ));
+
+  // AndroidAlarmManager.initialize() spins up a second FlutterEngine for its
+  // background isolate. Doing that while the main engine is still cold-starting
+  // raced release builds on real devices: launch animation, then immediate
+  // death (~1/10 with the system dialog, rest silent). Defer until the first
+  // frame is up; cascade booking in controller.init() follows right after.
+  if (Platform.isAndroid) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_finishAndroidStartup(engine, controller));
+    });
+  } else {
+    unawaited(controller.init());
+  }
+}
+
+Future<void> _finishAndroidStartup(
+  NivaatEngine engine,
+  NivaatController controller,
+) async {
+  try {
+    await engine.checks.initialize();
+  } catch (e) {
+    debugPrint('nivaat CheckScheduler.initialize failed (non-fatal): $e');
+  }
+  await controller.init();
 }
 
 class NivaatApp extends StatelessWidget {

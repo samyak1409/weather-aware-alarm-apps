@@ -55,8 +55,7 @@ class NivaatController extends ChangeNotifier {
     await _reload();
     loaded = true;
     notifyListeners();
-    // Evaluate in the background; refresh history when done.
-    unawaited(resync());
+    await resync();
   }
 
   Future<void> _reload() async {
@@ -67,13 +66,17 @@ class NivaatController extends ChangeNotifier {
 
   /// Re-runs the whole cascade (app open / resume / ring start-stop / edits).
   Future<void> resync() async {
-    // First pull in what background isolates wrote (rows, check state) —
-    // this isolate's SharedPreferences cache doesn't see them otherwise, and
-    // the engine would re-decide from stale state.
-    await store.refresh();
-    await engine.evaluateAll();
-    history = await store.loadHistory();
-    notifyListeners();
+    try {
+      // First pull in what background isolates wrote (rows, check state) —
+      // this isolate's SharedPreferences cache doesn't see them otherwise, and
+      // the engine would re-decide from stale state.
+      await store.refresh();
+      await engine.evaluateAll();
+      history = await store.loadHistory();
+      notifyListeners();
+    } catch (e, st) {
+      debugPrint('nivaat resync failed (non-fatal): $e\n$st');
+    }
   }
 
   Future<void> addCourt(GeoPlace place) async {
