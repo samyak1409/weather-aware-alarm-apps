@@ -109,11 +109,19 @@ class _HomeScreenState extends State<HomeScreen>
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: loc == null
-              ? _empty(text)
-              : c.activeLocationHasNoDawn
-                  ? _noDawn(text, loc)
-                  : _main(text, loc),
+          child: Column(
+            children: [
+              Expanded(
+                child: loc == null
+                    ? _empty(text)
+                    : c.activeLocationHasNoDawn
+                        ? _noDawn(text, loc)
+                        : _main(text, loc),
+              ),
+              // Below every branch, so the maker's mark never disappears.
+              const CraftedBy(accent: AppPalette.dawn),
+            ],
+          ),
         ),
       ),
     );
@@ -257,7 +265,8 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 2),
           Text(loc.name, style: text.bodyMedium),
         ],
-        const SizedBox(height: 28),
+        // The CraftedBy line below adds its own footer air.
+        const SizedBox(height: 16),
       ],
     );
   }

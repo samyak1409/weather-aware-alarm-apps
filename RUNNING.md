@@ -80,3 +80,11 @@ xcrun simctl erase "iPhone 17"                   # factory-reset a simulator (it
 ```
 
 Release-mode note: `flutter run --release` works on the Android emulator; the iOS **simulator supports debug only** — release/profile need a real iPhone (profile mode is device-only on Android too).
+
+**After switching the app icon in Settings (Android):** `flutter run` can fail with `Error: Activity class …MainActivity does not exist` — picking icon 2/3 disables MainActivity as the launcher entry (that's how alternate icons work), and the tool always cold-starts that exact component. Fix either way:
+
+```sh
+adb shell pm enable com.samyak.arunoday/com.samyak.arunoday.MainActivity   # or …nivaat…
+```
+
+or switch back to the first icon in the app's Settings. Expected cosmetics, not bugs: iOS shows a system alert on every icon change; Android launchers may blink or move the home-screen shortcut.

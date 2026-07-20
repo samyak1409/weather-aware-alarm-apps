@@ -37,34 +37,15 @@ class _SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<_SettingsPage> {
   ArunodayController get c => widget.c;
-  final _locationScroll = ScrollController();
-
-  /// Briefly forces the scrollbar visible on open (only if the list actually
-  /// scrolls), as a "there's more below" cue, then lets it fade.
-  bool _flashScrollbar = false;
 
   @override
   void initState() {
     super.initState();
     c.addListener(_onChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFlashScrollbar());
-  }
-
-  void _maybeFlashScrollbar() {
-    if (!mounted ||
-        !_locationScroll.hasClients ||
-        _locationScroll.position.maxScrollExtent <= 0) {
-      return;
-    }
-    setState(() => _flashScrollbar = true);
-    Future<void>.delayed(const Duration(milliseconds: 1100), () {
-      if (mounted) setState(() => _flashScrollbar = false);
-    });
   }
 
   @override
   void dispose() {
-    _locationScroll.dispose();
     c.removeListener(_onChanged);
     super.dispose();
   }
@@ -202,22 +183,20 @@ class _SettingsPageState extends State<_SettingsPage> {
       appBar: AppBar(title: Text('SETTINGS', style: text.labelSmall)),
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        // The whole page scrolls as one surface (2026-07-20, Samyak — the
+        // locations list used to be the only scrolling region).
+        child: FlashingScrollbar(
+          builder: (scroll) => ListView(
+            controller: scroll,
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
             children: [
+            // Grouped by ritual: the wake pair, the bedtime pair, then the
+            // sound both rings share (2026-07-20 reorder).
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Wake alarm'),
               value: s.wakeEnabled,
               onChanged: (v) => c.update(s.copyWith(wakeEnabled: v)),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Bedtime alarm'),
-              value: s.bedtimeEnabled,
-              onChanged: (v) => c.update(s.copyWith(bedtimeEnabled: v)),
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -235,23 +214,11 @@ class _SettingsPageState extends State<_SettingsPage> {
                 child: Text('Long-press wake offset to reset to dawn.',
                     style: text.bodyMedium),
               ),
-            ListTile(
+            SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Alarm sound'),
-              trailing: Text(
-                SoundLibrary.displayName(s.soundPath,
-                    defaultName: 'Dawn Bells'),
-                style: text.titleMedium,
-              ),
-              onTap: () async {
-                final picked = await showSoundPicker(context,
-                    selectedPath:
-                        s.soundPath ?? 'assets/sounds/arunoday_dawn.wav');
-                if (picked != null) {
-                  await c.update(
-                      c.settings.copyWith(soundPath: () => picked.path));
-                }
-              },
+              title: const Text('Bedtime alarm'),
+              value: s.bedtimeEnabled,
+              onChanged: (v) => c.update(s.copyWith(bedtimeEnabled: v)),
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -293,6 +260,40 @@ class _SettingsPageState extends State<_SettingsPage> {
                   ],
                 ),
               ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Alarm sound'),
+              trailing: Text(
+                SoundLibrary.displayName(s.soundPath,
+                    defaultName: 'Dawn Bells'),
+                style: text.titleMedium,
+              ),
+              onTap: () async {
+                final picked = await showSoundPicker(context,
+                    selectedPath:
+                        s.soundPath ?? 'assets/sounds/arunoday_dawn.wav');
+                if (picked != null) {
+                  await c.update(
+                      c.settings.copyWith(soundPath: () => picked.path));
+                }
+              },
+            ),
+            const Divider(),
+            const SizedBox(height: 8),
+            Text('APPEARANCE', style: text.labelSmall),
+            const HeavyTypeSwitch(),
+            const AppIconPicker(
+              accent: AppPalette.dawn,
+              choices: [
+                AppIconChoice(
+                    id: '1', label: 'Horizon', asset: 'assets/icons/1.png'),
+                AppIconChoice(
+                    id: '2', label: 'Rays', asset: 'assets/icons/2.png'),
+                AppIconChoice(
+                    id: '3', label: 'Dawn', asset: 'assets/icons/3.png'),
+              ],
+            ),
+            const SizedBox(height: 4),
             const Divider(),
             const SizedBox(height: 8),
             Row(
@@ -306,42 +307,27 @@ class _SettingsPageState extends State<_SettingsPage> {
                 ),
               ],
             ),
-            // The location list fills the rest of the page and scrolls. The
-            // scrollbar stays hidden and fades in only while scrolling (the
-            // modern default), so it's never a bright static bar.
-            Expanded(
-              child: Scrollbar(
-                controller: _locationScroll,
-                thumbVisibility: _flashScrollbar ? true : null,
-                child: ListView(
-                  controller: _locationScroll,
-                  padding: const EdgeInsets.only(right: 8),
-                  children: [
-                    for (final l in s.locations)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(l.name),
-                        leading: Icon(
-                          l.id == (s.activeLocationId ?? s.locations.first.id)
-                              ? Icons.radio_button_checked
-                              : Icons.radio_button_off,
-                          size: 20,
-                          color: l.id ==
-                                  (s.activeLocationId ?? s.locations.first.id)
-                              ? Theme.of(context).colorScheme.primary
-                              : AppPalette.textSecondary,
-                        ),
-                        onTap: () => _selectLocation(l),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          color: AppPalette.textSecondary,
-                          onPressed: () => _deleteLocation(l),
-                        ),
-                      ),
-                  ],
+            for (final l in s.locations)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(l.name),
+                leading: Icon(
+                  l.id == (s.activeLocationId ?? s.locations.first.id)
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_off,
+                  size: 20,
+                  color: l.id ==
+                          (s.activeLocationId ?? s.locations.first.id)
+                      ? Theme.of(context).colorScheme.primary
+                      : AppPalette.textSecondary,
+                ),
+                onTap: () => _selectLocation(l),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  color: AppPalette.textSecondary,
+                  onPressed: () => _deleteLocation(l),
                 ),
               ),
-            ),
             if (plan != null) ...[
               const SizedBox(height: 12),
               Text(
@@ -351,7 +337,7 @@ class _SettingsPageState extends State<_SettingsPage> {
                 style: text.bodyMedium,
               ),
             ],
-          ],
+            ],
           ),
         ),
       ),

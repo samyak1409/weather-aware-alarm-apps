@@ -59,7 +59,7 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 ## Settings sheet
 
 - **A12 — Title:** `SETTINGS`
-- **A13 — Rows:** `Wake alarm` · `Bedtime alarm` · `Wake offset from dawn` · `Alarm sound` · `Bedtime` · `Bedtime again` (subtitle `Not sleepy — tonight only`) · section `LOCATIONS`
+- **A13 — Rows** (grouped by ritual, 2026-07-20): `Wake alarm` · `Wake offset from dawn` · `Bedtime alarm` · `Bedtime` · `Bedtime again` (subtitle `Not sleepy — tonight only`) · `Alarm sound` · section `APPEARANCE` (X6) · section `LOCATIONS`
 - **A14 — Hints:** `Long-press wake offset to reset to dawn.` · `Long-press bedtime to return to auto.`
 - **A15 — Yearly sleep readout:** `Year here: sleep {Xh Ym} (summer) to {Xh Ym} (winter) — the natural swing of dawn at this latitude.`
   → `Year here: sleep 7h 33m (summer) to 8h 27m (winter) — the natural swing of dawn at this latitude.`
@@ -108,7 +108,7 @@ _In every Nivaat title below, `{HH:MM}` is the **alarm time you set** (e.g. `06:
 
 ## History
 
-Shown in two places: the **history sheet** (a scrollable list of past outcomes) and the home screen's single **"last outcome"** line. Each entry has a **line** — the primary text (outcome + numbers) — and a **sub** — the smaller secondary line beneath it (court + when + freshness). Both lead with the **court name**.
+Shown in two places: the **history sheet** (a scrollable list of past outcomes; opened from settings, or by tapping the home "last outcome" line) and the home screen's single **"last outcome"** line. Each entry has a **line** — the primary text (outcome + numbers) — and a **sub** — the smaller secondary line beneath it (court + when + freshness). Both lead with the **court name**.
 
 History is an **append-only log mirroring the notifications** (2026-07-20): an occurrence that misses its T leaves the heads-up **snapshot row** right then (what N2 said, marked with N17's watch note), and its **final outcome** — the cap's skip, or a late ring — is a **separate second row**. Both stay forever; nothing is overwritten.
 
@@ -149,6 +149,7 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
   - `{m} history entry/entries for {court} will be deleted too. Continue?` → `5 history entries for Society Court will be deleted too. Continue?`
   - buttons `Cancel`, `Delete`
 - **N16 — Duplicate-court error:** `Same spot as {name} — already added.` → `Same spot as Society Court — already added.`
+- **N19 — Settings page** (header `SETTINGS`; the home top bar keeps only its tune icon, 2026-07-20): tiles `Courts` (trailing: count) · `Alarm sound` (trailing: tone name, e.g. `Court Call`) · `History` (trailing: count) · then the shared `APPEARANCE` section (X6)
 
 ---
 
@@ -177,3 +178,13 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
 - **Nivaat, iOS:** `Notifications are off — Nivaat can't tell you when it skips an alarm for wind, or why.`
 - **Arunoday, Android only** (no iOS banner or permission request — it posts no iOS notifications): `Notifications are off — a ringing alarm shows nothing on screen (sound only, no Stop), and bedtime reminders can't appear.`
 - **Button (all):** `Turn on notifications` (Android → the app's notification settings page; iOS → the app's Settings page)
+
+### X5 — Maker's mark (home screen footer, both apps, always visible)
+
+- **Text:** `CRAFTED WITH ♥ BY SAMYAK` — the `♥` is the Material `favorite` icon in the app's accent colour (a text glyph became the red emoji on Android); tapping `SAMYAK` opens samyak1409.github.io in the browser
+
+### X6 — Appearance settings (Arunoday settings page · Nivaat settings page, header `SETTINGS`)
+
+- **Section label:** `APPEARANCE`
+- **Bold-type toggle:** title `Bold clocks & titles` · subtitle `Heavier type on the home screen` (ships OFF)
+- **Icon picker:** title `App icon` · three thumbnails with labels — Arunoday `Horizon` (default) / `Rays` / `Dawn`; Nivaat `Shuttle` (default) / `Calm` / `Crest`. iOS confirms a switch with the system's own alert; Android launchers may take a moment to show the new icon

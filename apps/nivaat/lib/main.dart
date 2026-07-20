@@ -23,6 +23,8 @@ void workmanagerDispatcher() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  applyMotionPacing();
+  await Appearance.load();
 
   // NivaatEngine.standard() also loads the selected alarm tone into
   // nivaatSelectedSound (shared with the background entrypoints).
@@ -70,11 +72,15 @@ class NivaatApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Nivaat',
-      debugShowCheckedModeBanner: false,
-      theme: buildOledTheme(AppPalette.wind),
-      home: RingGate(
+    return ValueListenableBuilder<bool>(
+      valueListenable: Appearance.heavyType,
+      builder: (_, heavy, child) => MaterialApp(
+        title: 'Nivaat',
+        debugShowCheckedModeBanner: false,
+        theme: buildOledTheme(AppPalette.wind, heavyType: heavy),
+        home: child,
+      ),
+      child: RingGate(
         appName: 'NIVAAT',
         // A ring starting or being stopped resyncs immediately, so the rang
         // row is in history while the alarm still sounds (Rule 1 logs it).

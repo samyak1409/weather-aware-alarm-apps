@@ -17,7 +17,7 @@ class AppPalette {
   static const Color textSecondary = Color(0xFF8A8A8A);
 }
 
-ThemeData buildOledTheme(Color accent) {
+ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
   final scheme = ColorScheme.dark(
     primary: accent,
     secondary: accent,
@@ -68,29 +68,52 @@ ThemeData buildOledTheme(Color accent) {
             : AppPalette.hairline,
       ),
     ),
-    textTheme: const TextTheme(
-      displayLarge: TextStyle(
-        fontSize: 64,
-        fontWeight: FontWeight.w200,
-        letterSpacing: -1.5,
-        color: AppPalette.textPrimary,
-      ),
-      headlineMedium: TextStyle(
-        fontSize: 28,
-        fontWeight: FontWeight.w300,
-        color: AppPalette.textPrimary,
-      ),
-      titleMedium: TextStyle(
+    // [heavyType] (2026-07-20, Samyak, settings toggle "Bold clocks &
+    // titles" — ships
+    // OFF): the premium look = bold display text against quiet w400
+    // body/labels, so only the two hero styles gain weight; everything else
+    // stays untouched in both modes. Heavy mode also uses tabular figures so
+    // the ticking clocks don't shift width per minute (SF Pro's default
+    // digits are proportional). OFF must stay EXACTLY the original thin look.
+    textTheme: TextTheme(
+      displayLarge: heavyType
+          ? const TextStyle(
+              fontSize: 64,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -2.0,
+              fontFeatures: [FontFeature.tabularFigures()],
+              color: AppPalette.textPrimary,
+            )
+          : const TextStyle(
+              fontSize: 64,
+              fontWeight: FontWeight.w200,
+              letterSpacing: -1.5,
+              color: AppPalette.textPrimary,
+            ),
+      headlineMedium: heavyType
+          ? const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.5,
+              fontFeatures: [FontFeature.tabularFigures()],
+              color: AppPalette.textPrimary,
+            )
+          : const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w300,
+              color: AppPalette.textPrimary,
+            ),
+      titleMedium: const TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.w400,
         color: AppPalette.textPrimary,
       ),
-      bodyMedium: TextStyle(
+      bodyMedium: const TextStyle(
         fontSize: 14,
         fontWeight: FontWeight.w400,
         color: AppPalette.textSecondary,
       ),
-      labelSmall: TextStyle(
+      labelSmall: const TextStyle(
         fontSize: 11,
         fontWeight: FontWeight.w400,
         letterSpacing: 1.2,

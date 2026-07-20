@@ -11,6 +11,8 @@ import 'src/sound_selection.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  applyMotionPacing();
+  await Appearance.load();
   // One scheduler for BOTH wake and bedtime. On Android → the alarm package
   // (its ring screen still hosts the bedtime +1h ritual). On iOS 26+ →
   // AlarmKit: a real system alarm that survives force-quit and reboot, so a
@@ -48,11 +50,15 @@ class ArunodayApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Arunoday',
-      debugShowCheckedModeBanner: false,
-      theme: buildOledTheme(AppPalette.dawn),
-      home: RingGate(
+    return ValueListenableBuilder<bool>(
+      valueListenable: Appearance.heavyType,
+      builder: (_, heavy, child) => MaterialApp(
+        title: 'Arunoday',
+        debugShowCheckedModeBanner: false,
+        theme: buildOledTheme(AppPalette.dawn, heavyType: heavy),
+        home: child,
+      ),
+      child: RingGate(
         appName: 'ARUNODAY',
         // Stopping (or starting) a ring re-arms the next wake/bedtime right
         // away instead of waiting for the next app open.

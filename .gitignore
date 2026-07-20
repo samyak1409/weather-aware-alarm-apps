@@ -23,3 +23,6 @@ rough.md
 
 # DevTools per-developer state (auto-generated on DevTools open)
 devtools_options.yaml
+
+# make_icons.py --apply scratch (deleted after each run)
+tools/.icon_tmp/

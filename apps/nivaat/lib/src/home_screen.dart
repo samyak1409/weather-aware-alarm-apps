@@ -9,6 +9,7 @@ import 'controller.dart';
 import 'courts_sheet.dart';
 import 'engine.dart';
 import 'history_sheet.dart';
+import 'settings_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -86,30 +87,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 children: [
                   Text('NIVAAT', style: text.labelSmall),
                   const Spacer(),
+                  // Sound, courts, and history live in settings now
+                  // (2026-07-20, Samyak: one entry point is cleaner); the
+                  // last-outcome line below doubles as a history shortcut.
                   IconButton(
-                    icon: const Icon(Icons.music_note_outlined, size: 20),
+                    icon: const Icon(Icons.tune, size: 20),
                     color: AppPalette.textSecondary,
-                    onPressed: () async {
-                      final current = await c.store.loadSoundPath();
-                      if (!context.mounted) return;
-                      final picked = await showSoundPicker(context,
-                          selectedPath: current ?? nivaatDefaultSound);
-                      if (picked != null) {
-                        await c.store.saveSoundPath(picked.path);
-                        nivaatSelectedSound = picked.path;
-                        await c.resync();
-                      }
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.history, size: 20),
-                    color: AppPalette.textSecondary,
-                    onPressed: () => showHistorySheet(context, c),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.place_outlined, size: 20),
-                    color: AppPalette.textSecondary,
-                    onPressed: () => showCourtsSheet(context, c),
+                    onPressed: () => showSettingsSheet(context, c),
                   ),
                 ],
               ),
@@ -135,6 +119,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
             _bgNote(text),
+            const CraftedBy(accent: AppPalette.wind),
           ],
         ),
       ),
@@ -170,11 +155,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final watching = nivaatStillWatchingNote(h);
     final when = '$court · ${fmtShortDate(h.at)} ${fmtClock(h.at)} · '
         '$verb ${fmtCheckTime(h.whenChecked, h.at)}';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
-      child: Text(
-        '$when — $line${watching == null ? '' : ' · $watching'}',
-        style: text.bodyMedium,
+    // The line is the newest history row — tapping it opens the full log.
+    return InkWell(
+      onTap: () => showHistorySheet(context, c),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
+        child: Text(
+          '$when — $line${watching == null ? '' : ' · $watching'}',
+          style: text.bodyMedium,
+        ),
       ),
     );
   }

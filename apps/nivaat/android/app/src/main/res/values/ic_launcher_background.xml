@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Behind the adaptive-icon foreground (visible only at parallax
+         edges); matches the icons' own near-black gradient. -->
+    <color name="ic_launcher_background">#FF060606</color>
+</resources>

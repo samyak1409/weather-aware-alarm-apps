@@ -39,46 +39,51 @@ class _HistorySheet extends StatelessWidget {
                   ),
                 ),
               Expanded(
-                child: ListView.separated(
-                  itemCount: c.history.length,
-                  separatorBuilder: (_, _) => const Divider(),
-                  itemBuilder: (context, i) {
-                    final h = c.history[i];
-                    final (icon, line) = switch (h.outcome) {
-                      CheckOutcome.rang => (
-                          Icons.notifications_active_outlined,
-                          'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
+                // Same "there's more below" flash-on-open cue as the courts
+                // sheet and the settings pages (added 2026-07-20).
+                child: FlashingScrollbar(
+                  builder: (scroll) => ListView.separated(
+                    controller: scroll,
+                    itemCount: c.history.length,
+                    separatorBuilder: (_, _) => const Divider(),
+                    itemBuilder: (context, i) {
+                      final h = c.history[i];
+                      final (icon, line) = switch (h.outcome) {
+                        CheckOutcome.rang => (
+                            Icons.notifications_active_outlined,
+                            'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
+                          ),
+                        CheckOutcome.skippedWindy => (
+                            Icons.air,
+                            'Skipped (windy) · ${h.windGustSummary}'
+                          ),
+                        CheckOutcome.skippedGusty => (
+                            Icons.air,
+                            'Skipped (gusty) · ${h.windGustSummary}'
+                          ),
+                        CheckOutcome.skippedNoData => (
+                            Icons.cloud_off_outlined,
+                            'Skipped (no data)'
+                          ),
+                      };
+                      // A young skip row may still flip to "rang" (retry window)
+                      // — say so, with the same promise the heads-up card made.
+                      final watching = nivaatStillWatchingNote(h);
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(icon, size: 20),
+                        title: Text(line, style: text.titleMedium),
+                        subtitle: Text(
+                          '${c.courtById(h.courtId)?.name ?? '—'} · '
+                          '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
+                          '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
+                          '${fmtCheckTime(h.whenChecked, h.at)}'
+                          '${watching == null ? '' : ' · $watching'}',
+                          style: text.bodyMedium,
                         ),
-                      CheckOutcome.skippedWindy => (
-                          Icons.air,
-                          'Skipped (windy) · ${h.windGustSummary}'
-                        ),
-                      CheckOutcome.skippedGusty => (
-                          Icons.air,
-                          'Skipped (gusty) · ${h.windGustSummary}'
-                        ),
-                      CheckOutcome.skippedNoData => (
-                          Icons.cloud_off_outlined,
-                          'Skipped (no data)'
-                        ),
-                    };
-                    // A young skip row may still flip to "rang" (retry window)
-                    // — say so, with the same promise the heads-up card made.
-                    final watching = nivaatStillWatchingNote(h);
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(icon, size: 20),
-                      title: Text(line, style: text.titleMedium),
-                      subtitle: Text(
-                        '${c.courtById(h.courtId)?.name ?? '—'} · '
-                        '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
-                        '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
-                        '${fmtCheckTime(h.whenChecked, h.at)}'
-                        '${watching == null ? '' : ' · $watching'}',
-                        style: text.bodyMedium,
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ],
