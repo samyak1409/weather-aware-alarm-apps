@@ -117,6 +117,11 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
       }
       final name = await _askName(context);
       if (!mounted || name == null) return;
+      // Dialog route is gone but focus/IME may still be unwinding — don't race
+      // the bottom-sheet pop against that teardown (fast Save taps hit this).
+      FocusManager.instance.primaryFocus?.unfocus();
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
       Navigator.of(context).pop(GeoPlace(
         name: name,
         region:
@@ -129,37 +134,11 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
     }
   }
 
-  Future<String?> _askName(BuildContext context) async {
-    final controller = TextEditingController(text: 'My location');
-    try {
-      return await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('NAME THIS PLACE',
-              style: Theme.of(context).textTheme.labelSmall),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(border: InputBorder.none),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () {
-                final name = controller.text.trim();
-                Navigator.pop(context, name.isEmpty ? 'My location' : name);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      controller.dispose();
-    }
+  Future<String?> _askName(BuildContext context) {
+    return showDialog<String>(
+      context: context,
+      builder: (context) => const _NamePlaceDialog(),
+    );
   }
 
   @override
@@ -236,4 +215,64 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
       ),
     );
   }
+}
+
+/// Name dialog for a GPS pick. Stateful so the [TextEditingController] lives
+/// until this route's [State.dispose] — disposing in a `finally` after
+/// [showDialog] returns raced autofocus teardown and blew up fast Save taps.
+class _NamePlaceDialog extends StatefulWidget {
+  const _NamePlaceDialog();
+
+  @override
+  State<_NamePlaceDialog> createState() => _NamePlaceDialogState();
+}
+
+class _NamePlaceDialogState extends State<_NamePlaceDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: 'My location');
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    FocusScope.of(context).unfocus();
+    final name = _controller.text.trim();
+    Navigator.pop(context, name.isEmpty ? 'My location' : name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('NAME THIS PLACE',
+          style: Theme.of(context).textTheme.labelSmall),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(border: InputBorder.none),
+        onSubmitted: (_) => _save(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Opens the GPS name dialog alone — for widget tests (same route as production).
+@visibleForTesting
+Future<String?> showNamePlaceDialogForTest(BuildContext context) {
+  return showDialog<String>(
+    context: context,
+    builder: (context) => const _NamePlaceDialog(),
+  );
 }
