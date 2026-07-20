@@ -18,10 +18,14 @@ Future<void> main() async {
   // AlarmKit: a real system alarm that survives force-quit and reboot, so a
   // bedtime nudge can never silently fail to fire. The iOS trade-off is the
   // in-app ritual button (AlarmKit alerts are Stop-only) — reliability wins.
-  final scheduler = await createAlarmScheduler(
-    soundAssetForVolume: arunodaySoundForVolume,
-    tintColor: '#FFB067',
-  );
+  // Screenshot harness builds skip real schedulers so AlarmKit / notification
+  // permission dialogs never cover the UI being captured.
+  final scheduler = kScreenshotHarness
+      ? const NoOpAlarmScheduler()
+      : await createAlarmScheduler(
+          soundAssetForVolume: arunodaySoundForVolume,
+          tintColor: '#FFB067',
+        );
   await scheduler.ensureInitialized();
 
   final controller = ArunodayController(
@@ -31,8 +35,10 @@ Future<void> main() async {
   unawaited(controller.init());
   // Notification permission (Android: the ring's card/full-screen UI). The
   // future resolves when the dialog is answered — kept so the home screen's
-  // denied-banner can re-check at that exact moment.
-  final permissionFlow = requestNotificationPermission();
+  // denied-banner can re-check at that exact moment. Skip in harness builds.
+  final permissionFlow = kScreenshotHarness
+      ? Future<void>.value()
+      : requestNotificationPermission();
   unawaited(permissionFlow);
 
   runApp(ArunodayApp(controller: controller, permissionFlow: permissionFlow));

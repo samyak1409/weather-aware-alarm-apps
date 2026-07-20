@@ -24,3 +24,37 @@ abstract class AlarmScheduler {
   /// True while the alarm with [id] is actively ringing.
   Future<bool> isRinging(int id);
 }
+
+/// Opt-in via `--dart-define=SCREENSHOT_HARNESS=true`. Capture builds use
+/// [NoOpAlarmScheduler] and skip permission prompts / nudge banners so system
+/// dialogs never cover the UI being shot. Off by default — normal builds
+/// unchanged.
+const bool kScreenshotHarness =
+    bool.fromEnvironment('SCREENSHOT_HARNESS', defaultValue: false);
+
+/// Silent scheduler for screenshot / UI harness builds — never touches
+/// AlarmKit or the `alarm` package, so system permission dialogs stay away.
+class NoOpAlarmScheduler implements AlarmScheduler {
+  const NoOpAlarmScheduler();
+
+  @override
+  Future<void> ensureInitialized() async {}
+
+  @override
+  Future<void> scheduleRing({
+    required int id,
+    required DateTime at,
+    required String title,
+    required String body,
+    required double volume,
+  }) async {}
+
+  @override
+  Future<void> cancel(int id) async {}
+
+  @override
+  Future<Set<int>> scheduledIds() async => {};
+
+  @override
+  Future<bool> isRinging(int id) async => false;
+}

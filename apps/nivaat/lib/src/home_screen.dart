@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:core/core.dart';
@@ -9,6 +10,7 @@ import 'controller.dart';
 import 'courts_sheet.dart';
 import 'engine.dart';
 import 'history_sheet.dart';
+import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -41,6 +43,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_onChanged);
+    if (kScreenshotHarness) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(runScreenshotHarness(context, c));
+      });
+    }
   }
 
   @override
@@ -98,27 +105,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            const AlarmPermissionBanner(
-                appName: 'Nivaat', accent: AppPalette.wind),
-            NotificationPermissionBanner(
-              accent: AppPalette.wind,
-              denied: () =>
-                  c.engine.notifier?.notificationsDenied() ??
-                  Future.value(false),
-              recheckAfter: widget.permissionFlow,
-              message: Platform.isAndroid
-                  ? 'Notifications are off — a ringing alarm shows nothing '
-                      'on screen (sound only, no Stop), and Nivaat can\'t '
-                      'tell you when it skips an alarm for wind, or why.'
-                  : 'Notifications are off — Nivaat can\'t tell you when it '
-                      'skips an alarm for wind, or why.',
-            ),
-            BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
+            if (!kScreenshotHarness) ...[
+              const AlarmPermissionBanner(
+                  appName: 'Nivaat', accent: AppPalette.wind),
+              NotificationPermissionBanner(
+                accent: AppPalette.wind,
+                denied: () =>
+                    c.engine.notifier?.notificationsDenied() ??
+                    Future.value(false),
+                recheckAfter: widget.permissionFlow,
+                message: Platform.isAndroid
+                    ? 'Notifications are off — a ringing alarm shows nothing '
+                        'on screen (sound only, no Stop), and Nivaat can\'t '
+                        'tell you when it skips an alarm for wind, or why.'
+                    : 'Notifications are off — Nivaat can\'t tell you when it '
+                        'skips an alarm for wind, or why.',
+              ),
+              BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
+            ],
             if (c.history.isNotEmpty) _lastOutcome(text),
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
-            _bgNote(text),
+            // Only once there's an alarm — the intro empty state shouldn't
+            // nag about background checks before anything is scheduled.
+            if (c.alarms.isNotEmpty) _bgNote(text),
             const CraftedBy(accent: AppPalette.wind),
           ],
         ),
@@ -131,11 +142,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// wakeups under battery saver; iOS only grants BGAppRefresh opportunistically
   /// and Low Power Mode suppresses it outright. Right-padded to clear the FAB.
   Widget _bgNote(TextTheme text) {
+    // Extra bottom pad lifts the note off CraftedBy without moving the mark
+    // (2026-07-20, Samyak: was reading too tight).
+    // Soft newlines lock a 3-line wrap on BOTH platforms — Android's Roboto
+    // is slightly tighter than iOS SF, so the same pad used to land 2 vs 3
+    // lines (device-caught 2026-07-20). Hard breaks beat soft-wrap parity;
+    // large accessibility text scale may still reflow beyond 3 lines.
     return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 0, 88, 12),
+      padding: const EdgeInsets.fromLTRB(28, 0, 88, 32),
       child: Text(
-        'Keep the phone charged and online before your alarm — '
-        'the background wind check needs both.',
+        'Keep the phone charged and online before your\n'
+        'alarm — the background wind check needs\n'
+        'both.',
         style: text.bodyMedium!.copyWith(fontSize: 12),
       ),
     );

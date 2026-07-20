@@ -41,14 +41,15 @@ Future<void> main() async {
   // Notification permission, both platforms (skip cards; Android also the
   // ring card). The future resolves when the dialog is answered — kept so the
   // home screen's denied-banner can re-check at that exact moment.
-  final permissionFlow =
-      engine.notifier?.requestPermissionIfNeeded() ?? Future.value();
+  // Screenshot harness: skip the system notif prompt so it never covers UI.
+  final permissionFlow = kScreenshotHarness
+      ? Future<void>.value()
+      : (engine.notifier?.requestPermissionIfNeeded() ?? Future.value());
   unawaited(permissionFlow);
-  // Android: ask once to skip battery optimisation, so off-charger Doze doesn't
-  // throttle the background wind checks (no-op on iOS). If denied, the
-  // BackgroundChecksBanner takes over from here (it stays hidden while this
-  // flow's dialog is up, then re-checks).
-  final batteryFlow = requestBatteryExemptionOnce();
+  // Android: ask once to skip battery optimisation — skip in harness too.
+  final batteryFlow = kScreenshotHarness
+      ? Future<void>.value()
+      : requestBatteryExemptionOnce();
   unawaited(batteryFlow);
 
   runApp(NivaatApp(

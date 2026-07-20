@@ -2,6 +2,16 @@
 
 Two minimal, pitch-black alarm apps. One Flutter monorepo.
 
+<p align="center">
+  <img src="screenshots/arunoday/android/02_home.png" alt="Arunoday home" width="280" />
+  &nbsp;&nbsp;
+  <img src="screenshots/nivaat/android/02_home.png" alt="Nivaat home" width="280" />
+</p>
+
+<p align="center">
+  <sub>Arunoday · Nivaat — Android (Pixel emulator). More shots under <code>screenshots/</code>.</sub>
+</p>
+
 ## 🌄 Arunoday (अरुणोदय)
 
 Wakes you at **civil dawn** — every day, at your location's real dawn, like humans woke for millions of years. Dynamic wake, fixed bedtime, computed so you naturally sleep ~7h in summer and ~9h in winter.

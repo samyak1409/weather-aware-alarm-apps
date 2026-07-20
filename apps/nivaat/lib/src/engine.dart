@@ -69,12 +69,15 @@ class NivaatEngine {
     // would schedule rings with the default tone instead of the user's pick
     // (exactly the bug the iOS Workmanager entrypoint had).
     nivaatSelectedSound = await store.loadSoundPath();
+    final AlarmScheduler scheduler = kScreenshotHarness
+        ? const NoOpAlarmScheduler()
+        : await createAlarmScheduler(
+            soundAssetForVolume: nivaatSoundForVolume,
+            tintColor: '#6FB7EC',
+          );
     return NivaatEngine(
       store: store,
-      scheduler: await createAlarmScheduler(
-        soundAssetForVolume: nivaatSoundForVolume,
-        tintColor: '#6FB7EC',
-      ),
+      scheduler: scheduler,
       api: OpenMeteo(),
       checks:
           CheckScheduler.forPlatform(androidEntrypoint: nivaatBackgroundCheck),

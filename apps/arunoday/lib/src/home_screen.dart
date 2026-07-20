@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'notifications.dart';
+import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -39,6 +40,11 @@ class _HomeScreenState extends State<HomeScreen>
     // The "in Xh Ym" countdowns age by the minute.
     _ticker = Timer.periodic(
         const Duration(minutes: 1), (_) => _onChanged());
+    if (kScreenshotHarness) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(runScreenshotHarness(context, c));
+      });
+    }
   }
 
   @override
@@ -210,25 +216,27 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
         ),
-        const AlarmPermissionBanner(
-          appName: 'Arunoday',
-          accent: AppPalette.dawn,
-          margin: EdgeInsets.only(top: 16, bottom: 4),
-        ),
-        // Android-only: the iOS rings are AlarmKit's own full-screen alerts,
-        // so Arunoday posts nothing through this permission there. On Android
-        // a denied permission leaves the ring as bare sound — no card, no
-        // full-screen, no Stop outside the app.
-        if (Platform.isAndroid)
-          NotificationPermissionBanner(
+        if (!kScreenshotHarness) ...[
+          const AlarmPermissionBanner(
+            appName: 'Arunoday',
             accent: AppPalette.dawn,
-            margin: const EdgeInsets.only(top: 16, bottom: 4),
-            denied: notificationsDenied,
-            recheckAfter: widget.permissionFlow,
-            message: 'Notifications are off — a ringing alarm shows nothing '
-                'on screen (sound only, no Stop), and bedtime reminders '
-                'can\'t appear.',
+            margin: EdgeInsets.only(top: 16, bottom: 4),
           ),
+          // Android-only: the iOS rings are AlarmKit's own full-screen alerts,
+          // so Arunoday posts nothing through this permission there. On Android
+          // a denied permission leaves the ring as bare sound — no card, no
+          // full-screen, no Stop outside the app.
+          if (Platform.isAndroid)
+            NotificationPermissionBanner(
+              accent: AppPalette.dawn,
+              margin: const EdgeInsets.only(top: 16, bottom: 4),
+              denied: notificationsDenied,
+              recheckAfter: widget.permissionFlow,
+              message: 'Notifications are off — a ringing alarm shows nothing '
+                  'on screen (sound only, no Stop), and bedtime reminders '
+                  'can\'t appear.',
+            ),
+        ],
         const Spacer(),
         Text(
           nextWake == null ? '—' : fmtClock(nextWake),
@@ -265,8 +273,9 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 2),
           Text(loc.name, style: text.bodyMedium),
         ],
-        // The CraftedBy line below adds its own footer air.
-        const SizedBox(height: 16),
+        // Gap above CraftedBy — keep the mark parked, push the dawn/location
+        // lines up (2026-07-20, Samyak: was reading too tight).
+        const SizedBox(height: 40),
       ],
     );
   }

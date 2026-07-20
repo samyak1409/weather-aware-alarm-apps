@@ -21,4 +21,37 @@ void main() {
     );
     expect(scheduler, isA<AlarmPkgScheduler>());
   });
+
+  group('NoOpAlarmScheduler', () {
+    const scheduler = NoOpAlarmScheduler();
+
+    test('ensureInitialized completes', () async {
+      await scheduler.ensureInitialized();
+    });
+
+    test('scheduleRing / cancel leave scheduledIds empty and never ringing',
+        () async {
+      await scheduler.scheduleRing(
+        id: 1,
+        at: DateTime.now().add(const Duration(hours: 1)),
+        title: 't',
+        body: 'b',
+        volume: 1,
+      );
+      await scheduler.scheduleRing(
+        id: 2,
+        at: DateTime.now().add(const Duration(hours: 2)),
+        title: 't',
+        body: 'b',
+        volume: 0.5,
+      );
+      expect(await scheduler.scheduledIds(), isEmpty);
+      expect(await scheduler.isRinging(1), isFalse);
+      expect(await scheduler.isRinging(2), isFalse);
+      await scheduler.cancel(1);
+      await scheduler.cancel(1); // idempotent
+      expect(await scheduler.scheduledIds(), isEmpty);
+      expect(await scheduler.isRinging(1), isFalse);
+    });
+  });
 }
