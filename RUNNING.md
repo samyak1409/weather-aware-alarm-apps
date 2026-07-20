@@ -91,6 +91,8 @@ flutter build apk --release --split-per-abi --target-platform android-arm64
 # → build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
+**Nivaat release R8:** Flutter turns on minify/shrink for release APKs. Nivaat’s `android_alarm_manager_plus` path needs `apps/nivaat/android/app/proguard-rules.pro` (keeps that plugin + `JobIntentService` + workmanager). Without it, R8 can merge `FlutterBackgroundExecutor` into an unrelated AndroidX class and the release APK dies on first launch with “Nivaat keeps stopping” — debug/`flutter run` never hit this. After changing those rules, always `flutter build apk --release` and confirm the mapping still lists `FlutterBackgroundExecutor -> FlutterBackgroundExecutor` (not a rename into `androidx.lifecycle.*`).
+
 **After switching the app icon in Settings (Android):** `flutter run` can fail with `Error: Activity class …MainActivity does not exist` — picking icon 2/3 disables MainActivity as the launcher entry (that's how alternate icons work), and the tool always cold-starts that exact component. Fix either way:
 
 ```sh

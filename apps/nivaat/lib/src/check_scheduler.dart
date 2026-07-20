@@ -35,18 +35,31 @@ const int _checkIdOffset = 50000;
 /// that throws must never stop `evaluateAll` from evaluating the other alarms —
 /// the next wakeup (and, on iOS, the periodic refresh) re-drives the cascade.
 /// Logged, never swallowed silently, so a genuine setup error stays visible.
-void _logCheckError(String op, int alarmId, Object error) =>
-    debugPrint('nivaat CheckScheduler.$op(alarm $alarmId) failed '
-        '(non-fatal): $error');
+void _logCheckError(String op, Object error, {int? alarmId}) {
+  final where = alarmId == null ? op : '$op(alarm $alarmId)';
+  debugPrint('nivaat CheckScheduler.$where failed (non-fatal): $error');
+}
 
 class AndroidCheckScheduler implements CheckScheduler {
-  AndroidCheckScheduler({required this.entrypoint});
+  AndroidCheckScheduler({
+    required this.entrypoint,
+    /// Override in tests — production uses [AndroidAlarmManager.initialize].
+    Future<bool> Function()? initializePlugin,
+  }) : _initializePlugin =
+            initializePlugin ?? AndroidAlarmManager.initialize;
 
   final Function entrypoint;
+  final Future<bool> Function() _initializePlugin;
 
   @override
   Future<void> initialize() async {
-    await AndroidAlarmManager.initialize();
+    // Must never abort app launch: a native/R8 failure here used to turn into
+    // "Nivaat keeps stopping" before runApp (release-only; debug doesn't minify).
+    try {
+      await _initializePlugin();
+    } catch (e) {
+      _logCheckError('initialize', e);
+    }
   }
 
   @override
@@ -62,7 +75,7 @@ class AndroidCheckScheduler implements CheckScheduler {
         rescheduleOnReboot: true,
       );
     } on Exception catch (e) {
-      _logCheckError('scheduleCheck', alarmId, e);
+      _logCheckError('scheduleCheck', e, alarmId: alarmId);
     }
   }
 
@@ -71,7 +84,7 @@ class AndroidCheckScheduler implements CheckScheduler {
     try {
       await AndroidAlarmManager.cancel(_checkIdOffset + alarmId);
     } on Exception catch (e) {
-      _logCheckError('cancelCheck', alarmId, e);
+      _logCheckError('cancelCheck', e, alarmId: alarmId);
     }
   }
 }
@@ -119,7 +132,7 @@ class IosCheckScheduler implements CheckScheduler {
         ),
       );
     } on Exception catch (e) {
-      _logCheckError('scheduleCheck', alarmId, e);
+      _logCheckError('scheduleCheck', e, alarmId: alarmId);
     }
   }
 
@@ -129,7 +142,7 @@ class IosCheckScheduler implements CheckScheduler {
     try {
       await Workmanager().cancelByUniqueName(processingTaskId);
     } on Exception catch (e) {
-      _logCheckError('cancelCheck', alarmId, e);
+      _logCheckError('cancelCheck', e, alarmId: alarmId);
     }
   }
 }
