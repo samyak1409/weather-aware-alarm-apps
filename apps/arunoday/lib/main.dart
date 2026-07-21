@@ -26,7 +26,12 @@ Future<void> main() async {
           soundAssetForVolume: arunodaySoundForVolume,
           tintColor: '#FFB067',
         );
-  await scheduler.ensureInitialized();
+  try {
+    await scheduler.ensureInitialized();
+  } on Exception catch (e) {
+    // Never brick launch on a plugin hiccup — same policy as Nivaat.
+    debugPrint('arunoday Alarm.init failed (non-fatal): $e');
+  }
 
   final controller = ArunodayController(
     store: ArunodayStore(),

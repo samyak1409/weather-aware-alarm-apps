@@ -132,7 +132,7 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
 ## Home screen
 
 - **N9 — App label:** `NIVAAT`
-- **N10 — Background note (footer, only when ≥1 alarm):** three hard-broken lines — `Keep the phone charged and online before your` / `alarm — the background wind check needs` / `both.` (newlines so Android Roboto and iOS SF land the same 3-line shape). Hidden on the empty intro.
+- **N10 — Background note (footer, only when ≥1 alarm):** `Keep the phone charged and online before your alarm — the background wind check needs both.` Soft-wraps (no hard newlines — large accessibility text must reflow cleanly). Hidden on the empty intro.
 - **N11 — Empty state:** title `The windless alarm.` · body `Rings only when the wind at your court is low enough to play. The calmer the morning, the louder it rings.`
 - **N12 — Alarm list row (sub):** `{weekdays} · {court} · ≤{limit} km/h` → `Every day · Society Court · ≤4 km/h` — court deleted → `court removed`
 - **N18 — Background-checks banner** (shown while the OS throttles background wind checks; hidden while the first-run exemption dialog is up):

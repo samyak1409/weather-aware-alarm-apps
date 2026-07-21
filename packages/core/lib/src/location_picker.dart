@@ -6,6 +6,30 @@ import 'package:geolocator/geolocator.dart';
 import 'open_meteo.dart';
 import 'theme.dart';
 
+/// Inline message for geocode [Exception]s; `null` for programming [Error]s.
+@visibleForTesting
+String? locationSearchErrorMessage(Object error) =>
+    error is Exception ? 'Search failed — check network' : null;
+
+/// Shows the network message for [Exception]s; rethrows programming [Error]s
+/// so bugs are never disguised as "check network".
+@visibleForTesting
+void reportLocationSearchFailure(
+  Object error,
+  void Function(String message) show, {
+  StackTrace? stackTrace,
+}) {
+  final msg = locationSearchErrorMessage(error);
+  if (msg == null) {
+    if (stackTrace != null) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    // ignore: only_throw_errors — intentional rethrow of non-Exception
+    throw error;
+  }
+  show(msg);
+}
+
 /// Shared bottom-sheet place picker: GPS ("use my current location", works
 /// fully offline — GPS is satellite-based) or Open-Meteo geocoding search
 /// (for places you aren't standing at). Returns the picked [GeoPlace], or
@@ -24,17 +48,33 @@ Future<GeoPlace?> showLocationSearch(
   );
 }
 
+/// Opens the place-search sheet with an injectable [OpenMeteo] — for widget
+/// tests (same route as production).
+@visibleForTesting
+Future<GeoPlace?> showLocationSearchForTest(
+  BuildContext context, {
+  required OpenMeteo api,
+  String? Function(double lat, double lon)? validate,
+}) {
+  return showModalBottomSheet<GeoPlace>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => _LocationSearchSheet(validate: validate, api: api),
+  );
+}
+
 class _LocationSearchSheet extends StatefulWidget {
-  const _LocationSearchSheet({this.validate});
+  _LocationSearchSheet({this.validate, OpenMeteo? api})
+      : api = api ?? OpenMeteo();
 
   final String? Function(double lat, double lon)? validate;
+  final OpenMeteo api;
 
   @override
   State<_LocationSearchSheet> createState() => _LocationSearchSheetState();
 }
 
 class _LocationSearchSheetState extends State<_LocationSearchSheet> {
-  final _api = OpenMeteo();
   Timer? _debounce;
   List<GeoPlace> _results = const [];
   bool _loading = false;
@@ -59,10 +99,16 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
         _error = null;
       });
       try {
-        final results = await _api.geocode(q.trim());
+        final results = await widget.api.geocode(q.trim());
         if (mounted) setState(() => _results = results);
-      } catch (_) {
-        if (mounted) setState(() => _error = 'Search failed — check network');
+      } catch (e, st) {
+        reportLocationSearchFailure(
+          e,
+          (msg) {
+            if (mounted) setState(() => _error = msg);
+          },
+          stackTrace: st,
+        );
       } finally {
         if (mounted) setState(() => _loading = false);
       }

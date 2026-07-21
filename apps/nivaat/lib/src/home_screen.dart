@@ -13,6 +13,13 @@ import 'history_sheet.dart';
 import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
 
+/// Home footer caveat (MESSAGES.md N10). Soft-wrap only — no hard `\n`
+/// (large accessibility text must reflow cleanly).
+@visibleForTesting
+const String nivaatBackgroundNote =
+    'Keep the phone charged and online before your '
+    'alarm — the background wind check needs both.';
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
@@ -143,17 +150,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// and Low Power Mode suppresses it outright. Right-padded to clear the FAB.
   Widget _bgNote(TextTheme text) {
     // Extra bottom pad lifts the note off CraftedBy without moving the mark
-    // (2026-07-20, Samyak: was reading too tight).
-    // Soft newlines lock a 3-line wrap on BOTH platforms — Android's Roboto
-    // is slightly tighter than iOS SF, so the same pad used to land 2 vs 3
-    // lines (device-caught 2026-07-20). Hard breaks beat soft-wrap parity;
-    // large accessibility text scale may still reflow beyond 3 lines.
+    // (2026-07-20, Samyak: was reading too tight). Soft-wrap only — hard
+    // newlines forced a 3-line shape at default scale but overflowed under
+    // large accessibility text (2026-07-21).
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 0, 88, 32),
       child: Text(
-        'Keep the phone charged and online before your\n'
-        'alarm — the background wind check needs\n'
-        'both.',
+        nivaatBackgroundNote,
         style: text.bodyMedium!.copyWith(fontSize: 12),
       ),
     );

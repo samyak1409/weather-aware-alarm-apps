@@ -58,10 +58,41 @@ class FakeRing implements AlarmScheduler {
   Future<bool> isRinging(int id) async => ringingIds.contains(id);
 }
 
-/// Throws on the first scheduler touch — guards resync/init soft-fail paths.
+/// Throws Exception on any scheduler touch — guards resync/init soft-fail
+/// paths (Errors must still propagate; see controller.resync).
 class BoomRing extends FakeRing {
+  Never _boom() => throw Exception('scheduler boom');
+
   @override
-  Future<void> cancel(int id) async => throw StateError('scheduler boom');
+  Future<void> cancel(int id) async => _boom();
+
+  @override
+  Future<void> scheduleRing({
+    required int id,
+    required DateTime at,
+    required String title,
+    required String body,
+    required double volume,
+  }) async =>
+      _boom();
+}
+
+/// Programming Error on any scheduler touch — must NOT be swallowed by resync.
+class ErrorRing extends FakeRing {
+  Never _boom() => throw StateError('programming boom');
+
+  @override
+  Future<void> cancel(int id) async => _boom();
+
+  @override
+  Future<void> scheduleRing({
+    required int id,
+    required DateTime at,
+    required String title,
+    required String body,
+    required double volume,
+  }) async =>
+      _boom();
 }
 
 class FakeChecks implements CheckScheduler {
@@ -414,7 +445,8 @@ void main() {
       expect(controller.alarms, isEmpty);
     });
 
-    test('init stays loaded when resync hits a scheduler error', () async {
+    test('init stays loaded when resync hits a scheduler Exception', () async {
+      api.sample = wind(5.0, 5.0); // calm → scheduleRing path hits BoomRing
       await engine.store.saveCourts([court]);
       await engine.store.saveAlarms([alarm]);
       final boomEngine = NivaatEngine(
@@ -429,7 +461,8 @@ void main() {
       expect(c.loaded, isTrue);
     });
 
-    test('resync swallows evaluateAll failures', () async {
+    test('resync swallows evaluateAll Exceptions', () async {
+      api.sample = wind(5.0, 5.0);
       await engine.store.saveCourts([court]);
       await engine.store.saveAlarms([alarm]);
       final boomEngine = NivaatEngine(
@@ -442,6 +475,21 @@ void main() {
       final c = NivaatController(engine: boomEngine);
       await c.init();
       await expectLater(c.resync(), completes);
+    });
+
+    test('resync lets programming Errors propagate', () async {
+      api.sample = wind(5.0, 5.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      final boomEngine = NivaatEngine(
+        store: engine.store,
+        scheduler: ErrorRing(),
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      final c = NivaatController(engine: boomEngine);
+      await expectLater(c.init(), throwsStateError);
     });
   });
 

@@ -55,9 +55,10 @@ class AndroidCheckScheduler implements CheckScheduler {
   Future<void> initialize() async {
     // Must never abort app launch: a native/R8 failure here used to turn into
     // "Nivaat keeps stopping" before runApp (release-only; debug doesn't minify).
+    // Catch Exception only — programming Errors still surface.
     try {
       await _initializePlugin();
-    } catch (e) {
+    } on Exception catch (e) {
       _logCheckError('initialize', e);
     }
   }

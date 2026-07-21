@@ -31,8 +31,9 @@ Future<void> main() async {
   final engine = await NivaatEngine.standard();
   try {
     await engine.scheduler.ensureInitialized();
-  } catch (e) {
+  } on Exception catch (e) {
     // Never brick launch on a plugin hiccup — same policy as CheckScheduler.
+    // Errors (asserts / type bugs) still propagate.
     debugPrint('nivaat Alarm.init failed (non-fatal): $e');
   }
 
@@ -61,27 +62,30 @@ Future<void> main() async {
     batteryFlow: batteryFlow,
   ));
 
-  // AndroidAlarmManager.initialize() spins up a second FlutterEngine for its
-  // background isolate. Doing that while the main engine is still cold-starting
-  // raced release builds on real devices: launch animation, then immediate
-  // death (~1/10 with the system dialog, rest silent). Defer until the first
-  // frame is up; cascade booking in controller.init() follows right after.
+  // checks.initialize() must run on BOTH platforms — on iOS it seeds the
+  // periodic BGAppRefresh chain (the Dart-side submit; the AppDelegate only
+  // registers the task handler). On Android, AndroidAlarmManager.initialize()
+  // spins up a second FlutterEngine for its background isolate; doing that
+  // while the main engine is still cold-starting raced release builds on real
+  // devices (launch animation, then immediate death — ~1/10 with the system
+  // dialog, rest silent), so it's deferred until the first frame is up.
+  // Cascade booking in controller.init() follows right after either way.
   if (Platform.isAndroid) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_finishAndroidStartup(engine, controller));
+      unawaited(_finishStartup(engine, controller));
     });
   } else {
-    unawaited(controller.init());
+    unawaited(_finishStartup(engine, controller));
   }
 }
 
-Future<void> _finishAndroidStartup(
+Future<void> _finishStartup(
   NivaatEngine engine,
   NivaatController controller,
 ) async {
   try {
     await engine.checks.initialize();
-  } catch (e) {
+  } on Exception catch (e) {
     debugPrint('nivaat CheckScheduler.initialize failed (non-fatal): $e');
   }
   await controller.init();

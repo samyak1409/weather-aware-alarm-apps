@@ -74,7 +74,10 @@ class NivaatController extends ChangeNotifier {
       await engine.evaluateAll();
       history = await store.loadHistory();
       notifyListeners();
-    } catch (e, st) {
+    } on Exception catch (e, st) {
+      // Never-brick: a wind fetch / plugin hiccup must not take the process
+      // down. Programming Errors still propagate. Mitigated: every resume /
+      // wakeup re-drives the cascade.
       debugPrint('nivaat resync failed (non-fatal): $e\n$st');
     }
   }

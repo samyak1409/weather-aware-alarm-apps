@@ -91,7 +91,18 @@ flutter build apk --release --split-per-abi --target-platform android-arm64
 # → build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
-**Nivaat release R8:** Flutter turns on minify/shrink for release APKs. Nivaat’s `android_alarm_manager_plus` path needs `apps/nivaat/android/app/proguard-rules.pro` (keeps that plugin + `JobIntentService` + workmanager + **`androidx.work`/Room** for WorkManager’s DB). Without it, release APKs die on install/launch while `flutter run` (debug, no minify) looks fine — either R8 merging `FlutterBackgroundExecutor`, or stripping `WorkDatabase_Impl` at AndroidX Startup before Flutter runs. **`AndroidAlarmManager.initialize()` must run after the first frame** (see `main.dart`). After changing those rules, always `flutter build apk --release` and confirm the mapping still lists `FlutterBackgroundExecutor -> FlutterBackgroundExecutor` and `WorkDatabase_Impl`.
+Install that release APK on a phone or emulator (this is **not** `flutter run` — it's the real minified build):
+
+```sh
+adb devices
+# first column = serial; use -s when more than one device is connected
+
+adb -s <serial> install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+```
+
+Add `-r` to replace an existing install (same signing key). Copied APKs for GitHub uploads live in `./dist/` (gitignored).
+
+**Nivaat release R8:** Flutter turns on minify/shrink for release APKs. Nivaat’s `android_alarm_manager_plus` path needs `apps/nivaat/android/app/proguard-rules.pro` (keeps that plugin + `JobIntentService` + workmanager + **`androidx.work`/Room** for WorkManager’s DB). Without it, release APKs die on install/launch while `flutter run` (debug, no minify) looks fine — either R8 merging `FlutterBackgroundExecutor`, or stripping `WorkDatabase_Impl` at AndroidX Startup before Flutter runs. **`AndroidAlarmManager.initialize()` must run after the first frame** (see `main.dart` `_finishStartup`); that same helper also runs `checks.initialize()` on **iOS** (seeds periodic BGAppRefresh — don’t skip it when changing Android deferral). After changing those rules, always `flutter build apk --release` and confirm the mapping still lists `FlutterBackgroundExecutor -> FlutterBackgroundExecutor` and `WorkDatabase_Impl`.
 
 **After switching the app icon in Settings (Android):** `flutter run` can fail with `Error: Activity class …MainActivity does not exist` — picking icon 2/3 disables MainActivity as the launcher entry (that's how alternate icons work), and the tool always cold-starts that exact component. Fix either way:
 
