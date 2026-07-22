@@ -69,7 +69,8 @@ void main() {
 
     test('the knob is a slowdown, not a speedup or a no-op left behind', () {
       expect(kMotionSlowdown, greaterThan(1.0));
-      expect(kMotionSlowdown, lessThanOrEqualTo(1.5));
+      // Locked at 50% slower (2026-07-22); bump the ceiling if Samyak tunes up.
+      expect(kMotionSlowdown, 1.5);
     });
   });
 

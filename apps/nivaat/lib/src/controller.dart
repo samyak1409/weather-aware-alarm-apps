@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 
+import 'alarm_time_conflict.dart';
 import 'engine.dart';
 
 /// App state for Nivaat: courts, alarms, history. Every mutation re-runs the
@@ -124,7 +125,13 @@ class NivaatController extends ChangeNotifier {
   int nextAlarmId() =>
       alarms.isEmpty ? 1 : alarms.map((a) => a.id).reduce((a, b) => a > b ? a : b) + 1;
 
-  Future<void> upsertAlarm(NivaatAlarm alarm) async {
+  /// Returns `false` when [alarm] collides on HH:MM with another alarm
+  /// (MESSAGES N20) so callers don't treat a no-op as a successful save.
+  Future<bool> upsertAlarm(NivaatAlarm alarm) async {
+    // Belt-and-suspenders: the alarm sheet refuses first (N20). Never persist
+    // a colliding HH:MM even if a future caller skips the UI check.
+    if (nivaatAlarmTimeConflict(alarms, alarm) != null) return false;
+
     final i = alarms.indexWhere((a) => a.id == alarm.id);
     final previous = i >= 0 ? alarms[i] : null;
     alarms = [...alarms];
@@ -142,6 +149,7 @@ class NivaatController extends ChangeNotifier {
     notifyListeners();
     // The wind evaluation hits the network — never block the UI on it.
     unawaited(_evaluateInBackground(alarm));
+    return true;
   }
 
   Future<void> deleteAlarm(int id) async {
@@ -163,6 +171,9 @@ class NivaatController extends ChangeNotifier {
   Future<void> toggleAlarm(int id, bool enabled) async {
     final i = alarms.indexWhere((a) => a.id == id);
     if (i < 0) return;
-    await upsertAlarm(alarms[i].copyWith(enabled: enabled));
+    // Same id / same HH:MM → conflict helper always allows; don't ignore the
+    // bool (unused_result hygiene + catches a broken guard if it ever fires).
+    final ok = await upsertAlarm(alarms[i].copyWith(enabled: enabled));
+    assert(ok, 'toggleAlarm must never hit an HH:MM conflict');
   }
 }

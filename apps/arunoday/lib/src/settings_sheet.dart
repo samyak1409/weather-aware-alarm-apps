@@ -2,6 +2,7 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'time_conflict.dart';
 
 // --- Offset math shared by the wake & bedtime ±1h dialogs (pure & tested).
 
@@ -99,36 +100,20 @@ class _SettingsPageState extends State<_SettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  /// Reason [minuteOfDay] can't be the bedtime (collision), else null.
-  String? _bedtimeConflict(int minuteOfDay) {
-    final nw = c.nextWake;
-    if (nw != null && nw.hour * 60 + nw.minute == minuteOfDay) {
-      return "Bedtime can't be the same as the wake alarm.";
-    }
-    // Bedtime IS allowed to land on a pending re-ring's minute: the re-ring
-    // wins that slot so only one alarm sounds (see _recomputeAndResync), and
-    // if the re-ring is later cancelled the daily bedtime takes it back.
-    return null;
-  }
-
   Future<void> _editOffset() async {
     final current = c.settings.wakeOffsetMinutes;
+    final bed = c.bedtimeMinutes;
     final result = await showDialog<int>(
       context: context,
-      builder: (_) =>
-          _OffsetDialog(initialMinutes: current, nextDawn: _anchorDawn()),
+      builder: (_) => _OffsetDialog(
+        initialMinutes: current,
+        nextDawn: _anchorDawn(),
+        bedtimeMinuteOfDay: bed?.round(),
+      ),
     );
+    // Collision is refused inside the dialog (Save disabled) — a returned
+    // value is always safe to apply.
     if (result == null) return;
-    final dawn = _anchorDawn();
-    final bed = c.bedtimeMinutes;
-    if (dawn != null && bed != null) {
-      final wakeMin =
-          ((dawn.hour * 60 + dawn.minute + result) % 1440 + 1440) % 1440;
-      if (wakeMin == bed.round() % 1440) {
-        _snack("Wake time can't be the same as the bedtime.");
-        return;
-      }
-    }
     await c.update(c.settings.copyWith(wakeOffsetMinutes: result));
   }
 
@@ -152,6 +137,9 @@ class _SettingsPageState extends State<_SettingsPage> {
 
   Future<void> _editBedtime() async {
     final auto = c.plan?.bedtimeMinutes.round();
+    final wake = c.nextWake;
+    final wakeMinuteOfDay =
+        wake == null ? null : wake.hour * 60 + wake.minute;
     // The dialog works in the signed offset directly (like the wake dialog),
     // so ±12h hard-stops symmetrically and −12h stays −12h.
     final result = await showDialog<int>(
@@ -159,15 +147,11 @@ class _SettingsPageState extends State<_SettingsPage> {
       builder: (_) => _BedtimeDialog(
         initialOffset: c.settings.bedtimeOffsetMinutes ?? 0,
         autoMinutes: auto,
+        wakeMinuteOfDay: wakeMinuteOfDay,
       ),
     );
+    // Collision is refused inside the dialog (Save disabled).
     if (result == null || auto == null) return; // result = signed offset
-    final absolute = ((auto + result) % 1440 + 1440) % 1440;
-    final conflict = _bedtimeConflict(absolute);
-    if (conflict != null) {
-      _snack(conflict);
-      return;
-    }
     await c.update(c.settings.copyWith(
       bedtimeOffsetMinutes: () => result == 0 ? null : result, // 0 → Auto
     ));
@@ -365,11 +349,18 @@ class _SettingsPageState extends State<_SettingsPage> {
 }
 
 class _BedtimeDialog extends StatefulWidget {
-  const _BedtimeDialog({required this.initialOffset, this.autoMinutes});
+  const _BedtimeDialog({
+    required this.initialOffset,
+    this.autoMinutes,
+    this.wakeMinuteOfDay,
+  });
 
   /// Signed offset from auto, −720..720 (the source of truth, like wake).
   final int initialOffset;
   final int? autoMinutes;
+
+  /// Next wake's minute-of-day — live collision cue (MESSAGES A18).
+  final int? wakeMinuteOfDay;
 
   @override
   State<_BedtimeDialog> createState() => _BedtimeDialogState();
@@ -380,6 +371,11 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
 
   int get _auto => widget.autoMinutes ?? 22 * 60;
   int get _absolute => ((_auto + _offset) % 1440 + 1440) % 1440;
+
+  String? get _conflict => arunodayBedtimeConflictsWithWake(
+        bedtimeMinuteOfDay: _absolute,
+        wakeMinuteOfDay: widget.wakeMinuteOfDay,
+      );
 
   /// Bump the signed offset with a symmetric ±12h hard stop — same as wake.
   void _bump(int delta) =>
@@ -404,6 +400,7 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final auto = widget.autoMinutes;
+    final conflict = _conflict;
     return AlertDialog(
       title: Text('BEDTIME', style: text.labelSmall),
       content: Column(
@@ -434,6 +431,16 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
                 ),
             ],
           ),
+          if (conflict != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              conflict,
+              style: text.bodyMedium!.copyWith(
+                color: AppPalette.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ],
       ),
       actions: [
@@ -442,7 +449,8 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: () => Navigator.pop(context, _offset),
+          onPressed:
+              conflict != null ? null : () => Navigator.pop(context, _offset),
           child: const Text('Save'),
         ),
       ],
@@ -451,10 +459,17 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
 }
 
 class _OffsetDialog extends StatefulWidget {
-  const _OffsetDialog({required this.initialMinutes, this.nextDawn});
+  const _OffsetDialog({
+    required this.initialMinutes,
+    this.nextDawn,
+    this.bedtimeMinuteOfDay,
+  });
 
   final int initialMinutes;
   final DateTime? nextDawn;
+
+  /// Current bedtime minute-of-day — live collision cue (MESSAGES A18).
+  final int? bedtimeMinuteOfDay;
 
   @override
   State<_OffsetDialog> createState() => _OffsetDialogState();
@@ -462,6 +477,16 @@ class _OffsetDialog extends StatefulWidget {
 
 class _OffsetDialogState extends State<_OffsetDialog> {
   late int _minutes = widget.initialMinutes;
+
+  String? get _conflict {
+    final dawn = widget.nextDawn;
+    if (dawn == null) return null;
+    return arunodayWakeConflictsWithBedtime(
+      wakeOffsetMinutes: _minutes,
+      dawn: dawn,
+      bedtimeMinuteOfDay: widget.bedtimeMinuteOfDay,
+    );
+  }
 
   /// Clamped to ±12h: beyond that an "offset from dawn" loses its meaning
   /// (a day-D wake lands on day D+1 and collides with D+1's own wake).
@@ -494,6 +519,7 @@ class _OffsetDialogState extends State<_OffsetDialog> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final conflict = _conflict;
     return AlertDialog(
       title: Text('WAKE OFFSET', style: text.labelSmall),
       content: Column(
@@ -531,6 +557,16 @@ class _OffsetDialogState extends State<_OffsetDialog> {
                 ),
             ],
           ),
+          if (conflict != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              conflict,
+              style: text.bodyMedium!.copyWith(
+                color: AppPalette.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ],
       ),
       actions: [
@@ -539,7 +575,8 @@ class _OffsetDialogState extends State<_OffsetDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: () => Navigator.pop(context, _minutes),
+          onPressed:
+              conflict != null ? null : () => Navigator.pop(context, _minutes),
           child: const Text('Save'),
         ),
       ],

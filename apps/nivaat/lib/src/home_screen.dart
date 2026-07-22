@@ -149,12 +149,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// wakeups under battery saver; iOS only grants BGAppRefresh opportunistically
   /// and Low Power Mode suppresses it outright. Right-padded to clear the FAB.
   Widget _bgNote(TextTheme text) {
-    // Extra bottom pad lifts the note off CraftedBy without moving the mark
+    // Top pad: mid-scroll alarm rows sit flush at the Expanded bottom edge,
+    // so without air here they kiss this fixed footer (2026-07-22: was 0).
+    // Bottom pad lifts the note off CraftedBy without moving the mark
     // (2026-07-20, Samyak: was reading too tight). Soft-wrap only — hard
     // newlines forced a 3-line shape at default scale but overflowed under
     // large accessibility text (2026-07-21).
     return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 0, 88, 32),
+      padding: const EdgeInsets.fromLTRB(28, 20, 88, 32),
       child: Text(
         nivaatBackgroundNote,
         style: text.bodyMedium!.copyWith(fontSize: 12),
@@ -177,10 +179,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final when = '$court · ${fmtShortDate(h.at)} ${fmtClock(h.at)} · '
         '$verb ${fmtCheckTime(h.whenChecked, h.at)}';
     // The line is the newest history row — tapping it opens the full log.
+    // Bottom pad keeps scrolling alarm rows from kissing this fixed line
+    // (2026-07-22: was 8 — too tight with a long list).
     return InkWell(
       onTap: () => showHistorySheet(context, c),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
+        padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
         child: Text(
           '$when — $line${watching == null ? '' : ' · $watching'}',
           style: text.bodyMedium,
@@ -209,48 +213,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _list(TextTheme text) {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(28, 8, 28, 96),
-      itemCount: c.alarms.length,
-      separatorBuilder: (_, _) => const Divider(),
-      itemBuilder: (context, i) {
-        final a = c.alarms[i];
-        final court = c.courtById(a.courtId);
-        return InkWell(
-          onTap: () => showAlarmSheet(context, c, alarm: a),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
-                        style: text.headlineMedium!.copyWith(
-                          color: a.enabled
-                              ? AppPalette.textPrimary
-                              : AppPalette.textSecondary,
+    // Same flash-on-open-if-overflowing cue as settings / history
+    // (2026-07-22: many alarms made the home list feel "cut off").
+    return FlashingScrollbar(
+      builder: (scroll) => ListView.separated(
+        controller: scroll,
+        padding: const EdgeInsets.fromLTRB(28, 8, 28, 96),
+        itemCount: c.alarms.length,
+        separatorBuilder: (_, _) => const Divider(),
+        itemBuilder: (context, i) {
+          final a = c.alarms[i];
+          final court = c.courtById(a.courtId);
+          return InkWell(
+            onTap: () => showAlarmSheet(context, c, alarm: a),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
+                          style: text.headlineMedium!.copyWith(
+                            color: a.enabled
+                                ? AppPalette.textPrimary
+                                : AppPalette.textSecondary,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${fmtWeekdays(a.weekdays)} · ${court?.name ?? 'court removed'} · ≤${a.courtSpeedLimitKmh} km/h',
-                        style: text.bodyMedium,
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          '${fmtWeekdays(a.weekdays)} · ${court?.name ?? 'court removed'} · ≤${a.courtSpeedLimitKmh} km/h',
+                          style: text.bodyMedium,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Switch(
-                  value: a.enabled,
-                  onChanged: (v) => c.toggleAlarm(a.id, v),
-                ),
-              ],
+                  Switch(
+                    value: a.enabled,
+                    onChanged: (v) => c.toggleAlarm(a.id, v),
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

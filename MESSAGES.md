@@ -65,8 +65,8 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
   → `Year here: sleep 7h 33m (summer) to 8h 27m (winter) — the natural swing of dawn at this latitude.`
 - **A16 — Bedtime picker:** helpText `BEDTIME` · title `BEDTIME` · hint `{auto is {HH:MM} | manual} · tap the time to pick exactly` → `auto is 21:56 · tap the time to pick exactly` · buttons `Cancel`, `Save`
 - **A17 — Wake-offset picker:** helpText `WAKE TIME` · title `WAKE OFFSET` · hint `{relative to civil dawn | dawn {HH:MM} · wake {HH:MM}}` + `tap the offset to pick the wake time` → `dawn 06:51 · wake 07:11` + `tap the offset to pick the wake time` · buttons `Cancel`, `Save`
-- **A18 — Validation snacks:** `Bedtime can't be the same as the wake alarm.` · `Wake time can't be the same as the bedtime.` · `No daily dawn at {l} (polar region) — Arunoday needs a real dawn.` → `No daily dawn at Tromsø (polar region) — Arunoday needs a real dawn.`
-  _(Bedtime **is** now allowed to land on a pending re-ring's minute — the re-ring wins that slot so only one alarm sounds, and if the re-ring is cancelled the daily bedtime takes it back.)_
+- **A18 — Validation:** wake↔bedtime collisions show live inside the wake-offset / bedtime dialogs (`Bedtime can't be the same as the wake alarm.` / `Wake time can't be the same as the bedtime.`) with Save disabled. Polar refuse stays a SnackBar: `No daily dawn at {l} (polar region) — Arunoday needs a real dawn.` → `No daily dawn at Tromsø (polar region) — Arunoday needs a real dawn.`
+  _(Bedtime **is** allowed to land on a pending re-ring's minute — the re-ring wins that slot so only one alarm sounds, and if the re-ring is cancelled the daily bedtime takes it back.)_
 
 ---
 
@@ -142,6 +142,7 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
 ## Sheets & dialogs
 
 - **N13 — Alarm editor:** title `NEW ALARM` / `EDIT ALARM` · row `Court` · row `Max wind at court` · hint `Gust guard auto: ≤{n} km/h` → `Gust guard auto: ≤15 km/h` · buttons `Delete`, `Save`
+- **N20 — Duplicate-time error (alarm editor, inline above Save):** `Another alarm is already at {HH:MM}.` → `Another alarm is already at 06:00.` — any other alarm with the same HH:MM (court / weekdays ignored). Shown live on open and after picking a time; Save stays disabled while it shows (not a SnackBar — those land on the hidden home Scaffold).
 - **N14 — Courts sheet:** header `COURTS` · hint `Save your courts — each alarm checks the wind at its own court.`
 - **N15 — Delete-court dialog:** title `DELETE COURT` · body (variants):
   - `{n} alarm(s) use {court} and will be deleted too. Continue?` → `2 alarms use Society Court and will be deleted too. Continue?`

@@ -1,6 +1,7 @@
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
+import 'alarm_time_conflict.dart';
 import 'controller.dart';
 
 Future<void> showAlarmSheet(
@@ -43,6 +44,19 @@ class _AlarmSheetState extends State<_AlarmSheet> {
           .clamp(WindThresholds.minLimit, WindThresholds.maxLimit);
   late final Set<int> _weekdays =
       {...(widget.existing?.weekdays ?? const {1, 2, 3, 4, 5, 6, 7})};
+  // Live cue above Save — checked on open and after each time pick so
+  // Save isn't the first discovery (2026-07-22).
+  late String? _timeConflict = _conflictFor(_hour, _minute);
+
+  String? _conflictFor(int hour, int minute) => nivaatAlarmTimeConflict(
+        widget.c.alarms,
+        NivaatAlarm(
+          id: widget.existing?.id ?? widget.c.nextAlarmId(),
+          hour: hour,
+          minute: minute,
+          courtId: _courtId,
+        ),
+      );
 
   Future<void> _pickTime() async {
     final picked = await showTimePicker(
@@ -53,6 +67,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
       setState(() {
         _hour = picked.hour;
         _minute = picked.minute;
+        _timeConflict = _conflictFor(_hour, _minute);
       });
     }
   }
@@ -62,7 +77,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
   Future<void> _save() async {
     // Guard against double-taps: a second tap would mint a second id and
     // create a duplicate alarm.
-    if (_saving) return;
+    if (_saving || _timeConflict != null) return;
     setState(() => _saving = true);
     final alarm = NivaatAlarm(
       id: widget.existing?.id ?? widget.c.nextAlarmId(),
@@ -73,8 +88,30 @@ class _AlarmSheetState extends State<_AlarmSheet> {
       weekdays: _weekdays,
       enabled: widget.existing?.enabled ?? true,
     );
-    await widget.c.upsertAlarm(alarm);
-    if (mounted) Navigator.pop(context);
+    // Belt-and-suspenders — live check already disables Save; controller
+    // also no-ops. Re-check here in case alarms changed while the sheet
+    // was open (another path is rare but cheap).
+    final conflict = nivaatAlarmTimeConflict(widget.c.alarms, alarm);
+    if (conflict != null) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _timeConflict = conflict;
+        });
+      }
+      return;
+    }
+    final saved = await widget.c.upsertAlarm(alarm);
+    if (!mounted) return;
+    if (!saved) {
+      // Race: another alarm took this HH:MM while the sheet was open.
+      setState(() {
+        _saving = false;
+        _timeConflict = nivaatAlarmTimeConflict(widget.c.alarms, alarm);
+      });
+      return;
+    }
+    Navigator.pop(context);
   }
 
   @override
@@ -155,6 +192,15 @@ class _AlarmSheetState extends State<_AlarmSheet> {
                 onChanged: (v) => setState(() => _limit = v!),
               ),
             ),
+            if (_timeConflict != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _timeConflict!,
+                style: text.bodyMedium!.copyWith(
+                  color: AppPalette.textSecondary,
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               children: [
@@ -169,7 +215,11 @@ class _AlarmSheetState extends State<_AlarmSheet> {
                   ),
                 const Spacer(),
                 FilledButton(
-                  onPressed: _weekdays.isEmpty || _saving ? null : _save,
+                  onPressed: _weekdays.isEmpty ||
+                          _saving ||
+                          _timeConflict != null
+                      ? null
+                      : _save,
                   child: const Text('Save'),
                 ),
               ],
