@@ -21,15 +21,33 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
   final scheme = ColorScheme.dark(
     primary: accent,
     secondary: accent,
+    // Home / scaffold role — OLED black. Distinct from [AppPalette.surface]
+    // (elevated gray). Naming collision is Flutter's; keep both intentional.
     surface: AppPalette.trueBlack,
     onSurface: AppPalette.textPrimary,
+    // No M3 elevation tint wash (would stain gray sheets with the accent).
+    surfaceTint: Colors.transparent,
+    // Elevated M3 tones (time-picker dial/chips, etc.). Unset, these fall
+    // back to colorScheme.surface (= true-black) and punch holes in gray
+    // sheets/dialogs — same gap showTimePicker had vs dialogTheme.
+    surfaceContainerLowest: AppPalette.surface,
+    surfaceContainerLow: AppPalette.surface,
+    surfaceContainer: AppPalette.surface,
+    surfaceContainerHigh: AppPalette.surface,
+    surfaceContainerHighest: AppPalette.surface,
   );
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: AppPalette.trueBlack,
-    canvasColor: AppPalette.trueBlack,
-    dialogTheme: const DialogThemeData(backgroundColor: AppPalette.surface),
+    // Elevated overlays share [AppPalette.surface]: sheets / dialogs /
+    // snackbars (explicit themes below) and DropdownButton menus (Flutter
+    // paints them with `dropdownColor ?? theme.canvasColor`).
+    canvasColor: AppPalette.surface,
+    dialogTheme: const DialogThemeData(
+      backgroundColor: AppPalette.surface,
+      surfaceTintColor: Colors.transparent,
+    ),
     snackBarTheme: const SnackBarThemeData(
       backgroundColor: AppPalette.surface,
       contentTextStyle: TextStyle(color: AppPalette.textPrimary),
@@ -38,6 +56,12 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: AppPalette.surface,
       surfaceTintColor: Colors.transparent,
+    ),
+    // showTimePicker ignores dialogTheme (SDK) — pin it to the same elevated
+    // gray as sheets/dialogs.
+    timePickerTheme: const TimePickerThemeData(
+      backgroundColor: AppPalette.surface,
+      dialBackgroundColor: AppPalette.surface,
     ),
     appBarTheme: const AppBarTheme(
       backgroundColor: AppPalette.trueBlack,

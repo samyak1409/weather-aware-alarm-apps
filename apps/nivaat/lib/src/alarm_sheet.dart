@@ -176,23 +176,24 @@ class _AlarmSheetState extends State<_AlarmSheet> {
             const SizedBox(height: 20),
             Builder(builder: (context) {
               // Cap trailing width so a long court name can't crush "Court"
-              // into one-char-per-line (2026-07-22). Selected + menu both
-              // wrap (no ellipsis — 2026-07-23); `itemHeight: null` so wrapped
-              // / large-accessibility lines aren't clipped at the 48px default.
-              // Menu height capped at half screen.
-              final halfW = MediaQuery.sizeOf(context).width * 0.5;
-              final halfH = MediaQuery.sizeOf(context).height * 0.5;
+              // into one-char-per-line (2026-07-22; width/height tuned
+              // 2026-07-23). Selected + menu both wrap (no ellipsis);
+              // `itemHeight: null` so wrapped / large-accessibility lines
+              // aren't clipped at the 48px default. Open menu ≤ ~1/3 screen.
+              final size = MediaQuery.sizeOf(context);
+              final trailMaxW = size.width * 0.67;
+              final menuMaxH = size.height * 0.33;
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Court'),
                 trailing: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: halfW),
+                  constraints: BoxConstraints(maxWidth: trailMaxW),
                   child: DropdownButton<String>(
                     value: _courtId,
                     isExpanded: true,
                     itemHeight: null,
                     underline: const SizedBox.shrink(),
-                    menuMaxHeight: halfH,
+                    menuMaxHeight: menuMaxH,
                     selectedItemBuilder: (context) => [
                       for (final court in widget.c.courts)
                         Align(
@@ -208,7 +209,7 @@ class _AlarmSheetState extends State<_AlarmSheet> {
                         DropdownMenuItem(
                           value: court.id,
                           child: SizedBox(
-                            width: halfW,
+                            width: trailMaxW,
                             child: Text(court.name),
                           ),
                         ),
