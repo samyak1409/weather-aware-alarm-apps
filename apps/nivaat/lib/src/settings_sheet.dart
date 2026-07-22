@@ -8,8 +8,9 @@ import 'history_sheet.dart';
 
 /// Nivaat's settings page (2026-07-20). Hosts what used to be the home
 /// top-bar trio — alarm sound, courts, history (moved same day; the home bar
-/// keeps only this page's tune icon, and the last-outcome line is a history
-/// shortcut) — plus the appearance options shared with Arunoday.
+/// keeps only this page's tune icon; a live "still checking" home cue is the
+/// only home→history shortcut, and only while the +30m window is open) — plus
+/// the appearance options shared with Arunoday.
 void showSettingsSheet(BuildContext context, NivaatController c) {
   Navigator.of(context).push(
     MaterialPageRoute<void>(builder: (_) => _SettingsPage(c: c)),

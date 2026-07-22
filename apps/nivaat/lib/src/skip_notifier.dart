@@ -4,6 +4,71 @@ import 'package:core/core.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Title of all three Nivaat cards (MESSAGES.md N1/N2/N3):
+/// `{court} · {HH:MM} · {status}` — [kNivaatRing] / [kNivaatStillChecking] /
+/// [kNivaatSkipped].
+///
+/// The app name is deliberately absent (2026-07-22): both OS notification
+/// headers already print it above the title, so "Nivaat" spent the scannable
+/// head of the line on a repeat. The court leads instead — it's what tells two
+/// alarms apart. `at` is always the alarm time the user set, never the ring or
+/// check time.
+String nivaatNotificationTitle(String courtName, DateTime at, String status) =>
+    '$courtName · ${fmtClock(at)} · $status';
+
+/// The three title statuses. Sentence-capitalised: they head a title now, not
+/// a mid-sentence clause (2026-07-22). The ring's is the verdict itself — it
+/// moved up out of the body, where the numbers now stand alone.
+const String kNivaatRing = 'Play! 🏸';
+const String kNivaatStillChecking = 'Still checking';
+const String kNivaatSkipped = 'Skipped';
+
+// One reason phrase, shared by both cards (within-notification consistency).
+// Court-free since 2026-07-22 — the title names it now.
+String _reason(HistoryRecord record) => switch (record.outcome) {
+      CheckOutcome.skippedWindy => 'Too windy',
+      CheckOutcome.skippedGusty => 'Too gusty',
+      CheckOutcome.skippedNoData => "Couldn't reach the wind",
+      CheckOutcome.rang => '',
+    };
+
+/// ` · checked HH:MM` — or ` · last tried HH:MM` when no check ever succeeded.
+/// On every card including the ring (2026-07-22), as reinforcement that the
+/// result came from a real reading. `alarmAt` only decides whether the date is
+/// needed: a ring booked from last night's forecast reads ` · checked 17 Jul
+/// 22:00`, never a bare `22:00` that looks like this morning.
+///
+/// The same value its history row shows — the engine writes `lastCheckAt` on
+/// the very branch that schedules the ring, so N1 and N5 always agree.
+String nivaatCheckedNote(DateTime whenChecked, DateTime alarmAt,
+        {bool tried = false}) =>
+    ' · ${tried ? 'last tried' : 'checked'} '
+    '${fmtCheckTime(whenChecked, alarmAt)}';
+
+String _checked(HistoryRecord record) => nivaatCheckedNote(
+      record.whenChecked,
+      record.at,
+      tried: record.outcome == CheckOutcome.skippedNoData,
+    );
+
+// Reason + numbers + freshness: the whole of the final card, and the head of
+// the heads-up. No-data carries no numbers, so its middle drops out.
+String _reasonNumsChecked(HistoryRecord record) {
+  final nums = record.windGustSummary;
+  return '${_reason(record)}${nums.isEmpty ? '' : ' · $nums'}'
+      '${_checked(record)}';
+}
+
+/// Body of the at-T heads-up (MESSAGES.md N2) — the final card's body plus the
+/// deadline still being watched.
+String nivaatExtendedCheckBody(HistoryRecord record, DateTime until) =>
+    '${_reasonNumsChecked(record)} · watching until ${fmtCheckTime(until, record.at)}';
+
+/// Body of the final skip card (MESSAGES.md N3). Empty for a ring — that
+/// occurrence is never notified, the ring speaks for itself.
+String nivaatSkipBody(HistoryRecord record) =>
+    record.outcome == CheckOutcome.rang ? '' : _reasonNumsChecked(record);
+
 /// The trust mechanism, part 2 (SPEC.md): every skipped alarm leaves a
 /// notification saying exactly why — windy, gusty, or no data.
 /// A skipped ring must never be confusable with a broken app.
@@ -83,37 +148,23 @@ class SkipNotifier {
   static const int _skipId = 610000;
 
   // Shared card style — a normal audible notification.
+  //
+  // One channel carries BOTH cards, so it can't be named for only one of them:
+  // muting "Skipped alarms" would also have killed the still-checking heads-up,
+  // the card that's still worth acting on. Renamed 2026-07-22, id reset to drop
+  // the `_v2` (that suffix only existed because Android freezes a channel's
+  // importance at creation, and the 2026-07-12 silent→audible switch needed a
+  // fresh id; with no installed base there's nothing to migrate).
   static const NotificationDetails _details = NotificationDetails(
     android: AndroidNotificationDetails(
-      // v2: was a silent low-importance channel; made a normal audible
-      // notification 2026-07-12 (user decision). Android freezes a channel's
-      // importance at first creation, hence the new id.
-      'nivaat_skips_v2',
-      'Skipped alarms',
-      channelDescription: 'Why an alarm did not ring',
+      'nivaat_alarm_updates',
+      'Alarm updates',
+      channelDescription: "Still checking, and why an alarm didn't ring",
       importance: Importance.high,
       priority: Priority.high,
     ),
     iOS: DarwinNotificationDetails(presentBadge: false),
   );
-
-  // One reason phrase, shared by both cards (within-notification consistency).
-  String _reason(HistoryRecord record, String courtName) =>
-      switch (record.outcome) {
-        CheckOutcome.skippedWindy => '$courtName too windy',
-        CheckOutcome.skippedGusty => '$courtName too gusty',
-        CheckOutcome.skippedNoData => "Couldn't reach the wind at $courtName",
-        CheckOutcome.rang => '',
-      };
-
-  // "· checked HH:MM" (or "· last tried HH:MM" for no-data) — always shown, as
-  // reinforcement that the result came from a real check. Same data the history
-  // row shows, for notification↔history parity.
-  String _checked(HistoryRecord record) {
-    final verb =
-        record.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked';
-    return ' · $verb ${fmtCheckTime(record.whenChecked, record.at)}';
-  }
 
   /// Heads-up posted at T for a skipped occurrence: the reason so far, plus a
   /// note that the app keeps checking in the background until [until] and will
@@ -122,18 +173,11 @@ class SkipNotifier {
   Future<void> showExtendedCheck(
       HistoryRecord record, String courtName, DateTime until) async {
     await ensureInitialized();
-    final nums = record.windGustSummary;
-    // No-data can't "calm" — it's a connectivity problem — so its promise is
-    // to ring once the wind is reachable again, not once it drops.
-    final promise = record.outcome == CheckOutcome.skippedNoData
-        ? "will ring once it's reachable"
-        : 'will ring if it calms';
     await _plugin.show(
       id: _headsUpId + record.alarmId,
-      title: 'Nivaat ${fmtClock(record.at)} · still checking',
-      body: '${_reason(record, courtName)}${nums.isEmpty ? '' : ' · $nums'}'
-          '${_checked(record)} · '
-          'keeping watch until ${fmtClock(until)}, $promise 🏸',
+      title:
+          nivaatNotificationTitle(courtName, record.at, kNivaatStillChecking),
+      body: nivaatExtendedCheckBody(record, until),
       notificationDetails: _details,
     );
   }
@@ -142,19 +186,12 @@ class SkipNotifier {
   /// alerting notification (does not replace the heads-up).
   Future<void> showSkip(HistoryRecord record, String courtName) async {
     await ensureInitialized();
-    final body = switch (record.outcome) {
-      CheckOutcome.skippedWindy || CheckOutcome.skippedGusty =>
-        '${_reason(record, courtName)} · ${record.windGustSummary}'
-            '${_checked(record)} — next time 🏸',
-      CheckOutcome.skippedNoData =>
-        '${_reason(record, courtName)}${_checked(record)}',
-      CheckOutcome.rang => '', // never notified; the ring speaks for itself
-    };
+    final body = nivaatSkipBody(record);
     if (body.isEmpty) return;
 
     await _plugin.show(
       id: _skipId + record.alarmId,
-      title: 'Nivaat ${fmtClock(record.at)} · skipped',
+      title: nivaatNotificationTitle(courtName, record.at, kNivaatSkipped),
       body: body,
       notificationDetails: _details,
     );

@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import 'check_scheduler.dart';
 import 'skip_notifier.dart';
+import 'ui_resync.dart';
 
 /// User-selected alarm tone; null = default Court Call. Loaded by
 /// [NivaatEngine.standard], so every entrypoint — app start, the Android
@@ -28,16 +29,79 @@ String nivaatSoundForVolume(double volume) {
 }
 
 /// The note for a heads-up snapshot row (`watchedUntil` set): "watching until
-/// HH:MM" while the retry window still runs — the same promise the heads-up
-/// card makes — then "watched until HH:MM" forever, marking it as the
+/// …" while the retry window still runs — the same promise the heads-up
+/// card makes — then "watched until …" forever, marking it as the
 /// at-T moment whose final outcome is its own later row. Null for final rows.
+///
+/// The deadline uses [fmtCheckTime] against the alarm (`at`) — same rule as
+/// the check time — so a late-night alarm whose +30m cap crosses midnight
+/// reads `watched until 23 Jul 00:19`, never a bare `00:19` (2026-07-23).
 String? nivaatStillWatchingNote(HistoryRecord record, {DateTime? now}) {
   final until = record.watchedUntil;
   if (until == null) return null;
   final t = now ?? DateTime.now();
+  final when = fmtCheckTime(until, record.at);
   return t.isBefore(until)
-      ? 'watching until ${fmtClock(until)}'
-      : 'watched until ${fmtClock(until)}';
+      ? 'watching until $when'
+      : 'watched until $when';
+}
+
+/// Snapshot still inside its +30m window whose occurrence is **still being
+/// checked** — used by the home cue and its dismiss timer (MESSAGES.md N21).
+///
+/// Cleared when: the cap passes; a **final** row exists for the same
+/// `alarmId + at` (late ring / cap skip); that alarm is gone / disabled; or
+/// live [CheckState] no longer targets that occurrence (toggle-off discards
+/// it; toggle-on re-arms *tomorrow* — without this, the cue would lie until
+/// the cap). With several open windows, returns the **soonest** cap.
+HistoryRecord? nivaatSoonestOpenWatch(
+  Iterable<HistoryRecord> history, {
+  required Iterable<NivaatAlarm> alarms,
+  required Iterable<CheckState> checkStates,
+  DateTime? now,
+}) {
+  final t = now ?? DateTime.now();
+  final liveIds = {for (final a in alarms) if (a.enabled) a.id};
+  final finalized = {
+    for (final h in history)
+      if (h.watchedUntil == null) _watchKey(h.alarmId, h.at)
+  };
+  final inFlight = {
+    for (final s in checkStates) _watchKey(s.alarmId, s.alarmAt)
+  };
+  HistoryRecord? soonest;
+  for (final h in history) {
+    final until = h.watchedUntil;
+    if (until == null || !t.isBefore(until)) continue;
+    if (!liveIds.contains(h.alarmId)) continue;
+    if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
+    if (!inFlight.contains(_watchKey(h.alarmId, h.at))) continue;
+    final best = soonest?.watchedUntil;
+    if (best == null || until.isBefore(best)) soonest = h;
+  }
+  return soonest;
+}
+
+String _watchKey(int alarmId, DateTime at) =>
+    '$alarmId@${at.millisecondsSinceEpoch}';
+
+/// Home cue text for [nivaatSoonestOpenWatch], or null when home stays clean.
+/// The UI prefixes this with a wind-accent live ● (not a word).
+String? nivaatHomeWatchingLine(
+  Iterable<HistoryRecord> history, {
+  required Iterable<NivaatAlarm> alarms,
+  required Iterable<CheckState> checkStates,
+  DateTime? now,
+}) {
+  final open = nivaatSoonestOpenWatch(
+    history,
+    alarms: alarms,
+    checkStates: checkStates,
+    now: now,
+  );
+  if (open == null) return null;
+  return 'Still checking wind · until '
+      '${fmtCheckTime(open.watchedUntil!, open.at)}';
 }
 
 /// Background entrypoint for Android AlarmManager wakeups. Runs in a fresh
@@ -48,6 +112,7 @@ Future<void> nivaatBackgroundCheck() async {
   DartPluginRegistrant.ensureInitialized();
   final engine = await NivaatEngine.standard();
   await engine.evaluateAll();
+  pingNivaatUiResync();
 }
 
 /// Orchestrates the wind-check cascade for every alarm (SPEC.md):
@@ -175,7 +240,14 @@ class NivaatEngine {
       // A committed ring that already fired must reach history even while its
       // alarm is being disabled/deleted — clearing first silently dropped it
       // ("rang but never showed up in history", 2026-07-19 device testing).
-      if (stored != null && stored.ringScheduled && t.isAfter(stored.alarmAt)) {
+      //
+      // Only when the COURT survives, though: that bug was about the alarm
+      // going away (`next == null`), and a row whose court is gone is an
+      // orphan no screen can render (2026-07-22).
+      if (court != null &&
+          stored != null &&
+          stored.ringScheduled &&
+          t.isAfter(stored.alarmAt)) {
         await store.upsertHistory(_rangRecord(alarm, stored));
       }
       await store.clearCheckState(alarm.id);
@@ -270,13 +342,16 @@ class NivaatEngine {
         await scheduler.scheduleRing(
           id: alarm.id,
           at: ringAt,
-          title: 'Nivaat ${fmtClock(next)} · ${court.name}',
+          title: nivaatNotificationTitle(court.name, next, kNivaatRing),
+          // The numbers that won, and when they were read — `t` is the same
+          // instant stored as `lastCheckAt` below, so the ring card and its
+          // history row quote one check time (MESSAGES.md N1).
           body: '${fmtWindGust(
             decision.sample.courtSpeedKmh,
             decision.thresholds.courtSpeedLimitKmh,
             decision.sample.rawGustKmh,
             decision.thresholds.rawGustLimit,
-          )} — play! 🏸',
+          )}${nivaatCheckedNote(t, next)}',
           volume: decision.volume,
         );
         state = state.copyWith(

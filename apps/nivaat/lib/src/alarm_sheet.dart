@@ -27,17 +27,13 @@ class _AlarmSheet extends StatefulWidget {
 }
 
 class _AlarmSheetState extends State<_AlarmSheet> {
-  late int _hour = widget.existing?.hour ?? 6;
-  late int _minute = widget.existing?.minute ?? 0;
+  // New alarms open on "now" (whole minutes) so the picker is already near
+  // a useful time; edits keep the saved value (2026-07-22).
+  late int _hour;
+  late int _minute;
   // Fall back to the first court if the alarm's court was deleted — a value
   // absent from the dropdown items would assert-crash the DropdownButton.
   late String _courtId = _initialCourtId();
-
-  String _initialCourtId() {
-    final id = widget.existing?.courtId;
-    if (id != null && widget.c.courts.any((c) => c.id == id)) return id;
-    return widget.c.courts.first.id;
-  }
   // Clamp defensively so an out-of-range saved value never crashes the dropdown.
   late int _limit =
       (widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit)
@@ -46,7 +42,28 @@ class _AlarmSheetState extends State<_AlarmSheet> {
       {...(widget.existing?.weekdays ?? const {1, 2, 3, 4, 5, 6, 7})};
   // Live cue above Save — checked on open and after each time pick so
   // Save isn't the first discovery (2026-07-22).
-  late String? _timeConflict = _conflictFor(_hour, _minute);
+  late String? _timeConflict;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _hour = existing.hour;
+      _minute = existing.minute;
+    } else {
+      final now = TimeOfDay.now();
+      _hour = now.hour;
+      _minute = now.minute;
+    }
+    _timeConflict = _conflictFor(_hour, _minute);
+  }
+
+  String _initialCourtId() {
+    final id = widget.existing?.courtId;
+    if (id != null && widget.c.courts.any((c) => c.id == id)) return id;
+    return widget.c.courts.first.id;
+  }
 
   String? _conflictFor(int hour, int minute) => nivaatAlarmTimeConflict(
         widget.c.alarms,
@@ -157,22 +174,50 @@ class _AlarmSheetState extends State<_AlarmSheet> {
               ],
             ),
             const SizedBox(height: 20),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Court'),
-              trailing: DropdownButton<String>(
-                value: _courtId,
-                underline: const SizedBox.shrink(),
-                items: [
-                  for (final court in widget.c.courts)
-                    DropdownMenuItem(
-                      value: court.id,
-                      child: Text(court.name),
-                    ),
-                ],
-                onChanged: (v) => setState(() => _courtId = v!),
-              ),
-            ),
+            Builder(builder: (context) {
+              // Cap trailing width so a long court name can't crush "Court"
+              // into one-char-per-line (2026-07-22). Selected + menu both
+              // wrap (no ellipsis — 2026-07-23); `itemHeight: null` so wrapped
+              // / large-accessibility lines aren't clipped at the 48px default.
+              // Menu height capped at half screen.
+              final halfW = MediaQuery.sizeOf(context).width * 0.5;
+              final halfH = MediaQuery.sizeOf(context).height * 0.5;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Court'),
+                trailing: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: halfW),
+                  child: DropdownButton<String>(
+                    value: _courtId,
+                    isExpanded: true,
+                    itemHeight: null,
+                    underline: const SizedBox.shrink(),
+                    menuMaxHeight: halfH,
+                    selectedItemBuilder: (context) => [
+                      for (final court in widget.c.courts)
+                        Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: Text(
+                            court.name,
+                            textAlign: TextAlign.end,
+                          ),
+                        ),
+                    ],
+                    items: [
+                      for (final court in widget.c.courts)
+                        DropdownMenuItem(
+                          value: court.id,
+                          child: SizedBox(
+                            width: halfW,
+                            child: Text(court.name),
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) => setState(() => _courtId = v!),
+                  ),
+                ),
+              );
+            }),
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Max wind at court'),

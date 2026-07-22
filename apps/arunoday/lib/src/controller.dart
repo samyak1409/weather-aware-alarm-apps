@@ -23,10 +23,6 @@ class ArunodayController extends ChangeNotifier {
   SleepPlanResult? plan;
   bool loaded = false;
 
-  /// The active location has no daily dawn (polar / saved by an old build) —
-  /// unusable; home shows a message instead of a broken plan.
-  bool activeLocationHasNoDawn = false;
-
   SavedLocation? get activeLocation => settings.activeLocation;
 
   /// An already-saved location that produces the **same alarm** as (lat, lon),
@@ -270,12 +266,7 @@ class ArunodayController extends ChangeNotifier {
     sound.selectedSoundPath = settings.soundPath;
     _clearExpiredOneTimers();
     final loc = activeLocation;
-    // Re-validate on every load/resync: a location saved by an older build
-    // (before the polar guard) or one that lost its daily dawn is unusable —
-    // don't render a degenerate plan for it.
-    activeLocationHasNoDawn = loc != null &&
-        !Solar.hasDailyDawnAllYear(DateTime.now().year, loc.lat, loc.lon);
-    if (loc == null || activeLocationHasNoDawn) {
+    if (loc == null) {
       plan = null;
       await _cancelAll();
       return;
@@ -302,10 +293,12 @@ class ArunodayController extends ChangeNotifier {
           final shift = dawn == null ? 0 : wake.difference(dawn).inMinutes;
           wanted[1000 + i] = (
             at: wake,
-            title: 'Arunoday · dawn',
+            title: 'Arunoday · Dawn',
             body: shift == 0
                 ? 'First light at ${loc.name}. Good morning.'
-                : 'Dawn ${fmtOffset(shift)} at ${loc.name}. Good morning.',
+                // No space before the offset — "Dawn+0:20" is ONE value, the
+                // way A7's "DAWN+0:20" and A13's "Auto+0:30" already read.
+                : 'Dawn${fmtOffset(shift)} at ${loc.name}. Good morning.',
           );
         }
       }
@@ -329,7 +322,7 @@ class ArunodayController extends ChangeNotifier {
         if (at.isAfter(now) && at != reRing) {
           wanted[2000 + i] = (
             at: at,
-            title: 'Arunoday · bedtime',
+            title: 'Arunoday · Bedtime',
             body: 'Wind down — dawn comes early.',
           );
         }
@@ -340,7 +333,7 @@ class ArunodayController extends ChangeNotifier {
     if (reRing != null) {
       wanted[2999] = (
         at: delayed!,
-        title: 'Arunoday · bedtime',
+        title: 'Arunoday · Bedtime',
         body: 'Second call — dawn does not snooze.',
       );
     }

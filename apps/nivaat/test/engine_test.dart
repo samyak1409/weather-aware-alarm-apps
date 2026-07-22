@@ -26,7 +26,8 @@ class FakeNotifier extends SkipNotifier {
 }
 
 class FakeRing implements AlarmScheduler {
-  final Map<int, ({DateTime at, double volume, String body})> scheduled = {};
+  final Map<int, ({DateTime at, double volume, String title, String body})>
+      scheduled = {};
 
   /// Every scheduleRing call in order — [scheduled] only keeps the latest per
   /// id, which hides e.g. a late ring that finalising then rolls over.
@@ -44,7 +45,7 @@ class FakeRing implements AlarmScheduler {
     required String body,
     required double volume,
   }) async {
-    scheduled[id] = (at: at, volume: volume, body: body);
+    scheduled[id] = (at: at, volume: volume, title: title, body: body);
     log.add((id: id, at: at));
   }
 
@@ -177,6 +178,14 @@ void main() {
 
     expect(ring.scheduled[7]!.at, alarmAt);
     expect(ring.scheduled[7]!.volume, closeTo(0.8125, 0.001));
+    // MESSAGES.md N1: court, the alarm time the user set, then the verdict —
+    // no app name (the OS notification header already prints it). The body is
+    // the numbers alone; "Play!" moved up into the title (2026-07-22).
+    expect(ring.scheduled[7]!.title, 'Home Court · 06:00 · Play! 🏸');
+    // Checked at T−12h the evening before, so the note carries the date —
+    // a bare "18:00" would read as this morning.
+    expect(ring.scheduled[7]!.body,
+        'wind 3 (≤4) · gusts 5 (≤15) km/h · checked 11 Jul 18:00');
     expect(api.lastCallWasCurrent, isFalse, reason: 'far out uses forecast');
     expect(checks.booked[7], DateTime(2026, 7, 12, 5, 0)); // T-1h, first rung
   });
@@ -496,8 +505,12 @@ void main() {
   test('opening the app during a ring never cancels it (future occurrence)',
       () async {
     // The alarm is currently ringing (a past occurrence fired and cleared).
-    ring.scheduled[7] =
-        (at: alarmAt, volume: 1.0, body: 'ringing now');
+    ring.scheduled[7] = (
+      at: alarmAt,
+      volume: 1.0,
+      title: 'Home Court · 06:00 · Play! 🏸',
+      body: 'ringing now'
+    );
     ring.ringingIds.add(7);
 
     // Resume the app an hour later → re-evaluates the NEXT (future) occurrence,
@@ -743,6 +756,229 @@ void main() {
         outcome: CheckOutcome.skippedWindy);
     expect(nivaatStillWatchingNote(finalSkip, now: alarmAt), isNull,
         reason: 'final rows carry no watch note');
+  });
+
+  test('nivaatStillWatchingNote: dates the cap when it crosses midnight vs the alarm',
+      () {
+    final late = DateTime(2026, 7, 22, 23, 49);
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: late,
+        watchedUntil: late.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    expect(
+        nivaatStillWatchingNote(snapshot, now: late.add(const Duration(hours: 1))),
+        'watched until 23 Jul 00:19',
+        reason: 'same rule as fmtCheckTime — bare 00:19 would look earlier than 23:49');
+  });
+
+  /// In-flight cascade for [at] — what the home cue needs to treat a snapshot
+  /// as still being checked (toggle-off clears this; toggle-on re-arms later).
+  CheckState flying(DateTime at, {int id = 7}) => CheckState(
+        alarmId: id,
+        alarmAt: at,
+        extendedCheckShown: true,
+        skipCourtSpeedKmh: 5.4,
+        skipRawGustKmh: 10,
+      );
+
+  test('nivaatHomeWatchingLine: only while a snapshot window is still open', () {
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final alarms = [alarm];
+    final states = [flying(alarmAt)];
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: alarms,
+          checkStates: states,
+          now: alarmAt.add(const Duration(minutes: 10))),
+      'Still checking wind · until 06:30',
+    );
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: alarms,
+          checkStates: states,
+          now: alarmAt.add(const Duration(minutes: 30))),
+      isNull,
+      reason: 'window closed — home stays clean',
+    );
+    expect(
+      nivaatHomeWatchingLine(const [],
+          alarms: alarms, checkStates: states, now: alarmAt),
+      isNull,
+    );
+  });
+
+  test('nivaatHomeWatchingLine: clears once a final row lands for that occurrence',
+      () {
+    // Late ring (or cap skip): history keeps the snapshot, but checking is
+    // over — the cue must not contradict the "Rang" / "Skipped" row.
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final rang = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        outcome: CheckOutcome.rang,
+        volume: 0.9);
+    expect(
+      nivaatHomeWatchingLine([rang, snapshot],
+          alarms: [alarm],
+          checkStates: [flying(alarmAt)],
+          now: alarmAt.add(const Duration(minutes: 10))),
+      isNull,
+      reason: 'final row for same alarmId+at means checking stopped',
+    );
+  });
+
+  test('nivaatHomeWatchingLine: a final for a *different* occurrence stays quiet about this one',
+      () {
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final otherFinal = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt.subtract(const Duration(days: 1)),
+        outcome: CheckOutcome.rang,
+        volume: 0.9);
+    expect(
+      nivaatHomeWatchingLine([otherFinal, snapshot],
+          alarms: [alarm],
+          checkStates: [flying(alarmAt)],
+          now: alarmAt.add(const Duration(minutes: 10))),
+      'Still checking wind · until 06:30',
+      reason: 'yesterday\'s final must not silence today\'s open window',
+    );
+  });
+
+  test('nivaatHomeWatchingLine: clears when the alarm is deleted or disabled', () {
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final now = alarmAt.add(const Duration(minutes: 10));
+    final states = [flying(alarmAt)];
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: const [], checkStates: states, now: now),
+      isNull,
+      reason: 'deleted — nothing is checking',
+    );
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: [alarm.copyWith(enabled: false)],
+          checkStates: states,
+          now: now),
+      isNull,
+      reason: 'disabled — cascade cancelled',
+    );
+  });
+
+  test('nivaatHomeWatchingLine: clears when CheckState no longer targets that occurrence',
+      () {
+    // Skip at 06:00 → toggle off (state discarded) → toggle on (state is
+    // tomorrow). Snapshot still says watching until 06:30 — cue must not lie.
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final now = alarmAt.add(const Duration(minutes: 12));
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: [alarm], checkStates: const [], now: now),
+      isNull,
+      reason: 'discarded — no live cascade for today',
+    );
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: [alarm],
+          checkStates: [flying(alarmAt.add(const Duration(days: 1)))],
+          now: now),
+      isNull,
+      reason: 're-armed for tomorrow — today\'s retries will not resume',
+    );
+  });
+
+  test('nivaatHomeWatchingLine: dates the cap when it crosses midnight', () {
+    final late = DateTime(2026, 7, 22, 23, 49);
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: late,
+        watchedUntil: late.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    expect(
+      nivaatHomeWatchingLine([snapshot],
+          alarms: [alarm],
+          checkStates: [flying(late)],
+          now: late.add(const Duration(minutes: 5))),
+      'Still checking wind · until 23 Jul 00:19',
+    );
+  });
+
+  test('nivaatHomeWatchingLine: with several open windows, quotes the soonest',
+      () {
+    final early = HistoryRecord(
+        alarmId: 1,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final laterAt = alarmAt.add(const Duration(minutes: 15));
+    final later = HistoryRecord(
+        alarmId: 2,
+        courtId: 'c1',
+        at: laterAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 45)),
+        outcome: CheckOutcome.skippedWindy);
+    const a1 = NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1');
+    const a2 = NivaatAlarm(id: 2, hour: 6, minute: 15, courtId: 'c1');
+    // Newest-first order would surface `later` first — the cue must still
+    // name the soonest cap (matches the home dismiss timer).
+    expect(
+      nivaatHomeWatchingLine([later, early],
+          alarms: [a1, a2],
+          checkStates: [flying(alarmAt, id: 1), flying(laterAt, id: 2)],
+          now: alarmAt.add(const Duration(minutes: 10))),
+      'Still checking wind · until 06:30',
+    );
+  });
+
+  test('a fired ring whose court is gone is cleared, not logged as orphan',
+      () async {
+    // removeCourt already sweeps history; if evaluate still runs with a stale
+    // empty courts list, don't mint a court-less "rang" row (2026-07-22).
+    await engine.store.saveCheckState(CheckState(
+      alarmId: 7,
+      alarmAt: alarmAt,
+      ringScheduled: true,
+      ringCourtSpeedKmh: 1.8,
+      ringRawGustKmh: 6.0,
+      ringVolume: 0.8875,
+      lastCheckAt: alarmAt.subtract(const Duration(minutes: 30)),
+    ));
+    await engine.evaluateAlarm(alarm, const [],
+        now: alarmAt.add(const Duration(minutes: 2)));
+
+    expect(await engine.store.loadHistory(), isEmpty);
+    expect(await engine.store.loadCheckState(7), isNull);
   });
 
   test('concurrent evaluations of one alarm serialize — no duplicate history',

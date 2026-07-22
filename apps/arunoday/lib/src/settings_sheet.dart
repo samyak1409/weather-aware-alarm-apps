@@ -85,19 +85,9 @@ class _SettingsPageState extends State<_SettingsPage> {
     ));
   }
 
-  /// Activate a saved location — but refuse polar ones with no daily dawn.
+  /// Activate a saved location.
   Future<void> _selectLocation(SavedLocation l) async {
-    if (!Solar.hasDailyDawnAllYear(DateTime.now().year, l.lat, l.lon)) {
-      _snack('No daily dawn at ${l.name} (polar region) — '
-          'Arunoday needs a real dawn.');
-      return;
-    }
     await c.update(c.settings.copyWith(activeLocationId: () => l.id));
-  }
-
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   Future<void> _editOffset() async {

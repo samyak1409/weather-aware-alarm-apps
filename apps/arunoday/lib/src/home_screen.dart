@@ -118,11 +118,7 @@ class _HomeScreenState extends State<HomeScreen>
           child: Column(
             children: [
               Expanded(
-                child: loc == null
-                    ? _empty(text)
-                    : c.activeLocationHasNoDawn
-                        ? _noDawn(text, loc)
-                        : _main(text, loc),
+                child: loc == null ? _empty(text) : _main(text, loc),
               ),
               // Below every branch, so the maker's mark never disappears.
               const CraftedBy(accent: AppPalette.dawn),
@@ -130,35 +126,6 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ),
       ),
-    );
-  }
-
-  Widget _noDawn(TextTheme text, SavedLocation loc) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Text('ARUNODAY', style: text.labelSmall),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(Icons.tune, size: 20),
-              color: AppPalette.textSecondary,
-              onPressed: () => showSettingsSheet(context, c),
-            ),
-          ],
-        ),
-        const Spacer(),
-        Text('No daily dawn at ${loc.name}.', style: text.headlineMedium),
-        const SizedBox(height: 12),
-        Text(
-          'This is a polar location where the sun does not cross the dawn '
-          'threshold every day. Pick another location in settings.',
-          style: text.bodyMedium,
-        ),
-        const Spacer(flex: 2),
-      ],
     );
   }
 
@@ -217,6 +184,8 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
         if (!kScreenshotHarness) ...[
+          // Armed-home only (location set) — empty intro stays clean
+          // (2026-07-22, same rule as Nivaat's ≥1-alarm gate).
           const AlarmPermissionBanner(
             appName: 'Arunoday',
             accent: AppPalette.dawn,

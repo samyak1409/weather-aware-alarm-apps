@@ -12,6 +12,7 @@ import 'src/sound_selection.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   applyMotionPacing();
+  await lockToPortrait();
   await Appearance.load();
   // One scheduler for BOTH wake and bedtime. On Android → the alarm package
   // (its ring screen still hosts the bedtime +1h ritual). On iOS 26+ →

@@ -22,6 +22,9 @@ class _HistorySheet extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     return SafeArea(
       child: SizedBox(
+        // Fixed height, accepted 2026-07-22: rows grow under large
+        // accessibility text and this box doesn't. Reviewed and left as-is —
+        // don't "fix" it into an intrinsic/fractional height without asking.
         height: 480,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
@@ -49,13 +52,15 @@ class _HistorySheet extends StatelessWidget {
                     itemBuilder: (context, i) {
                       final h = c.history[i];
                       final (icon, line) = switch (h.outcome) {
+                        // "vol." so the number can't read as a score — the
+                        // rest of the line is label-value too (2026-07-22).
                         CheckOutcome.rang => (
                             Icons.notifications_active_outlined,
-                            'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
+                            'Rang (vol. ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
                           ),
                         CheckOutcome.skippedWindy => (
                             Icons.air,
-                            'Skipped (windy) · ${h.windGustSummary}'
+                            'Skipped · ${h.windGustSummary}'
                           ),
                         CheckOutcome.skippedGusty => (
                             Icons.air,
@@ -74,7 +79,11 @@ class _HistorySheet extends StatelessWidget {
                         leading: Icon(icon, size: 20),
                         title: Text(line, style: text.titleMedium),
                         subtitle: Text(
-                          '${c.courtById(h.courtId)?.name ?? '—'} · '
+                          // Orphan rows are pruned on load, so this fallback
+                          // shouldn't fire — kept (and worded like N12) rather
+                          // than asserted, so a stray row degrades to one word
+                          // instead of blanking the sheet.
+                          '${c.courtById(h.courtId)?.name ?? 'court removed'} · '
                           '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
                           '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
                           '${fmtCheckTime(h.whenChecked, h.at)}'

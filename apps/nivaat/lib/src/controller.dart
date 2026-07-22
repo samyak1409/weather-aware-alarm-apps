@@ -19,6 +19,9 @@ class NivaatController extends ChangeNotifier {
   List<SavedLocation> courts = [];
   List<NivaatAlarm> alarms = [];
   List<HistoryRecord> history = [];
+  /// Per-alarm cascade state (alarm id → in-flight occurrence). Feeds the
+  /// home "still checking" cue so it only shows while retries actually run.
+  Map<int, CheckState> checkStates = {};
   bool loaded = false;
 
   SavedLocation? courtById(String id) {
@@ -26,6 +29,37 @@ class NivaatController extends ChangeNotifier {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  /// History, minus any row whose court is gone — and those rows are deleted
+  /// for good, not just hidden.
+  ///
+  /// `removeCourt` already sweeps a court's log, but a **background isolate**
+  /// can be mid-check with a stale courts list and land its row just after
+  /// that sweep (the store's `upsertHistory` exists because these isolates do
+  /// race). The leftover renders as a court-less entry, so every load prunes
+  /// (2026-07-22). Called after `store.refresh()` in [resync], which is
+  /// exactly when a background write first becomes visible here.
+  ///
+  /// An EMPTY court list prunes too, and that's deliberate: deleting the last
+  /// court already takes its history with it, so with no courts every
+  /// surviving row is by definition an orphan. Safe only once [loaded] — before
+  /// [init] the in-memory `courts` default is also `[]` even when the store
+  /// still has courts, so [resync] must not call this until then (2026-07-23).
+  /// Store-side, `[]` can only mean "nothing saved": `_decodeList` returns it
+  /// for an absent key and *throws* on corrupt JSON.
+  Future<List<HistoryRecord>> _loadHistory() async {
+    final rows = await store.loadHistory();
+    final live = {for (final c in courts) c.id};
+    final orphans = {
+      for (final r in rows)
+        if (!live.contains(r.courtId)) r.courtId
+    };
+    if (orphans.isEmpty) return rows;
+    for (final id in orphans) {
+      await store.removeHistoryForCourt(id);
+    }
+    return store.loadHistory();
   }
 
   /// An already-saved court within ~100 m (true great-circle distance), else
@@ -62,18 +96,34 @@ class NivaatController extends ChangeNotifier {
   Future<void> _reload() async {
     courts = await store.loadCourts();
     alarms = await store.loadAlarms();
-    history = await store.loadHistory();
+    history = await _loadHistory();
+    await _reloadCheckStates();
+  }
+
+  Future<void> _reloadCheckStates() async {
+    final next = <int, CheckState>{};
+    for (final a in alarms) {
+      final s = await store.loadCheckState(a.id);
+      if (s != null) next[a.id] = s;
+    }
+    checkStates = next;
   }
 
   /// Re-runs the whole cascade (app open / resume / ring start-stop / edits).
   Future<void> resync() async {
+    // Before [init], `courts` is still the empty default — orphan prune would
+    // treat every history row as dead and wipe the log (open-during-ring /
+    // early resume / ui-resync ping can all land here). init always resyncs
+    // once courts are loaded, so dropping these is safe (2026-07-23).
+    if (!loaded) return;
     try {
       // First pull in what background isolates wrote (rows, check state) —
       // this isolate's SharedPreferences cache doesn't see them otherwise, and
       // the engine would re-decide from stale state.
       await store.refresh();
       await engine.evaluateAll();
-      history = await store.loadHistory();
+      history = await _loadHistory();
+      await _reloadCheckStates();
       notifyListeners();
     } on Exception catch (e, st) {
       // Never-brick: a wind fetch / plugin hiccup must not take the process
@@ -118,7 +168,8 @@ class NivaatController extends ChangeNotifier {
     // Then delete the court's whole skip/ring log — after the cancels, so
     // nothing re-adds a row for an alarm we just removed.
     await store.removeHistoryForCourt(id);
-    history = await store.loadHistory();
+    history = await _loadHistory();
+    await _reloadCheckStates();
     notifyListeners();
   }
 
@@ -146,6 +197,9 @@ class NivaatController extends ChangeNotifier {
     // fired is finalised into history first — and against the PRE-edit alarm,
     // whose court/thresholds that ring belongs to.
     await engine.discardOccurrence(previous ?? alarm);
+    // Drop stale in-flight state before notify so the home cue can't flash
+    // "still checking" for an occurrence we just discarded (toggle / edit).
+    await _reloadCheckStates();
     notifyListeners();
     // The wind evaluation hits the network — never block the UI on it.
     unawaited(_evaluateInBackground(alarm));
@@ -156,6 +210,10 @@ class NivaatController extends ChangeNotifier {
     final removed = alarms.where((a) => a.id == id).toList();
     alarms = alarms.where((a) => a.id != id).toList();
     await store.saveAlarms(alarms);
+    checkStates = {
+      for (final e in checkStates.entries)
+        if (e.key != id) e.key: e.value
+    };
     notifyListeners();
     for (final a in removed) {
       unawaited(_evaluateInBackground(a.copyWith(enabled: false)));
@@ -164,7 +222,8 @@ class NivaatController extends ChangeNotifier {
 
   Future<void> _evaluateInBackground(NivaatAlarm alarm) async {
     await engine.evaluateAlarm(alarm, courts);
-    history = await store.loadHistory();
+    history = await _loadHistory();
+    await _reloadCheckStates();
     notifyListeners();
   }
 

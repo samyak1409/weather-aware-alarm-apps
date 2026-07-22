@@ -45,11 +45,16 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   NivaatController get c => widget.controller;
 
+  /// Fires when an active "+30m still checking" window ends so the home cue
+  /// clears without waiting for the next resync.
+  Timer? _watchExpiry;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_onChanged);
+    _armWatchExpiry();
     if (kScreenshotHarness) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(runScreenshotHarness(context, c));
@@ -59,19 +64,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _watchExpiry?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_onChanged);
     super.dispose();
   }
 
-  void _onChanged() => setState(() {});
+  void _onChanged() {
+    _armWatchExpiry();
+    setState(() {});
+  }
+
+  void _armWatchExpiry() {
+    _watchExpiry?.cancel();
+    _watchExpiry = null;
+    // Same pick as the cue text — clears with late ring / alarm gone too.
+    final open = nivaatSoonestOpenWatch(
+      c.history,
+      alarms: c.alarms,
+      checkStates: c.checkStates.values,
+    );
+    final until = open?.watchedUntil;
+    if (until == null) return;
+    final delay = until.difference(DateTime.now());
+    _watchExpiry = Timer(delay.isNegative ? Duration.zero : delay, () {
+      if (!mounted) return;
+      // Re-arm: another alarm may still be inside its +30m window.
+      _armWatchExpiry();
+      setState(() {});
+    });
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) c.resync();
+    // Background isolates write history the UI isolate's prefs cache can't
+    // see — pull on every resume (bg checks also ping via ui_resync).
+    if (state == AppLifecycleState.resumed) unawaited(c.resync());
   }
 
   Future<void> _addAlarm() async {
+    // No court yet: bootstrap via place picker, then open the alarm editor
+    // (courts sheet auto-dismisses after the first save — Settings keeps the
+    // list open when adding from there).
     if (c.courts.isEmpty) {
       final added = await showCourtsSheet(context, c, promptAdd: true);
       if (!added || !mounted) return;
@@ -83,6 +117,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     if (!c.loaded) return const Scaffold(body: SizedBox.shrink());
+    final watchingLine = nivaatHomeWatchingLine(
+      c.history,
+      alarms: c.alarms,
+      checkStates: c.checkStates.values,
+    );
 
     return Scaffold(
       floatingActionButton: FloatingActionButton(
@@ -102,8 +141,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Text('NIVAAT', style: text.labelSmall),
                   const Spacer(),
                   // Sound, courts, and history live in settings now
-                  // (2026-07-20, Samyak: one entry point is cleaner); the
-                  // last-outcome line below doubles as a history shortcut.
+                  // (2026-07-20, Samyak: one entry point is cleaner); a live
+                  // "still checking" cue below doubles as a history shortcut
+                  // only while the +30m window is open (2026-07-22).
                   IconButton(
                     icon: const Icon(Icons.tune, size: 20),
                     color: AppPalette.textSecondary,
@@ -112,7 +152,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            if (!kScreenshotHarness) ...[
+            // Permission nudges only once there's something to protect
+            // (2026-07-22: keep the intro hero clean — same rule as Arunoday).
+            if (!kScreenshotHarness && c.alarms.isNotEmpty) ...[
               const AlarmPermissionBanner(
                   appName: 'Nivaat', accent: AppPalette.wind),
               NotificationPermissionBanner(
@@ -130,7 +172,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
             ],
-            if (c.history.isNotEmpty) _lastOutcome(text),
+            if (watchingLine != null) _watchingCue(text, watchingLine),
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
@@ -159,35 +201,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.fromLTRB(28, 20, 88, 32),
       child: Text(
         nivaatBackgroundNote,
-        style: text.bodyMedium!.copyWith(fontSize: 12),
+        style: text.bodyMedium!.copyWith(
+          fontSize: 12,
+          // Quieter than body secondary — a standing caveat, not a headline
+          // (2026-07-22, Samyak: was competing with the alarm list).
+          color: AppPalette.textSecondary.withValues(alpha: 0.5),
+        ),
       ),
     );
   }
 
-  Widget _lastOutcome(TextTheme text) {
-    final h = c.history.first;
-    final line = switch (h.outcome) {
-      CheckOutcome.rang =>
-        'Rang (at ${(h.volume! * 100).round()}%) · ${h.windGustSummary}',
-      CheckOutcome.skippedWindy => 'Skipped (windy) · ${h.windGustSummary}',
-      CheckOutcome.skippedGusty => 'Skipped (gusty) · ${h.windGustSummary}',
-      CheckOutcome.skippedNoData => 'Skipped (no data)',
-    };
-    final verb = h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked';
-    final court = c.courtById(h.courtId)?.name ?? '—';
-    final watching = nivaatStillWatchingNote(h);
-    final when = '$court · ${fmtShortDate(h.at)} ${fmtClock(h.at)} · '
-        '$verb ${fmtCheckTime(h.whenChecked, h.at)}';
-    // The line is the newest history row — tapping it opens the full log.
-    // Bottom pad keeps scrolling alarm rows from kissing this fixed line
-    // (2026-07-22: was 8 — too tight with a long list).
-    return InkWell(
-      onTap: () => showHistorySheet(context, c),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 0, 28, 16),
-        child: Text(
-          '$when — $line${watching == null ? '' : ' · $watching'}',
-          style: text.bodyMedium,
+  /// Live "+30m still checking" cue only (MESSAGES N21). Tap → full history.
+  ///
+  /// Leading wind-accent ● in the text run (not a separate widget) — "live +
+  /// tappable" without a word prefix. Full-width [InkWell] so a short line
+  /// still highlights edge-to-edge. Outer bottom 8 + ink bottom 8 keeps the
+  /// same 16px gap to the list.
+  Widget _watchingCue(TextTheme text, String line) {
+    final body = text.bodyMedium!;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => showHistorySheet(context, c),
+          child: SizedBox(
+            width: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(28, 8, 28, 8),
+              child: Text.rich(
+                TextSpan(
+                  style: body,
+                  children: [
+                    TextSpan(
+                      text: '● ',
+                      style: body.copyWith(color: AppPalette.wind),
+                    ),
+                    TextSpan(text: line),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

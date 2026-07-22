@@ -6,6 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeScheduler implements AlarmScheduler {
   final Map<int, DateTime> scheduled = {};
+
+  /// Notification titles/bodies by id. A1/A2 copy is the only user-facing
+  /// string this controller builds, and nothing asserted it before 2026-07-22.
+  final Map<int, String> titles = {};
+  final Map<int, String> bodies = {};
   final Set<int> ringing = {};
 
   @override
@@ -20,10 +25,16 @@ class FakeScheduler implements AlarmScheduler {
     required double volume,
   }) async {
     scheduled[id] = at;
+    titles[id] = title;
+    bodies[id] = body;
   }
 
   @override
-  Future<void> cancel(int id) async => scheduled.remove(id);
+  Future<void> cancel(int id) async {
+    scheduled.remove(id);
+    titles.remove(id);
+    bodies.remove(id); // keep the maps in step, or stale copy lingers
+  }
 
   @override
   Future<Set<int>> scheduledIds() async => scheduled.keys.toSet();
@@ -183,28 +194,6 @@ void main() {
     await c.resync();
     expect(c.settings.oneTimeExtraDate, isNull);
     expect(c.settings.oneTimeExtraMinutes, 0);
-  });
-
-  test('a polar active location: no-dawn flag, null plan, alarms cancelled',
-      () async {
-    final fake = FakeScheduler();
-    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
-    await c.init();
-    await c.update(const ArunodaySettings(
-      locations: [tonk],
-      activeLocationId: 'tonk',
-    ));
-    expect(fake.scheduled, isNotEmpty);
-
-    const pole = SavedLocation(id: 'sp', name: 'South Pole', lat: -90, lon: 0);
-    await c.update(c.settings.copyWith(
-      locations: [tonk, pole],
-      activeLocationId: () => 'sp',
-    ));
-    expect(c.activeLocationHasNoDawn, isTrue);
-    expect(c.plan, isNull);
-    expect(fake.scheduled, isEmpty,
-        reason: 'an unusable location cancels all alarms');
   });
 
   test('arunodaySoundForVolume falls back to the default, else the selection',
@@ -369,6 +358,47 @@ void main() {
 
     await c.update(c.settings.copyWith(wakeOffsetMinutes: 385)); // +6:25
     expect(c.bedtimeMinutes, bed, reason: 'bedtime anchors to pure dawn');
+  });
+
+  test('A1/A2 titles capitalise Dawn/Bedtime; A1 offset hangs off Dawn',
+      () async {
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    // Wake ids < 2000, bedtime 2000+. Collect — an empty set must fail here,
+    // not pass vacuously.
+    List<String> wakeTitles() => [
+          for (final e in fake.titles.entries)
+            if (e.key < 2000) e.value
+        ];
+    List<String> bedTitles() => [
+          for (final e in fake.titles.entries)
+            if (e.key >= 2000 && e.key < 2999) e.value
+        ];
+    List<String> wakeBodies() => [
+          for (final e in fake.bodies.entries)
+            if (e.key < 2000) e.value
+        ];
+
+    expect(wakeTitles(), isNotEmpty);
+    expect(wakeTitles(), everyElement('Arunoday · Dawn'));
+    expect(bedTitles(), isNotEmpty);
+    expect(bedTitles(), everyElement('Arunoday · Bedtime'));
+
+    // Offset 0 — the wake IS the dawn, so there's no offset to print at all.
+    expect(wakeBodies(), isNotEmpty);
+    expect(wakeBodies(), everyElement('First light at Tonk. Good morning.'));
+
+    await c.update(c.settings.copyWith(wakeOffsetMinutes: 20));
+    // "Dawn+0:20", never "Dawn +0:20" — word and offset are one value, as in
+    // A7's "DAWN+0:20" and A13's "Auto+0:30" (2026-07-22).
+    expect(wakeBodies(), isNotEmpty);
+    expect(wakeBodies(), everyElement('Dawn+0:20 at Tonk. Good morning.'));
+    expect(wakeTitles(), everyElement('Arunoday · Dawn'));
   });
 
   test('wake offset shifts nextWake', () async {

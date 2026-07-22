@@ -4,6 +4,12 @@ import 'package:flutter/material.dart';
 import 'controller.dart';
 
 /// Returns true if at least one court exists when the sheet closes.
+///
+/// [promptAdd]: FAB "add alarm" with zero courts — auto-opens the place
+/// picker, then dismisses this sheet as soon as the first court is saved
+/// (caller then opens the alarm editor) **or** if the picker is cancelled
+/// (caller sees `false` and stays on home — no editor without a court).
+/// Settings opens with [promptAdd] false and stays on the courts list.
 Future<bool> showCourtsSheet(
   BuildContext context,
   NivaatController c, {
@@ -111,12 +117,21 @@ class _CourtsSheetState extends State<_CourtsSheet> {
   }
 
   Future<void> _addCourt() async {
+    // FAB bootstrap: empty → pick a place → continue to the alarm sheet.
+    // Don't leave the user on the courts list (that's for Settings).
+    final bootstrap = widget.promptAdd && c.courts.isEmpty;
     final place = await showLocationSearch(context, validate: (lat, lon) {
       final dup = c.existingCourtNear(lat, lon);
       return dup == null ? null : 'Same spot as ${dup.name} — already added.';
     });
-    if (place == null || !mounted) return;
+    if (place == null) {
+      if (bootstrap && mounted) Navigator.pop(context);
+      return;
+    }
+    if (!mounted) return;
     await c.addCourt(place);
+    if (!mounted) return;
+    if (bootstrap) Navigator.pop(context);
   }
 
   @override

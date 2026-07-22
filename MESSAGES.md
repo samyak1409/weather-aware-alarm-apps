@@ -9,10 +9,10 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 ## Shared formatting helpers
 
 - `HH:MM` (`fmtClock`) → 24h, zero-padded: `06:00`, `21:56`.
-- `date` (`fmtShortDate`) → `18 Jul`.
+- `date` (`fmtShortDate`) → `18 Jul`. **No year, accepted 2026-07-22** — Nivaat's history is append-only, so rows a year apart look identical; reviewed and left as-is.
 - `checktime` (`fmtCheckTime`) → time only same-day (`05:59`); dated across midnight (`17 Jul 22:00`).
 - `windgust` (`fmtWindGust`) → `wind 3 (≤4) · gusts 12 (≤15) km/h`.
-- `±offset` (`fmtOffset`) → `+0:20`, `−0:30`.
+- `±offset` (`fmtOffset`) → `+0:20`, `−0:30`. **Never spaced off the word it modifies** — `Dawn+0:20`, `DAWN+0:20`, `Auto+0:30` are each one value, not two (2026-07-22).
 
 ---
 
@@ -22,19 +22,19 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 
 ### A1 — Wake ring (system alarm)
 
-- **Title:** `Arunoday · dawn`
+- **Title:** `Arunoday · Dawn`
 - **Body:** offset 0 → `First light at {loc}. Good morning.` → `First light at Jaipur. Good morning.`
-  else → `Dawn {±offset} at {loc}. Good morning.` → `Dawn +0:20 at Jaipur. Good morning.`
+  else → `Dawn{±offset} at {loc}. Good morning.` → `Dawn+0:20 at Jaipur. Good morning.`
 - **Button:** `Stop`
 
 ### A2 — Bedtime ring
 
-- **Title:** `Arunoday · bedtime`
+- **Title:** `Arunoday · Bedtime`
 - **Body:** `Wind down — dawn comes early.`
 
 ### A3 — Bedtime "AGAIN" re-ring (after +1h)
 
-- **Title:** `Arunoday · bedtime`
+- **Title:** `Arunoday · Bedtime`
 - **Body:** `Second call — dawn does not snooze.`
 
 ## Ring screen (in-app overlay while an alarm sounds)
@@ -54,7 +54,6 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 - **A9 — Footer:** `Dawn {today|tomorrow} {HH:MM}{ · Sunrise {HH:MM}}` + second line `{loc name}`
   → `Dawn today 06:51 · Sunrise 07:18` / `Jaipur`
 - **A10 — Empty state:** title `Wake with the dawn.` · body `Add your location — the alarm follows its real dawn, every day of the year.` · button `Add location`
-- **A11 — No-dawn (polar) screen:** `No daily dawn at {loc}.` → `No daily dawn at Tromsø.` · body `This is a polar location where the sun does not cross the dawn threshold every day. Pick another location in settings.`
 
 ## Settings sheet
 
@@ -65,7 +64,7 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
   → `Year here: sleep 7h 33m (summer) to 8h 27m (winter) — the natural swing of dawn at this latitude.`
 - **A16 — Bedtime picker:** helpText `BEDTIME` · title `BEDTIME` · hint `{auto is {HH:MM} | manual} · tap the time to pick exactly` → `auto is 21:56 · tap the time to pick exactly` · buttons `Cancel`, `Save`
 - **A17 — Wake-offset picker:** helpText `WAKE TIME` · title `WAKE OFFSET` · hint `{relative to civil dawn | dawn {HH:MM} · wake {HH:MM}}` + `tap the offset to pick the wake time` → `dawn 06:51 · wake 07:11` + `tap the offset to pick the wake time` · buttons `Cancel`, `Save`
-- **A18 — Validation:** wake↔bedtime collisions show live inside the wake-offset / bedtime dialogs (`Bedtime can't be the same as the wake alarm.` / `Wake time can't be the same as the bedtime.`) with Save disabled. Polar refuse stays a SnackBar: `No daily dawn at {l} (polar region) — Arunoday needs a real dawn.` → `No daily dawn at Tromsø (polar region) — Arunoday needs a real dawn.`
+- **A18 — Validation:** wake↔bedtime collisions show live inside the wake-offset / bedtime dialogs (`Bedtime can't be the same as the wake alarm.` / `Wake time can't be the same as the bedtime.`) with Save disabled. Polar refuse is picker-only at add: `No daily dawn here (polar) — Arunoday needs a real dawn.` → same wording for Tromsø etc.
   _(Bedtime **is** allowed to land on a pending re-ring's minute — the re-ring wins that slot so only one alarm sounds, and if the re-ring is cancelled the daily bedtime takes it back.)_
 
 ---
@@ -74,65 +73,81 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 
 ## Notifications
 
-_In every Nivaat title below, `{HH:MM}` is the **alarm time you set** (e.g. `06:00`) — never the ring time or the wind-check time. (Verified in code: all three titles use the occurrence's scheduled time.)_
+_All three titles share one shape — `{court} · {HH:MM} · {status}` (`nivaatNotificationTitle`), status being `Play! 🏸` / `Still checking` / `Skipped`. **The app name is deliberately absent** (2026-07-22): both OS notification headers already print "Nivaat" above the title, so repeating it there spent the scannable head of the line on a duplicate. The court leads instead — it's what tells two alarms apart — and for the same reason the bodies below no longer name it. Statuses are **sentence-capitalised**: they head a title, not a mid-sentence clause. `{HH:MM}` is the **alarm time you set** (e.g. `06:00`) — never the ring time or the wind-check time._
+
+_Every body is now **just the evidence** (2026-07-22): the verdict lives in the title, so the trailing promises (`will ring if it calms`, `will ring once it's reachable`) and the sign-off (`— next time`) are gone, and with them the 🏸 — which survives only as part of the ring's status, the one moment that earns it._
 
 ### N1 — Ring (the alarm itself; AlarmKit on iOS, `alarm` package on Android)
 
-- **Title:** `Nivaat {HH:MM} · {court}` → `Nivaat 06:00 · Society Court`
-- **Body:** `{windgust} — play! 🏸` → `wind 3 (≤4) · gusts 12 (≤15) km/h — play! 🏸`
+- **Title:** `{court} · {HH:MM} · Play! 🏸` → `Society Court · 06:00 · Play! 🏸`
+- **Body:** `{windgust} · checked {checktime}` → `wind 3 (≤4) · gusts 12 (≤15) km/h · checked 06:00`
 - **Button:** `Stop`
+- The ring carries its freshness too (2026-07-22) — a ring booked from last night's forecast says `· checked 17 Jul 22:00`, so a 6am reading is never confused with a 12-hour-old one. Same instant its N5 history row shows.
 
 ### N2 — Heads-up ("still checking"), posted at T while the retry window runs
 
-- **Title:** `Nivaat {HH:MM} · still checking` → `Nivaat 06:00 · still checking`
-- **Body — windy:** `{court} too windy · {windgust} · checked {checktime} · keeping watch until {HH:MM}, will ring if it calms 🏸`
-  → `Society Court too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · checked 06:00 · keeping watch until 06:30, will ring if it calms 🏸`
-- **Body — gusty:** `{court} too gusty · {windgust} · checked {checktime} · keeping watch until {HH:MM}, will ring if it calms 🏸`
-  → `Society Court too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · checked 06:00 · keeping watch until 06:30, will ring if it calms 🏸`
-- **Body — no-data:** `Couldn't reach the wind at {court} · last tried {checktime} · keeping watch until {HH:MM}, will ring once it's reachable 🏸`
-  → `Couldn't reach the wind at Society Court · last tried 06:00 · keeping watch until 06:30, will ring once it's reachable 🏸`
+- **Title:** `{court} · {HH:MM} · Still checking` → `Society Court · 06:00 · Still checking`
+- **Body — windy:** `Too windy · {windgust} · checked {checktime} · watching until {checktime}`
+  → `Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · checked 06:00 · watching until 06:30`
+- **Body — gusty:** `Too gusty · {windgust} · checked {checktime} · watching until {checktime}`
+  → `Too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · checked 06:00 · watching until 06:30`
+- **Body — no-data:** `Couldn't reach the wind · last tried {checktime} · watching until {checktime}`
+  → `Couldn't reach the wind · last tried 06:00 · watching until 06:30`
+- The body is N3's plus ` · watching until {checktime}` — and that deadline phrase is word-for-word N17's history watch note (same `fmtCheckTime` vs the alarm, so a late-night cap crossing midnight dates itself).
+- **Left standing after the outcome — locked 2026-07-22, don't "fix" it.** Nothing cancels or rewrites this card, so after a late ring at 06:07 it still reads `Still checking … watching until 06:30`. Accepted: its counterpart arrives as its own card (N3) or as the ring itself (N1), and history keeps both moments as separate rows. Note the asymmetry is real — N17 ages `watching` → `watched` once the deadline passes; the notification cannot.
 
 ### N3 — Skip card (final), at the +30m cap or on a late first-open
 
-- **Title:** `Nivaat {HH:MM} · skipped` → `Nivaat 06:00 · skipped`
-- **Body — windy:** `{court} too windy · {windgust} · checked {checktime} — next time 🏸`
-  → `Society Court too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · checked 06:29 — next time 🏸`
-- **Body — gusty:** `{court} too gusty · {windgust} · checked {checktime} — next time 🏸`
-  → `Society Court too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · checked 06:29 — next time 🏸`
-- **Body — no-data:** `Couldn't reach the wind at {court} · last tried {checktime}` _(no sign-off)_
-  → `Couldn't reach the wind at Society Court · last tried 06:29`
+- **Title:** `{court} · {HH:MM} · Skipped` → `Society Court · 06:00 · Skipped`
+- **Body — windy:** `Too windy · {windgust} · checked {checktime}`
+  → `Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · checked 06:29`
+- **Body — gusty:** `Too gusty · {windgust} · checked {checktime}`
+  → `Too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · checked 06:29`
+- **Body — no-data:** `Couldn't reach the wind · last tried {checktime}` _(no numbers — there were none)_
+  → `Couldn't reach the wind · last tried 06:29`
 
-### N4 — Skip notification channel (Android)
+### N4 — Notification channel (Android)
 
-- **Name:** `Skipped alarms` · **Description:** `Why an alarm did not ring`
+- **Name:** `Alarm updates` · **Description:** `Still checking, and why an alarm didn't ring` · **id:** `nivaat_alarm_updates`
+- Carries **both** N2 and N3, so it can't be named for only one: the old `Skipped alarms` meant muting the skip explanations also killed the still-checking heads-up — the card that's still worth acting on (renamed 2026-07-22).
 
 ## History
 
-Shown in two places: the **history sheet** (a scrollable list of past outcomes; opened from settings, or by tapping the home "last outcome" line) and the home screen's single **"last outcome"** line. Each entry has a **line** — the primary text (outcome + numbers) — and a **sub** — the smaller secondary line beneath it (court + when + freshness). Both lead with the **court name**.
+Shown in the **history sheet** (a scrollable list of past outcomes; opened from settings, or by tapping the home "still checking" cue while a retry window is open). Each entry has a **line** — the primary text (outcome + numbers) — and a **sub** — the smaller secondary line beneath it (court + when + freshness). Both lead with the **court name**.
 
 History is an **append-only log mirroring the notifications** (2026-07-20): an occurrence that misses its T leaves the heads-up **snapshot row** right then (what N2 said, marked with N17's watch note), and its **final outcome** — the cap's skip, or a late ring — is a **separate second row**. Both stay forever; nothing is overwritten.
 
 | Outcome        | Line (template → example)                                                              | Sheet sub (example)                                 |
 | -------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| **N5** rang    | `Rang (at {vol}%) · {windgust}` → `Rang (at 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`  | `Society Court · 18 Jul · 06:00 · checked 06:00`    |
-| **N6** windy   | `Skipped (windy) · {windgust}` → `Skipped (windy) · wind 6 (≤4) · gusts 18 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
+| **N5** rang    | `Rang (vol. {vol}%) · {windgust}` → `Rang (vol. 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`  | `Society Court · 18 Jul · 06:00 · checked 06:00`    |
+| **N6** windy   | `Skipped · {windgust}` → `Skipped · wind 6 (≤4) · gusts 18 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
 | **N7** gusty   | `Skipped (gusty) · {windgust}` → `Skipped (gusty) · wind 3 (≤4) · gusts 16 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
 | **N8** no-data | `Skipped (no data)`                                                                    | `Society Court · 18 Jul · 06:00 · last tried 06:29` |
 
 - Sheet **sub** = `{court} · {date} · {HH:MM} · {checked|last tried} {checktime}{ · watch note}`.
-- Home **last outcome** = `{court} · {date} {HH:MM} · {checked|last tried} {checktime} — {line}{ · watch note}` → `Society Court · 18 Jul 06:00 · checked 06:00 — Rang (at 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`.
-- `HH:MM` is the **alarm time**; "checked" = last successful reading, "last tried" = last attempt for a no-data skip.
+- `{vol}` is the ring's **volume** (the wind ramp — calmer morning, louder ring, per N11), not a score. Written `vol. 88%` so it can't be read as one (2026-07-22).
+- **N6's bare `Skipped` means windy — locked 2026-07-22, don't add `(windy)`.** Windy is the default skip, so only the exceptions carry a label (`(gusty)`, `(no data)`). Accepted consequence: the sheet's wording differs from the card's, which says `Too windy` for the same event.
+- A row whose court is gone is **pruned on load**, so `{court}` always resolves. The `court removed` fallback (same wording as N12) is defence only — deleting a court already sweeps its log; the gap was a background check landing a row just after that sweep.
+- `HH:MM` is the **alarm time**; "checked" = last successful reading, "last tried" = last attempt for a no-data skip. One helper (`nivaatCheckedNote`) writes this phrase for **all** of N1/N2/N3, so a card and its history row can't drift.
 
 ### N17 — Watch note (heads-up snapshot rows only)
 
-- While the +30m retry window runs: ` · watching until {HH:MM}` → ` · watching until 06:30`
-- Forever after: ` · watched until {HH:MM}` → ` · watched until 06:30`
-- Appended to the sheet sub and the home last-outcome line; marks the row as the at-T snapshot whose final outcome is its own later row (N5–N8). Final rows never carry it.
+- While the +30m retry window runs: ` · watching until {checktime}` → ` · watching until 06:30` (same-day) / ` · watching until 23 Jul 00:19` (cap crosses midnight vs the alarm)
+- Forever after: ` · watched until {checktime}` → ` · watched until 06:30`
+- Appended to the sheet sub; marks the row as the at-T snapshot whose final outcome is its own later row (N5–N8). Final rows never carry it.
+
+### N21 — Home watching cue (only while a +30m window is open)
+
+- Text: `Still checking wind · until {checktime}` → `Still checking wind · until 06:30`
+- Leading wind-accent filled bullet in the text (`● Still checking wind · until 06:30`) — "live + tappable", not a word prefix.
+- With several open windows, quotes the **soonest** cap (same pick the home dismiss timer uses).
+- **Clears when checking actually stops (2026-07-23)** — unlike N2 (a posted notification can't rewrite itself): a final row for the same `alarmId + at` (late ring / cap skip), the alarm gone/disabled, **or** live `CheckState` no longer targeting that occurrence (toggle-off discards it; toggle-on re-arms tomorrow — cue must not reappear for today's dead retries). Hidden the rest of the time (no permanent "last outcome" dump on home — 2026-07-22). Tap opens the history sheet.
 
 ## Home screen
 
 - **N9 — App label:** `NIVAAT`
-- **N10 — Background note (footer, only when ≥1 alarm):** `Keep the phone charged and online before your alarm — the background wind check needs both.` Soft-wraps (no hard newlines — large accessibility text must reflow cleanly). Hidden on the empty intro.
+- **N21 — Watching cue** (only while a +30m retry window is open): see History § N21 above.
+- **N10 — Background note (footer, only when ≥1 alarm):** `Keep the phone charged and online before your alarm — the background wind check needs both.` Soft-wraps (no hard newlines — large accessibility text must reflow cleanly). Hidden on the empty intro. Rendered at 50% of secondary text opacity (2026-07-22) so it stays a quiet caveat.
 - **N11 — Empty state:** title `The windless alarm.` · body `Rings only when the wind at your court is low enough to play. The calmer the morning, the louder it rings.`
 - **N12 — Alarm list row (sub):** `{weekdays} · {court} · ≤{limit} km/h` → `Every day · Society Court · ≤4 km/h` — court deleted → `court removed`
 - **N18 — Background-checks banner** (shown while the OS throttles background wind checks; hidden while the first-run exemption dialog is up):

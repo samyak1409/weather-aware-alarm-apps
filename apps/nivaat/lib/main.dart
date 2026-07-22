@@ -10,6 +10,7 @@ import 'src/battery_optimization.dart';
 import 'src/controller.dart';
 import 'src/engine.dart';
 import 'src/home_screen.dart';
+import 'src/ui_resync.dart';
 
 /// iOS BGAppRefresh dispatcher (Workmanager). Runs in a background isolate.
 @pragma('vm:entry-point')
@@ -17,6 +18,7 @@ void workmanagerDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     DartPluginRegistrant.ensureInitialized();
     await (await NivaatEngine.standard()).evaluateAll();
+    pingNivaatUiResync();
     return true;
   });
 }
@@ -24,6 +26,7 @@ void workmanagerDispatcher() {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   applyMotionPacing();
+  await lockToPortrait();
   await Appearance.load();
 
   // NivaatEngine.standard() also loads the selected alarm tone into
@@ -42,6 +45,9 @@ Future<void> main() async {
   }
 
   final controller = NivaatController(engine: engine);
+  // ui_resync registers after [controller.init] in `_finishStartup` — a ping
+  // before courts are loaded would race the orphan prune (resync is also
+  // guarded on `loaded`; this just keeps the port closed until then).
   // Notification permission, both platforms (skip cards; Android also the
   // ring card). The future resolves when the dialog is answered — kept so the
   // home screen's denied-banner can re-check at that exact moment.
@@ -89,6 +95,7 @@ Future<void> _finishStartup(
     debugPrint('nivaat CheckScheduler.initialize failed (non-fatal): $e');
   }
   await controller.init();
+  registerNivaatUiResync(controller);
 }
 
 class NivaatApp extends StatelessWidget {

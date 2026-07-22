@@ -14,6 +14,7 @@ export 'src/motion.dart';
 export 'src/notification_permission_banner.dart';
 export 'src/nudge_banner.dart';
 export 'src/open_meteo.dart';
+export 'src/portrait.dart';
 export 'src/repos.dart';
 export 'src/ring_gate.dart';
 export 'src/system_settings.dart';
