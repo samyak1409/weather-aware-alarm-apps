@@ -4,6 +4,8 @@ import 'package:core/core.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'ids.dart';
+
 /// Title of all three Nivaat cards (MESSAGES.md N1/N2/N3):
 /// `{court} · {HH:MM} · {status}` — [kNivaatRing] / [kNivaatStillChecking] /
 /// [kNivaatSkipped].
@@ -141,11 +143,10 @@ class SkipNotifier {
   }
 
   // The "still checking" heads-up (at T) and the final skip card (at the cap)
-  // are SEPARATE notifications with distinct ids — so the cap fires a fresh,
-  // alerting card and does NOT overwrite the heads-up. Per-alarm ids, so a new
-  // day's occurrence replaces its own kind.
-  static const int _headsUpId = 600000;
-  static const int _skipId = 610000;
+  // are SEPARATE notifications with distinct ids ([NivaatIds.headsUp] /
+  // [NivaatIds.skip]) — so the cap fires a fresh, alerting card and does NOT
+  // overwrite the heads-up. Per-alarm ids, so a new day's occurrence replaces
+  // its own kind.
 
   // Shared card style — a normal audible notification.
   //
@@ -174,7 +175,7 @@ class SkipNotifier {
       HistoryRecord record, String courtName, DateTime until) async {
     await ensureInitialized();
     await _plugin.show(
-      id: _headsUpId + record.alarmId,
+      id: NivaatIds.headsUp(record.alarmId),
       title:
           nivaatNotificationTitle(courtName, record.at, kNivaatStillChecking),
       body: nivaatExtendedCheckBody(record, until),
@@ -190,10 +191,24 @@ class SkipNotifier {
     if (body.isEmpty) return;
 
     await _plugin.show(
-      id: _skipId + record.alarmId,
+      id: NivaatIds.skip(record.alarmId),
       title: nivaatNotificationTitle(courtName, record.at, kNivaatSkipped),
       body: body,
       notificationDetails: _details,
     );
+  }
+
+  /// Pull down both of [alarmId]'s cards. Called when an alarm stops being a
+  /// live thing — deleted, disabled, or its court removed.
+  ///
+  /// Without this a heads-up card outlives its alarm and keeps making a
+  /// promise nothing is keeping: "Still checking … watching until 06:30" sits
+  /// in the shade after you delete the alarm at 06:05, until you swipe it away
+  /// by hand. Cancelling an id that isn't posted is a no-op, so this is safe
+  /// to call on every pass. History keeps the durable record either way.
+  Future<void> cancelForAlarm(int alarmId) async {
+    await ensureInitialized();
+    await _plugin.cancel(id: NivaatIds.headsUp(alarmId));
+    await _plugin.cancel(id: NivaatIds.skip(alarmId));
   }
 }

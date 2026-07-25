@@ -1,13 +1,15 @@
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 
+import 'ids.dart';
 import 'sound_selection.dart' as sound;
 
 /// App state + alarm orchestration for Arunoday.
 ///
 /// Scheduling model (v1): a rolling window of the next [windowDays] wake and
-/// bedtime alarms, resynced on every app open / settings change. Wake ids are
-/// 1000+dayIndex, bedtime ids 2000+dayIndex.
+/// bedtime alarms, resynced on every app open / settings change. Every id
+/// comes from [ArunodayIds] — keyed on the alarm's calendar day, so a given
+/// day's alarm keeps one id no matter when the resync runs.
 class ArunodayController extends ChangeNotifier {
   ArunodayController({
     required this.store,
@@ -17,7 +19,18 @@ class ArunodayController extends ChangeNotifier {
   final ArunodayStore store;
   final AlarmScheduler scheduler;
 
-  static const int windowDays = 7;
+  /// Days of alarms kept armed ahead. Tied to [ArunodayIds.slots]: the id map
+  /// needs exactly one locker per day in this window, so the two can never
+  /// drift apart.
+  static const int windowDays = ArunodayIds.slots;
+
+  /// The calendar day [i] days after [now]. A pure calendar step, NOT
+  /// `now.add(Duration(days: i))`: on a DST fall-back day adding 24h can land
+  /// back on the same calendar date, and two window slots resolving to one
+  /// date would then claim one id — silently dropping a day's alarm.
+  /// Only the y/m/d of this value is ever read (dawn math is date-only).
+  static DateTime _dayAhead(DateTime now, int i) =>
+      DateTime(now.year, now.month, now.day + i);
 
   ArunodaySettings settings = const ArunodaySettings();
   SleepPlanResult? plan;
@@ -284,14 +297,14 @@ class ArunodayController extends ChangeNotifier {
     final wanted = <int, ({DateTime at, String title, String body})>{};
 
     if (settings.wakeEnabled) {
-      for (var i = 0; i <= windowDays; i++) {
-        final day = now.add(Duration(days: i));
+      for (var i = 0; i < windowDays; i++) {
+        final day = _dayAhead(now, i);
         final wake = wakeOn(day);
         if (wake != null && wake.isAfter(now)) {
           // "First light" is only honest when the wake IS the dawn.
           final dawn = dawnOn(day);
           final shift = dawn == null ? 0 : wake.difference(dawn).inMinutes;
-          wanted[1000 + i] = (
+          wanted[ArunodayIds.wake(day)] = (
             at: wake,
             title: 'Arunoday · Dawn',
             body: shift == 0
@@ -315,12 +328,12 @@ class ArunodayController extends ChangeNotifier {
 
     final bed = bedtimeMinutes;
     if (settings.bedtimeEnabled && bed != null) {
-      for (var i = 0; i <= windowDays; i++) {
-        final day = now.add(Duration(days: i));
+      for (var i = 0; i < windowDays; i++) {
+        final day = _dayAhead(now, i);
         final at = DateTime(day.year, day.month, day.day)
             .add(Duration(minutes: bed.round()));
         if (at.isAfter(now) && at != reRing) {
-          wanted[2000 + i] = (
+          wanted[ArunodayIds.bedtime(day)] = (
             at: at,
             title: 'Arunoday · Bedtime',
             body: 'Wind down — dawn comes early.',
@@ -331,7 +344,7 @@ class ArunodayController extends ChangeNotifier {
 
     // "Not sleepy yet" delayed bedtime reminder from the ring screen.
     if (reRing != null) {
-      wanted[2999] = (
+      wanted[ArunodayIds.bedtimeAgain] = (
         at: delayed!,
         title: 'Arunoday · Bedtime',
         body: 'Second call — dawn does not snooze.',

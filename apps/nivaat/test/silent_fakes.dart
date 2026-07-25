@@ -17,6 +17,9 @@ class SilentNotifier extends SkipNotifier {
   @override
   Future<void> showExtendedCheck(
       HistoryRecord record, String courtName, DateTime until) async {}
+
+  @override
+  Future<void> cancelForAlarm(int alarmId) async {}
 }
 
 class SilentRing implements AlarmScheduler {

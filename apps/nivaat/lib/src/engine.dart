@@ -4,6 +4,7 @@ import 'package:core/core.dart';
 import 'package:flutter/widgets.dart';
 
 import 'check_scheduler.dart';
+import 'ids.dart';
 import 'skip_notifier.dart';
 import 'ui_resync.dart';
 
@@ -164,6 +165,36 @@ class NivaatEngine {
     }
   }
 
+  /// Take down both of this alarm's cards — it is no longer a live thing.
+  /// A heads-up left behind keeps promising "watching until 06:30" for an
+  /// alarm that no longer exists.
+  Future<void> _cancelCards(int alarmId) async {
+    try {
+      await notifier?.cancelForAlarm(alarmId);
+    } on Exception {
+      // A notification failure must never break the cascade.
+    }
+  }
+
+  /// Clear EVERY armed ring for this alarm — both the pre-arm and late-ring
+  /// lockers, since the role we aren't looking at right now may still hold one.
+  Future<void> _cancelAllRings(int alarmId) async {
+    for (final id in NivaatIds.allRings(alarmId)) {
+      await scheduler.cancel(id);
+    }
+  }
+
+  /// Is any of this alarm's occurrences sounding? Rule 1 has to ask about both
+  /// lockers: a late ring from the occurrence that just closed can still be
+  /// audible after `next` has rolled on to tomorrow, and missing it would let
+  /// the cascade cancel a ring that is physically going off.
+  Future<bool> _isRingingAny(int alarmId) async {
+    for (final id in NivaatIds.allRings(alarmId)) {
+      if (await scheduler.isRinging(id)) return true;
+    }
+    return false;
+  }
+
   /// Within this window of the alarm we trust live wind over forecast.
   static const Duration liveWindWindow = Duration(minutes: 15);
 
@@ -217,6 +248,13 @@ class NivaatEngine {
             t.isAfter(stored.alarmAt)) {
           await store.upsertHistory(_rangRecord(alarm, stored));
         }
+        // Disarm BOTH lockers, not just the one this occurrence would use: an
+        // edit can move the alarm to a different day (hence the other locker),
+        // which would otherwise leave the OLD time armed and ringing. It also
+        // means a re-evaluation that can't reach the network leaves no ring at
+        // all rather than a stale one — the right trade for Nivaat, where a
+        // ring is only ever legitimate if a wind check just approved it.
+        await _cancelAllRings(alarm.id);
         await store.clearCheckState(alarm.id);
       });
 
@@ -235,8 +273,11 @@ class NivaatEngine {
     final stored = await store.loadCheckState(alarm.id);
     final next = _resolveOccurrence(alarm, stored, t);
     if (next == null || court == null) {
-      await scheduler.cancel(alarm.id);
+      await _cancelAllRings(alarm.id);
       await checks.cancelCheck(alarm.id);
+      // The alarm is gone/disabled/court-less: its cards go with it, or a
+      // "still checking" heads-up outlives the thing it was checking.
+      await _cancelCards(alarm.id);
       // A committed ring that already fired must reach history even while its
       // alarm is being disabled/deleted — clearing first silently dropped it
       // ("rang but never showed up in history", 2026-07-19 device testing).
@@ -260,12 +301,22 @@ class NivaatEngine {
     // ladder — not a split-second T-0 cancel — is what keeps a windy morning
     // from ringing; once it's audible, it stays. This is what makes "open the
     // app during a ring" safe on both platforms.
-    if (alarm.enabled && await scheduler.isRinging(alarm.id)) {
+    if (alarm.enabled && await _isRingingAny(alarm.id)) {
       // Audible = final, so the "rang" row is written HERE — the first moment
       // the app can see the ring — not whenever the user gets around to
       // stopping it (history must show the ring while it still sounds).
       // Idempotent: the cleared state stops a second mid-ring pass relogging.
-      if (stored != null && stored.ringScheduled) {
+      //
+      // `!t.isBefore(stored.alarmAt)` ties the row to the ring that is ACTUALLY
+      // sounding. Since late rings got their own locker, the audible ring can
+      // belong to the occurrence that just closed while `stored` already tracks
+      // the NEXT one (pre-armed by the same `_rollOn`); without this the resync
+      // during that ring would log tomorrow as "rang" — a future-dated row —
+      // and wipe its cascade state. The ring itself is still protected either
+      // way: this branch returns without touching the scheduler.
+      if (stored != null &&
+          stored.ringScheduled &&
+          !t.isBefore(stored.alarmAt)) {
         await store.upsertHistory(_rangRecord(alarm, stored));
         await store.clearCheckState(alarm.id);
       }
@@ -337,10 +388,24 @@ class NivaatEngine {
       if (decision.shouldRing) {
         // Not sounding here (Rule 1 returned above), so re-scheduling is safe.
         // A retry that succeeds just after T rings late (never in the past).
+        // At/past T this is a LATE ring (a retry found calm air), and it goes
+        // in its own locker: this same pass closes the occurrence and pre-arms
+        // the NEXT one, and that pre-arm would otherwise evict this ring
+        // seconds before it sounds. `!next.isAfter(t)` is precisely the
+        // condition under which `_rollOn` can reach a further occurrence.
+        final isLate = !next.isAfter(t);
         final ringAt =
             next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
+        if (isLate) {
+          // The occurrence's own pre-armed ring (if the ladder committed one)
+          // is superseded by this later, better-informed one — drop it, or the
+          // alarm sounds twice a few seconds apart.
+          await scheduler.cancel(NivaatIds.ring(alarm.id));
+        }
         await scheduler.scheduleRing(
-          id: alarm.id,
+          id: isLate
+              ? NivaatIds.lateRing(alarm.id)
+              : NivaatIds.ring(alarm.id),
           at: ringAt,
           title: nivaatNotificationTitle(court.name, next, kNivaatRing),
           // The numbers that won, and when they were read — `t` is the same
@@ -363,9 +428,14 @@ class NivaatEngine {
         );
       } else {
         // Not sounding here either, so cancelling the provisional ring is safe.
+        // ONLY the pre-arm locker: the late-ring locker can hold a ring for
+        // the occurrence that just closed — `_rollOn` lands here moments after
+        // arming it — and clearing that would re-create the very bug the split
+        // exists to fix. (This occurrence can't own a late ring itself: one
+        // would have finalised it as "rang" and cleared the state.)
         // Remember the reading behind this skip (kept across later no-data
         // retries) so the final card can report the real reason.
-        await scheduler.cancel(alarm.id);
+        await scheduler.cancel(NivaatIds.ring(alarm.id));
         state = state.copyWith(
           ringScheduled: false,
           skipCourtSpeedKmh: decision.sample.courtSpeedKmh,

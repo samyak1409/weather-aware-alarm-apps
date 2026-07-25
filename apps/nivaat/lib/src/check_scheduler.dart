@@ -4,6 +4,8 @@ import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:workmanager/workmanager.dart';
 
+import 'ids.dart';
+
 /// Schedules the background wind checks of the cascade.
 ///
 /// Android: exact wakeups via AlarmManager — the ladder runs as designed.
@@ -25,10 +27,6 @@ abstract class CheckScheduler {
           ? AndroidCheckScheduler(entrypoint: androidEntrypoint)
           : IosCheckScheduler();
 }
-
-/// Offset added to alarm ids to build AlarmManager request codes, so check
-/// wakeups never collide with ring ids.
-const int _checkIdOffset = 50000;
 
 /// Reports a check-scheduling failure without letting it abort the batch.
 /// Booking/cancel hit platform plugins (AlarmManager / BGTaskScheduler); one
@@ -68,7 +66,8 @@ class AndroidCheckScheduler implements CheckScheduler {
     try {
       await AndroidAlarmManager.oneShotAt(
         at,
-        _checkIdOffset + alarmId,
+        // Its own block, so a check wakeup can never land on a ring id.
+        NivaatIds.check(alarmId),
         entrypoint,
         exact: true,
         wakeup: true,
@@ -83,7 +82,7 @@ class AndroidCheckScheduler implements CheckScheduler {
   @override
   Future<void> cancelCheck(int alarmId) async {
     try {
-      await AndroidAlarmManager.cancel(_checkIdOffset + alarmId);
+      await AndroidAlarmManager.cancel(NivaatIds.check(alarmId));
     } on Exception catch (e) {
       _logCheckError('cancelCheck', e, alarmId: alarmId);
     }

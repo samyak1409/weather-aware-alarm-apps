@@ -46,6 +46,21 @@ class AlarmPkgScheduler implements AlarmScheduler {
         // (The iOS unreliability that warning is for no longer applies — iOS
         // uses AlarmKit, never this scheduler.)
         warningNotificationOnKill: false,
+        // Two things, both verified in the plugin's Kotlin (AlarmService.kt):
+        //
+        // 1. Schedule time — without this, `Alarm.set` stops any alarm landing
+        //    on the SAME SECOND even under a different id. A late ring is
+        //    `now + 10s` off an arbitrary check instant, so it can coincide
+        //    with another alarm's exact minute and silently kill it.
+        // 2. Ring time — with `allowAlarmOverlap: false` and this OFF, an
+        //    alarm firing while another is still ringing is DROPPED and
+        //    unsaved ("Ignoring new alarm with id"). A 06:00 ring you haven't
+        //    stopped would swallow the 06:07 one, while history logged "Rang".
+        //    ON, it queues instead and rings when the current one is stopped.
+        //
+        // Same-ID replacement is a separate condition and is unaffected, so
+        // re-deciding an occurrence still overwrites its own ring as before.
+        allowSameSecondScheduling: true,
         volumeSettings: VolumeSettings.fixed(
           volume: volume.clamp(0.0, 1.0),
           volumeEnforced: true,

@@ -1,4 +1,5 @@
 import 'package:arunoday/src/controller.dart';
+import 'package:arunoday/src/ids.dart';
 import 'package:arunoday/src/sound_selection.dart' as sound;
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,9 +70,9 @@ void main() {
 
     final wakeIds = fake.scheduled.keys.where((id) => id < 2000);
     final bedIds = fake.scheduled.keys.where((id) => id >= 2000);
-    // 7-8 of each depending on time of day.
-    expect(wakeIds.length, inInclusiveRange(7, 8));
-    expect(bedIds.length, inInclusiveRange(7, 8));
+    // 6-7 of each depending on time of day (window is ArunodayIds.slots).
+    expect(wakeIds.length, inInclusiveRange(6, 7));
+    expect(bedIds.length, inInclusiveRange(6, 7));
 
     // Every scheduled moment is in the future.
     for (final at in fake.scheduled.values) {
@@ -165,17 +166,17 @@ void main() {
     // Park a re-ring on that exact minute (what the old validation forbade).
     await c.update(c.settings.copyWith(bedtimeDelayedUntil: () => daily));
 
-    expect(fake.scheduled[2999], daily, reason: 're-ring holds the slot');
+    expect(fake.scheduled[ArunodayIds.bedtimeAgain], daily, reason: 're-ring holds the slot');
     final collidingDaily = fake.scheduled.entries
-        .where((e) => e.key >= 2000 && e.key < 2999 && e.value == daily);
+        .where((e) => e.key >= 2000 && e.key < ArunodayIds.bedtimeAgain && e.value == daily);
     expect(collidingDaily, isEmpty,
         reason: 'the daily bedtime that shares the minute is suppressed');
 
     // Cancel the re-ring → the daily bedtime takes the slot back.
     await c.update(c.settings.copyWith(bedtimeDelayedUntil: () => null));
-    expect(fake.scheduled.containsKey(2999), isFalse);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isFalse);
     final restored = fake.scheduled.entries
-        .where((e) => e.key >= 2000 && e.key < 2999 && e.value == daily);
+        .where((e) => e.key >= 2000 && e.key < ArunodayIds.bedtimeAgain && e.value == daily);
     expect(restored, isNotEmpty, reason: 'daily bedtime returns, now alone');
   });
 
@@ -244,7 +245,7 @@ void main() {
     expect(c.nextWake, base);
   });
 
-  test('delayed bedtime schedules the 2999 reminder and expires', () async {
+  test('delayed bedtime schedules the re-ring reminder and expires', () async {
     final fake = FakeScheduler();
     final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
     await c.init();
@@ -254,16 +255,16 @@ void main() {
     ));
 
     await c.delayBedtime(const Duration(minutes: 30));
-    expect(fake.scheduled.containsKey(2999), isTrue);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isTrue);
     expect(
-      fake.scheduled[2999]!.difference(DateTime.now()).inMinutes,
+      fake.scheduled[ArunodayIds.bedtimeAgain]!.difference(DateTime.now()).inMinutes,
       inInclusiveRange(28, 30),
     );
 
     // Mistap recovery: cancelling removes the re-ring entirely.
     await c.cancelBedtimeDelay();
     expect(c.settings.bedtimeDelayedUntil, isNull);
-    expect(fake.scheduled.containsKey(2999), isFalse);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isFalse);
 
     // Simulate the reminder having fired: expired timers clear on resync.
     await c.update(c.settings.copyWith(
@@ -272,7 +273,7 @@ void main() {
     ));
     await c.resync();
     expect(c.settings.bedtimeDelayedUntil, isNull);
-    expect(fake.scheduled.containsKey(2999), isFalse);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isFalse);
   });
 
   test('sleep starts at max(bedtime, AGAIN); a too-late re-ring is ignored',
@@ -377,7 +378,7 @@ void main() {
         ];
     List<String> bedTitles() => [
           for (final e in fake.titles.entries)
-            if (e.key >= 2000 && e.key < 2999) e.value
+            if (e.key >= 2000 && e.key < ArunodayIds.bedtimeAgain) e.value
         ];
     List<String> wakeBodies() => [
           for (final e in fake.bodies.entries)

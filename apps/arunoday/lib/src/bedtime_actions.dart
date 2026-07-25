@@ -3,10 +3,12 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'ids.dart';
 
-/// Bedtime-ritual action shown on the ring screen for bedtime alarms
-/// (ids 2000-2999): "not sleepy" — stop the ring, ring bedtime again in an
-/// hour. (Tomorrow-wake shifting was removed 2026-07-12; see SPEC.md.)
+/// Bedtime-ritual action shown on the ring screen for bedtime alarms (the
+/// [ArunodayIds] bedtime range, daily rings plus the re-ring): "not sleepy" —
+/// stop the ring, ring bedtime again in an hour. (Tomorrow-wake shifting was
+/// removed 2026-07-12; see SPEC.md.)
 class BedtimeActions extends StatelessWidget {
   const BedtimeActions({
     super.key,
@@ -17,7 +19,7 @@ class BedtimeActions extends StatelessWidget {
   final ArunodayController controller;
   final AlarmSettings ringingAlarm;
 
-  static bool isBedtimeAlarm(AlarmSettings a) => a.id >= 2000 && a.id < 3000;
+  static bool isBedtimeAlarm(AlarmSettings a) => ArunodayIds.isBedtime(a.id);
 
   Future<void> _delay(BuildContext context, Duration d) async {
     // Stop first — the resync inside delayBedtime re-schedules the whole
