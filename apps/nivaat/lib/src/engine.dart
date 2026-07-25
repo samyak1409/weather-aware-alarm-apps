@@ -23,10 +23,54 @@ const String nivaatDefaultSound = 'assets/sounds/nivaat_ring.wav';
 String nivaatSoundForVolume(double volume) {
   final selected = nivaatSelectedSound;
   if (selected != null && selected != nivaatDefaultSound) return selected;
-  // The ramp spans 75-100% (SPEC.md), so the variants are 5%-stepped over
-  // that band: nivaat_ring_{75,80,85,90,95,100}.wav.
-  final pct = ((volume * 20).round() * 5).clamp(75, 100);
-  return 'assets/sounds/nivaat_ring_$pct.wav';
+  // Snap to the nearest of core's [windVolumeSteps] (loudest first) rather
+  // than switching on the exact values: any volume in 0-1 then resolves to a
+  // file that ships, and changing the ramp is a one-line edit in core plus a
+  // render — no midpoints to keep in sync here. Ties go to the louder step,
+  // matching volumeForWind's own boundaries.
+  var step = windVolumeSteps.last;
+  for (var i = 0; i < windVolumeSteps.length - 1; i++) {
+    if (volume >= (windVolumeSteps[i] + windVolumeSteps[i + 1]) / 2) {
+      step = windVolumeSteps[i];
+      break;
+    }
+  }
+  // 100% IS the master — no byte-identical `_100` copy ships (SPEC.md).
+  final pct = (step * 100).round();
+  return pct == 100 ? nivaatDefaultSound : 'assets/sounds/nivaat_ring_$pct.wav';
+}
+
+/// A history row's headline: the outcome, plus the numbers that caused it.
+///
+/// Every other reader on a [HistoryRecord] degrades rather than assuming an
+/// optional field is there — [HistoryRecord.whenChecked] falls back to `at`,
+/// [HistoryRecord.windGustSummary] drops to a reduced string and then to ''.
+/// This one now does too: `volume` is written on every "rang" row the engine
+/// produces, but the field is optional, and force-unwrapping it meant one row
+/// without it would take the whole sheet down — permanently, since history is
+/// persisted. That is the worst screen to lose: it is the one that explains a
+/// morning the alarm didn't ring (2026-07-26).
+String nivaatHistoryLine(HistoryRecord record) {
+  final volume = record.volume;
+  final head = switch (record.outcome) {
+    // "vol." so the number can't read as a score — the rest of the line is
+    // label-value too (2026-07-22).
+    CheckOutcome.rang => volume == null
+        ? 'Rang'
+        : 'Rang (vol. ${(volume * 100).round()}%)',
+    // N6's bare "Skipped" means windy — locked 2026-07-22, don't add "(windy)".
+    CheckOutcome.skippedWindy => 'Skipped',
+    CheckOutcome.skippedGusty => 'Skipped (gusty)',
+    CheckOutcome.skippedNoData => 'Skipped (no data)',
+  };
+  // N8 quotes no numbers at all: a no-data row means nothing was measured, so
+  // any readings on one would contradict its own label. A row that simply lost
+  // its readings degrades to the same empty summary — and either way the " · "
+  // that joins it has to go too, or the line ends in a dangling separator.
+  final summary = record.outcome == CheckOutcome.skippedNoData
+      ? ''
+      : record.windGustSummary;
+  return summary.isEmpty ? head : '$head · $summary';
 }
 
 /// The note for a heads-up snapshot row (`watchedUntil` set): "watching until

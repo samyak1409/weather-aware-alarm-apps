@@ -35,20 +35,75 @@ void main() {
     });
   });
 
-  group('volume ramp (100% at calm -> 75% floor at threshold)', () {
-    const t = WindThresholds(courtSpeedLimitKmh: 4);
-    test('calm = full volume', () => expect(volumeForWind(0, t), 1.0));
-    test('half threshold = 87.5%', () => expect(volumeForWind(2, t), 0.875));
-    test('at threshold = 75% floor', () => expect(volumeForWind(4, t), 0.75));
+  group('volume ramp — three steps, snapped at a quarter and three quarters',
+      () {
+    const t4 = WindThresholds(courtSpeedLimitKmh: 4);
+    test('calm = full volume', () => expect(volumeForWind(0, t4), 1.0));
+    test('100% holds to L/4 inclusive', () {
+      expect(volumeForWind(0.99, t4), 1.0);
+      expect(volumeForWind(1, t4), 1.0, reason: 'the edge belongs to the louder step');
+    });
+    test('85% from just past L/4 to 3L/4 inclusive', () {
+      expect(volumeForWind(1.01, t4), 0.85);
+      expect(volumeForWind(2, t4), 0.85);
+      expect(volumeForWind(3, t4), 0.85, reason: '3L/4 is still the middle step');
+    });
+    test('70% floor above 3L/4', () {
+      expect(volumeForWind(3.01, t4), 0.70);
+      expect(volumeForWind(4, t4), 0.70);
+    });
+    test('over the limit still clamps to the floor, never below', () {
+      // decide() skips before this is reached, but a lone call must not
+      // return a negative or sub-floor volume.
+      expect(volumeForWind(99, t4), 0.70);
+    });
+
+    test('windVolumeSteps is strictly descending — snapping depends on it', () {
+      // Nivaat's asset picker walks these loudest-first and takes the first
+      // step whose midpoint the volume clears. Reorder them and every ring
+      // silently picks the wrong file.
+      for (var i = 0; i < windVolumeSteps.length - 1; i++) {
+        expect(windVolumeSteps[i], greaterThan(windVolumeSteps[i + 1]),
+            reason: 'step $i must be louder than step ${i + 1}');
+      }
+      expect(windVolumeSteps.first, 1.0, reason: 'dead calm is full volume');
+    });
+
+    test('every limit snaps on its own quarters, no float slip', () {
+      // The boundaries are quarters of a whole limit, so they are exact in
+      // binary — but only because the comparison multiplies instead of
+      // dividing. c/limit <= 0.25 can miss its own edge.
+      for (final (limit, lo, hi) in [(6, 1.5, 4.5), (5, 1.25, 3.75), (4, 1.0, 3.0)]) {
+        final t = WindThresholds(courtSpeedLimitKmh: limit);
+        expect(volumeForWind(lo, t), 1.0, reason: 'limit $limit at L/4');
+        expect(volumeForWind(lo + 0.01, t), 0.85, reason: 'limit $limit past L/4');
+        expect(volumeForWind(hi, t), 0.85, reason: 'limit $limit at 3L/4');
+        expect(volumeForWind(hi + 0.01, t), 0.70, reason: 'limit $limit past 3L/4');
+      }
+    });
+
+    test('every limit uses all three steps and nothing else', () {
+      for (var limit = WindThresholds.minLimit;
+          limit <= WindThresholds.maxLimit;
+          limit++) {
+        final t = WindThresholds(courtSpeedLimitKmh: limit);
+        final seen = <double>{};
+        for (var tenths = 0; tenths <= limit * 10; tenths++) {
+          seen.add(volumeForWind(tenths / 10, t));
+        }
+        expect(seen, windVolumeSteps.toSet(),
+            reason: 'limit $limit must reach every step, and invent none');
+      }
+    });
   });
 
   group('decide — whole-km/h decision (threshold 4)', () {
     const t = WindThresholds(courtSpeedLimitKmh: 4); // raw gust limit 14.667
 
-    test('calm morning: court 3, gusts 5 raw -> ring at ~81%', () {
-      final d = decide(sample(5.0, 5.0), t); // court = 3.0
+    test('calm morning: court 3, gusts 5 raw -> ring at 85%', () {
+      final d = decide(sample(5.0, 5.0), t); // court 3.0 = 3L/4 exactly
       expect(d.verdict, WindVerdict.ring);
-      expect(d.volume, closeTo(0.8125, 0.001)); // ramp stays continuous
+      expect(d.volume, 0.85);
     });
 
     test('sneaky morning: court 3 but gusts 16 raw -> skip (gusty)', () {

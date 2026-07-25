@@ -82,7 +82,7 @@ _Concept: an alarm for a specific court that only rings if the wind there is low
 
 **3.4 — Gust guard (auto, uneditable): 2.2 × the raw speed limit, no floor.** Sits above normal gustiness (typical gust factors ~1.4–1.7), so only an _abnormally_ gusty morning blocks a ring. _Example:_ limit 4 → gust cap ≈ 15 km/h.
 
-**3.5 — Wind-proportional volume.** 100% in dead calm, ramping linearly down to a 75% floor at your limit; above the limit → skip. The loudness tells you how good the badminton weather is before you open your eyes. _Example:_ half your limit → 87.5%; at your limit → 75%.
+**3.5 — Wind-proportional volume.** Three steps — 100% / 85% / 70% — snapping the linear slide to the nearest, so 100% holds to a quarter of your limit, 85% to three quarters, 70% above (2026-07-26; was the same slide over six 5% steps to a 75% floor); above the limit → skip. The loudness tells you how good the badminton weather is before you open your eyes. _Example (limit 6):_ dead calm → 100%; half your limit (3 km/h) → 85%; at your limit → 70%.
 
 **3.6 — The check cascade.** Wind is checked before the alarm — **T−1h, −30m, −15m, −10m, −5m, −2m, −1m, T−0**. Far checks use the hourly _forecast_; within 15 min it uses _current_ wind; latest successful check wins. Then **it keeps retrying every minute to +30 min after _any_ skip** (windy, gusty, or no-data), and **rings late if the wind drops** in that window. The skip is held **provisional** meanwhile: at T it posts a **"still checking until 6:30" heads-up** (the reason so far + the deadline); if the wind drops it **rings late** and the heads-up simply stays put, else at the cap a **separate** final skip card is posted alongside it (its own notification id, so it alerts afresh rather than quietly overwriting the heads-up) — using the **last _known_ reason**, so a blip at the cap still says "windy", not "couldn't check". **A ring is final (never retried).** If the app first runs only _after_ the +30m cap (e.g. iOS woke it late), the missed occurrence is still finalised from the last-known state — a committed ring logs "rang", otherwise **one** skip card + history row (never silently dropped, never a heads-up). _Example:_ windy at 06:00 → heads-up "too windy · checking until 06:30"; calm at 06:07 → rings; still windy at 06:30 → "skipped — windy" card. Forecast lookups are keyed in **UTC**, so a court in another timezone reads the right hour. _(The scheduled ladder runs on Android exact wakeups; on iOS it's opportunistic via BGAppRefresh — see the platform split below.)_
 
@@ -100,7 +100,7 @@ _Concept: an alarm for a specific court that only rings if the wind there is low
 
 **3.11 — Default max-wind is 6** (most lenient — rings most readily; tighten to 5 or 4 if you're picky). Alarms saved under the retired 1–3 settings migrate up to **4**. _Why only 4–6:_ below 4 the gust cap would fall under the ~12–15 km/h near-surface gust baseline, so those settings would almost never ring — dropped rather than propped up with a magic constant.
 
-**3.12 — Sound.** Bundled tone, or (Android) a device system alarm sound; on iOS AlarmKit (no volume knob) the wind-ramp maps to pre-rendered loudness variants.
+**3.12 — Sound.** Bundled tone, or (Android) a device system alarm sound; on iOS AlarmKit (no volume knob) the wind-ramp maps to pre-rendered loudness variants — two of them, since 100% is the base tone itself.
 
 **Nivaat platform split — this is the important one:**
 

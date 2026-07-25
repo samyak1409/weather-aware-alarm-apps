@@ -65,7 +65,7 @@ class WindDecision {
 
   final WindVerdict verdict;
 
-  /// 0.5-1.0 when ringing (wind-proportional ramp), 0.0 otherwise.
+  /// One of [windVolumeSteps] when ringing (wind-proportional), 0.0 otherwise.
   final double volume;
 
   final WindSample sample;
@@ -74,12 +74,33 @@ class WindDecision {
   bool get shouldRing => verdict == WindVerdict.ring;
 }
 
-/// Volume ramp locked in SPEC.md: 100% at 0 wind, sliding linearly down to a
-/// 75% floor at the threshold. The alarm's loudness tells you how good the
-/// badminton weather is before you open your eyes.
+/// The three loudness steps, loudest first. The alarm's volume tells you how
+/// good the badminton weather is before you open your eyes.
+const List<double> windVolumeSteps = [1.0, 0.85, 0.70];
+
+/// Volume ramp locked in SPEC.md: the old linear 100%→floor slide, **snapped
+/// to the nearest of [windVolumeSteps]** (2026-07-26, Samyak — option B over
+/// an even-thirds split; the floor moved 75% → 70% with the step count).
+///
+/// The midpoints between steps fall at a quarter and three quarters of your
+/// limit, so: 100% up to L/4, 85% up to 3L/4, 70% above. Limit 6 → 100% to
+/// 1.5, 85% to 4.5, then 70%.
+///
+/// Three steps, because Android can't deliver more. The `alarm` package sets a
+/// system stream volume and the OS quantises it to an index — on a 7-step
+/// device the previous six values collapsed to three clicks anyway
+/// (5/6/6/6/7/7), so four of the six were fiction. These three land on
+/// distinct clicks at both common step counts: 7-step → 7/6/5, 15-step →
+/// 15/13/11.
 double volumeForWind(double courtSpeedKmh, WindThresholds t) {
-  final frac = (courtSpeedKmh / t.courtSpeedLimitKmh).clamp(0.0, 1.0);
-  return 1.0 - 0.25 * frac;
+  final limit = t.courtSpeedLimitKmh;
+  final c = courtSpeedKmh.clamp(0.0, limit.toDouble());
+  // Multiplied out rather than divided: `c / limit <= 0.25` can miss its own
+  // boundary by a float hair, while quarters of a whole limit are exact in
+  // binary. The edge belongs to the LOUDER step (snapping to nearest, ties up).
+  if (c * 4 <= limit) return windVolumeSteps[0];
+  if (c * 4 <= limit * 3) return windVolumeSteps[1];
+  return windVolumeSteps[2];
 }
 
 WindDecision decide(WindSample sample, WindThresholds thresholds) {

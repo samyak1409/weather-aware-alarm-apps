@@ -22,6 +22,32 @@ void main() {
     expect(scheduler, isA<AlarmPkgScheduler>());
   });
 
+  group('AlarmPkgScheduler applies the loudness ramp exactly once', () {
+    // Regression (2026-07-26): this scheduler passed the ring volume to the
+    // asset resolver AND set the system volume to it. With Nivaat's resolver —
+    // which returns a pre-attenuated variant — a windy-morning ring played the
+    // 75% file at 75% system volume, ~56% of full: outside SPEC.md's 75-100%
+    // band, and quieter than the identical ring on iOS.
+    test('the tone is resolved at full volume, never pre-attenuated', () {
+      final askedFor = <double>[];
+      final scheduler = AlarmPkgScheduler(soundAssetForVolume: (v) {
+        askedFor.add(v);
+        return 'ring_${(v * 100).round()}.wav';
+      });
+      expect(scheduler.ringAsset, 'ring_100.wav');
+      expect(askedFor, [1.0],
+          reason: 'the ramp belongs to VolumeSettings on Android, not the file');
+    });
+
+    test('a user-selected tone still wins', () {
+      // The resolver is also how the tone picker takes effect, so full volume
+      // must not mean "always the default".
+      final scheduler =
+          AlarmPkgScheduler(soundAssetForVolume: (_) => '/tones/temple.ogg');
+      expect(scheduler.ringAsset, '/tones/temple.ogg');
+    });
+  });
+
   group('NoOpAlarmScheduler', () {
     const scheduler = NoOpAlarmScheduler();
 

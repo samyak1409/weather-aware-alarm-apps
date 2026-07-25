@@ -7,12 +7,36 @@ import 'scheduler.dart';
 /// `alarm`-package fallback (a denied AlarmKit no-ops + nudges to Settings),
 /// so this never runs on iOS.
 class AlarmPkgScheduler implements AlarmScheduler {
-  AlarmPkgScheduler({required this.soundAssetForVolume});
+  AlarmPkgScheduler({
+    required String Function(double volume) soundAssetForVolume,
+  }) : _soundAssetForVolume = soundAssetForVolume;
 
-  /// Resolves the sound at schedule time (user-selectable tone). Receives
-  /// the ring volume for parity with AlarmKit's loudness-variant mapping;
-  /// this scheduler applies real volume, so most callers ignore it.
-  final String Function(double volume) soundAssetForVolume;
+  /// Resolves the sound at schedule time (user-selectable tone). Receives the
+  /// ring volume for parity with AlarmKit's loudness-variant mapping; this
+  /// scheduler applies real volume instead, so it is PRIVATE and reachable
+  /// only through [ringAsset] — passing a ring volume here is the bug that
+  /// getter exists to prevent.
+  final String Function(double volume) _soundAssetForVolume;
+
+  /// The tone to play, resolved at FULL volume whatever the ring volume is.
+  ///
+  /// This scheduler sets the real system volume (see [scheduleRing]), so a
+  /// pre-attenuated variant would apply Nivaat's wind ramp TWICE — the ramp's
+  /// quietest file at the same fraction of system volume landed near 56% of
+  /// full, below the ramp's own floor and quieter than the identical ring on
+  /// iOS. Resolving at 1.0 yields the user's selected tone, or the
+  /// unattenuated master for the default one. iOS keeps the variants —
+  /// AlarmKit has no volume knob (2026-07-26).
+  ///
+  /// The plugin's `VolumeService` quantises to a stream index
+  /// (`round(volume × getStreamMaxVolume(STREAM_ALARM))`), which is exactly
+  /// why core's `windVolumeSteps` has only three entries: they land on
+  /// distinct indices at both common step counts (7 → 7/6/5, 15 → 15/13/11),
+  /// so Android now reproduces the same three steps iOS gets from files. Keep
+  /// the ramp here rather than on the variants — only the system volume ramps
+  /// a user-SELECTED tone, which has no pre-rendered copies. See SPEC.md's
+  /// volume rule before changing either side.
+  String get ringAsset => _soundAssetForVolume(1);
 
   static bool _initialized = false;
 
@@ -36,7 +60,7 @@ class AlarmPkgScheduler implements AlarmScheduler {
       alarmSettings: AlarmSettings(
         id: id,
         dateTime: at,
-        assetAudioPath: soundAssetForVolume(volume),
+        assetAudioPath: ringAsset,
         loopAudio: true,
         vibrate: true,
         androidFullScreenIntent: true,

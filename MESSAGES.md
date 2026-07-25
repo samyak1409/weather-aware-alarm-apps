@@ -119,13 +119,13 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
 
 | Outcome        | Line (template → example)                                                              | Sheet sub (example)                                 |
 | -------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| **N5** rang    | `Rang (vol. {vol}%) · {windgust}` → `Rang (vol. 88%) · wind 3 (≤4) · gusts 12 (≤15) km/h`  | `Society Court · 18 Jul · 06:00 · checked 06:00`    |
+| **N5** rang    | `Rang (vol. {vol}%) · {windgust}` → `Rang (vol. 85%) · wind 3 (≤4) · gusts 12 (≤15) km/h`  | `Society Court · 18 Jul · 06:00 · checked 06:00`    |
 | **N6** windy   | `Skipped · {windgust}` → `Skipped · wind 6 (≤4) · gusts 18 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
 | **N7** gusty   | `Skipped (gusty) · {windgust}` → `Skipped (gusty) · wind 3 (≤4) · gusts 16 (≤15) km/h` | `Society Court · 18 Jul · 06:00 · checked 06:29`    |
 | **N8** no-data | `Skipped (no data)`                                                                    | `Society Court · 18 Jul · 06:00 · last tried 06:29` |
 
 - Sheet **sub** = `{court} · {date} · {HH:MM} · {checked|last tried} {checktime}{ · watch note}`.
-- `{vol}` is the ring's **volume** (the wind ramp — calmer morning, louder ring, per N11), not a score. Written `vol. 88%` so it can't be read as one (2026-07-22).
+- `{vol}` is the ring's **volume** (the wind ramp — calmer morning, louder ring, per N11), not a score. Written `vol. 85%` so it can't be read as one (2026-07-22). Only ever **100, 85 or 70** since 2026-07-26 — the ramp has three steps, so these are the only three numbers this line can print. A row that carries no volume degrades to a bare `Rang · {windgust}`, and one with no readings either to just `Rang` — never a dangling `· ` (2026-07-26). The engine stores both on every rang row it writes, but the fields are optional and history is **persisted**, so force-unwrapping the volume turned a single odd row into a permanently un-openable log — the one screen that explains a morning the alarm didn't ring. Every line is built by `nivaatHistoryLine`, unit-tested alongside the other message builders.
 - **N6's bare `Skipped` means windy — locked 2026-07-22, don't add `(windy)`.** Windy is the default skip, so only the exceptions carry a label (`(gusty)`, `(no data)`). Accepted consequence: the sheet's wording differs from the card's, which says `Too windy` for the same event.
 - A row whose court is gone is **pruned on load**, so `{court}` always resolves. The `court removed` fallback (same wording as N12) is defence only — deleting a court already sweeps its log; the gap was a background check landing a row just after that sweep.
 - `HH:MM` is the **alarm time**; "checked" = last successful reading, "last tried" = last attempt for a no-data skip. One helper (`nivaatCheckedNote`) writes this phrase for **all** of N1/N2/N3, so a card and its history row can't drift.

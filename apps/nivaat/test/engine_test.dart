@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/check_scheduler.dart';
@@ -193,12 +195,12 @@ void main() {
 
   test('calm forecast far out: ring scheduled with ramp volume, next check booked',
       () async {
-    api.sample = wind(5.0, 5.0); // court 3.0, threshold 4 -> volume 0.8125
+    api.sample = wind(5.0, 5.0); // court 3.0, threshold 4 -> 3L/4 exactly -> volume 0.85
     final now = DateTime(2026, 7, 11, 18, 0); // T-12h
     await engine.evaluateAlarm(alarm, [court], now: now);
 
     expect(ring.scheduled[todayRing]!.at, alarmAt);
-    expect(ring.scheduled[todayRing]!.volume, closeTo(0.8125, 0.001));
+    expect(ring.scheduled[todayRing]!.volume, 0.85);
     // MESSAGES.md N1: court, the alarm time the user set, then the verdict —
     // no app name (the OS notification header already prints it). The body is
     // the numbers alone; "Play!" moved up into the title (2026-07-22).
@@ -221,7 +223,7 @@ void main() {
 
   test('T-0 calm: live wind, ring, history "rang", rolls into tomorrow',
       () async {
-    api.sample = wind(3.0, 6.0); // court 1.8 -> volume 0.8875
+    api.sample = wind(3.0, 6.0); // court 1.8 -> middle step -> volume 0.85
     // T-2m check persists the in-flight occurrence...
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 2)));
@@ -232,7 +234,7 @@ void main() {
     final history = await engine.store.loadHistory();
     expect(history, hasLength(1));
     expect(history.first.outcome, CheckOutcome.rang);
-    expect(history.first.volume, closeTo(0.8875, 0.001));
+    expect(history.first.volume, 0.85);
     // Finalising doesn't stop at the closed occurrence: the same pass
     // evaluates tomorrow — pre-arms it (still calm) and books its ladder —
     // so the cascade never sleeps until the next manual app open.
@@ -564,7 +566,7 @@ void main() {
   test('committed ring that fired (no T-0 check, iOS) is later logged rang, not skip',
       () async {
     // T-30m: a calm forecast commits the ring for THIS occurrence.
-    api.sample = wind(5.0, 5.0); // court 3.0 <= 4 -> ring, volume 0.8125
+    api.sample = wind(5.0, 5.0); // court 3.0 <= 4 -> ring, volume 0.85
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 30)));
     expect(ring.scheduled.containsKey(todayRing), isTrue);
@@ -580,7 +582,7 @@ void main() {
     expect(history, hasLength(1));
     expect(history.first.outcome, CheckOutcome.rang,
         reason: 'the ring already fired — honour it, never relabel as skipped');
-    expect(history.first.volume, closeTo(0.8125, 0.001));
+    expect(history.first.volume, 0.85);
     expect(notifier.shown, isEmpty, reason: 'a ring must never send a skip card');
     expect((await engine.store.loadCheckState(7))!.alarmAt,
         alarmAt.add(const Duration(days: 1)),
@@ -590,7 +592,7 @@ void main() {
   test('committed ring is logged rang even when the app opens past the retry window',
       () async {
     // T-30m: calm forecast commits the ring for this occurrence.
-    api.sample = wind(5.0, 5.0); // court 3.0 -> ring, volume 0.8125
+    api.sample = wind(5.0, 5.0); // court 3.0 -> ring, volume 0.85
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 30)));
     expect(ring.scheduled.containsKey(todayRing), isTrue);
@@ -606,7 +608,7 @@ void main() {
         .where((h) => h.outcome == CheckOutcome.rang && h.at == alarmAt);
     expect(rangRows, hasLength(1),
         reason: 'the fired ring is recorded exactly once, even on a late open');
-    expect(rangRows.first.volume, closeTo(0.8125, 0.001));
+    expect(rangRows.first.volume, 0.85);
     expect(rangRows.first.courtSpeedLimitKmh, 4);
   });
 
@@ -630,7 +632,7 @@ void main() {
     var history = await engine.store.loadHistory();
     expect(history, hasLength(1));
     expect(history.single.outcome, CheckOutcome.rang);
-    expect(history.single.volume, closeTo(0.8125, 0.001));
+    expect(history.single.volume, 0.85);
     expect(await engine.store.loadCheckState(7), isNull,
         reason: 'occurrence finalised while still audible');
     // And the cascade survives the mid-ring return: with no post-T checks
@@ -705,7 +707,7 @@ void main() {
       ringScheduled: true,
       ringCourtSpeedKmh: 1.8,
       ringRawGustKmh: 6.0,
-      ringVolume: 0.8875,
+      ringVolume: 0.85,
       lastCheckAt: alarmAt.subtract(const Duration(minutes: 30)),
     ));
     await engine.evaluateAlarm(alarm.copyWith(enabled: false), [court],
@@ -715,7 +717,7 @@ void main() {
     expect(history, hasLength(1));
     expect(history.single.outcome, CheckOutcome.rang);
     expect(history.single.at, alarmAt);
-    expect(history.single.volume, closeTo(0.8875, 0.001));
+    expect(history.single.volume, 0.85);
     expect(await engine.store.loadCheckState(7), isNull);
   });
 
@@ -924,6 +926,114 @@ void main() {
         reason: 'same rule as fmtCheckTime — bare 00:19 would look earlier than 23:49');
   });
 
+  test('an off-step volume snaps to the nearest file, ties going louder', () {
+    // volumeForWind only ever returns a step, but a persisted CheckState from
+    // an older build can carry anything — it must still resolve to a shipped
+    // file rather than falling off the end of the ramp.
+    final was = nivaatSelectedSound;
+    addTearDown(() => nivaatSelectedSound = was);
+    nivaatSelectedSound = null;
+
+    const loud = nivaatDefaultSound;
+    const mid = 'assets/sounds/nivaat_ring_85.wav';
+    const quiet = 'assets/sounds/nivaat_ring_70.wav';
+
+    expect(nivaatSoundForVolume(0.93), loud);
+    expect(nivaatSoundForVolume(0.925), loud, reason: 'tie -> the louder step');
+    expect(nivaatSoundForVolume(0.92), mid);
+    expect(nivaatSoundForVolume(0.78), mid);
+    expect(nivaatSoundForVolume(0.775), mid, reason: 'tie -> the louder step');
+    expect(nivaatSoundForVolume(0.77), quiet);
+    expect(nivaatSoundForVolume(0), quiet);
+    // Out of range on both sides still lands on a real file.
+    expect(nivaatSoundForVolume(-1), quiet);
+    expect(nivaatSoundForVolume(2), loud);
+  });
+
+  test('every sound the ramp can name is actually shipped', () {
+    // The ring asset is chosen at schedule time from a computed filename, so a
+    // variant that isn't in assets/ fails at RING time — silently, hours later,
+    // on the one morning it mattered. Sweep the whole ramp against the disk.
+    final was = nivaatSelectedSound;
+    addTearDown(() => nivaatSelectedSound = was);
+    nivaatSelectedSound = null;
+
+    final named = <String>{};
+    for (var i = 0; i <= 100; i++) {
+      named.add(nivaatSoundForVolume(i / 100));
+    }
+    for (final path in named) {
+      expect(File(path).existsSync(), isTrue,
+          reason: '$path is named by the ramp but not shipped in assets/');
+    }
+    expect(named, hasLength(windVolumeSteps.length),
+        reason: 'one asset per loudness step, no more and no fewer');
+    expect(named, contains(nivaatDefaultSound),
+        reason: 'full loudness IS the master — no byte-identical _100 copy');
+
+    // And the ramp's own three values must be exactly those assets: a step
+    // added to windVolumeSteps without a matching file would silently snap
+    // onto its neighbour instead of failing.
+    expect(windVolumeSteps.map(nivaatSoundForVolume).toSet(), named);
+  });
+
+  group('nivaatHistoryLine', () {
+    final at = DateTime(2026, 7, 22, 6);
+    HistoryRecord row(CheckOutcome outcome, {double? volume}) => HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: at,
+        outcome: outcome,
+        courtSpeedKmh: 3,
+        rawGustKmh: 16,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+        volume: volume);
+
+    test('quotes the volume it rang at, alongside the numbers', () {
+      expect(nivaatHistoryLine(row(CheckOutcome.rang, volume: 0.85)),
+          'Rang (vol. 85%) · wind 3 (≤4) · gusts 16 (≤15) km/h');
+    });
+
+    test('a rang row without a volume drops the number, never the sheet', () {
+      // `volume` is optional on the record, and history is PERSISTED: force-
+      // unwrapping it meant one such row crashed the log open-after-open. The
+      // row still has to explain the morning, so only the parenthetical goes.
+      expect(nivaatHistoryLine(row(CheckOutcome.rang)),
+          'Rang · wind 3 (≤4) · gusts 16 (≤15) km/h',
+          reason: 'degrades like whenChecked and windGustSummary do');
+    });
+
+    test('a row with no readings never ends in a dangling separator', () {
+      // windGustSummary degrades to '' when the numbers are missing, so the
+      // " · " that joins it has to go with them — a row reading "Rang · " is
+      // the same broken-looking log the null check was there to avoid.
+      final bare = HistoryRecord(
+          alarmId: 7, courtId: 'c1', at: at, outcome: CheckOutcome.rang);
+      expect(nivaatHistoryLine(bare), 'Rang');
+      expect(
+          nivaatHistoryLine(HistoryRecord(
+              alarmId: 7,
+              courtId: 'c1',
+              at: at,
+              outcome: CheckOutcome.rang,
+              volume: 0.85)),
+          'Rang (vol. 85%)');
+    });
+
+    test('each skip reads as its own reason', () {
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedWindy)),
+          'Skipped · wind 3 (≤4) · gusts 16 (≤15) km/h');
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedGusty)),
+          'Skipped (gusty) · wind 3 (≤4) · gusts 16 (≤15) km/h');
+      // `row` carries readings, so this also pins that a no-data row SUPPRESSES
+      // them: numbers on a row labelled "no data" would contradict the label.
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedNoData)),
+          'Skipped (no data)',
+          reason: 'nothing was measured — no numbers to quote');
+    });
+  });
+
   /// In-flight cascade for [at] — what the home cue needs to treat a snapshot
   /// as still being checked (toggle-off clears this; toggle-on re-arms later).
   CheckState flying(DateTime at, {int id = 7}) => CheckState(
@@ -1122,7 +1232,7 @@ void main() {
       ringScheduled: true,
       ringCourtSpeedKmh: 1.8,
       ringRawGustKmh: 6.0,
-      ringVolume: 0.8875,
+      ringVolume: 0.85,
       lastCheckAt: alarmAt.subtract(const Duration(minutes: 30)),
     ));
     await engine.evaluateAlarm(alarm, const [],
@@ -1175,6 +1285,6 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     await NivaatEngine.standard();
     expect(nivaatSelectedSound, isNull);
-    expect(nivaatSoundForVolume(0.75), 'assets/sounds/nivaat_ring_75.wav');
+    expect(nivaatSoundForVolume(0.70), 'assets/sounds/nivaat_ring_70.wav');
   });
 }

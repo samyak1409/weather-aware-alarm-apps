@@ -21,7 +21,9 @@ class AlarmKitScheduler implements AlarmScheduler {
     required this.tintColor,
   });
 
-  /// e.g. volume 0.9 -> 'assets/sounds/nivaat_ring_90.wav'
+  /// e.g. volume 0.85 -> 'assets/sounds/nivaat_ring_85.wav'. Unlike
+  /// `AlarmPkgScheduler`, this one really does need the volume: AlarmKit has
+  /// no volume knob, so the ramp can only arrive baked into the file.
   final String Function(double volume) soundAssetForVolume;
 
   /// '#RRGGBB' accent used on the system alarm UI.

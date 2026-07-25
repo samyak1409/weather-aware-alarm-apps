@@ -51,26 +51,16 @@ class _HistorySheet extends StatelessWidget {
                     separatorBuilder: (_, _) => const Divider(),
                     itemBuilder: (context, i) {
                       final h = c.history[i];
-                      final (icon, line) = switch (h.outcome) {
-                        // "vol." so the number can't read as a score — the
-                        // rest of the line is label-value too (2026-07-22).
-                        CheckOutcome.rang => (
-                            Icons.notifications_active_outlined,
-                            'Rang (vol. ${(h.volume! * 100).round()}%) · ${h.windGustSummary}'
-                          ),
-                        CheckOutcome.skippedWindy => (
-                            Icons.air,
-                            'Skipped · ${h.windGustSummary}'
-                          ),
-                        CheckOutcome.skippedGusty => (
-                            Icons.air,
-                            'Skipped (gusty) · ${h.windGustSummary}'
-                          ),
-                        CheckOutcome.skippedNoData => (
-                            Icons.cloud_off_outlined,
-                            'Skipped (no data)'
-                          ),
+                      final icon = switch (h.outcome) {
+                        CheckOutcome.rang =>
+                          Icons.notifications_active_outlined,
+                        CheckOutcome.skippedWindy ||
+                        CheckOutcome.skippedGusty =>
+                          Icons.air,
+                        CheckOutcome.skippedNoData =>
+                          Icons.cloud_off_outlined,
                       };
+                      final line = nivaatHistoryLine(h);
                       // A young skip row may still flip to "rang" (retry window)
                       // — say so, with the same promise the heads-up card made.
                       final watching = nivaatStillWatchingNote(h);
