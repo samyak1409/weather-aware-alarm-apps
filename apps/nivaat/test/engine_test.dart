@@ -13,6 +13,7 @@ class FakeNotifier extends SkipNotifier {
   final List<(HistoryRecord, String)> shown = [];
   final List<(HistoryRecord, String)> extended = [];
   final List<int> cancelled = [];
+  final List<int> cancelledHeadsUp = [];
 
   @override
   Future<void> ensureInitialized() async {}
@@ -31,6 +32,11 @@ class FakeNotifier extends SkipNotifier {
   @override
   Future<void> cancelForAlarm(int alarmId) async {
     cancelled.add(alarmId);
+  }
+
+  @override
+  Future<void> cancelHeadsUp(int alarmId) async {
+    cancelledHeadsUp.add(alarmId);
   }
 }
 
@@ -282,6 +288,76 @@ void main() {
         reason: 'first retry booked');
   });
 
+  test('per-alarm 1-min retry: watchedUntil = T+1m, finalises at that cap',
+      () async {
+    // Short window for device testing without waiting half an hour.
+    const short = NivaatAlarm(
+      id: 7,
+      hour: 6,
+      minute: 0,
+      courtId: 'c1',
+      courtSpeedLimitKmh: 4,
+      retryMinutesAfter: 1,
+    );
+    api.sample = wind(9.0, 10.0);
+    // Pre-T check seeds CheckState for today's occurrence (evaluating at
+    // exact T with no state would roll to tomorrow via nextOccurrence).
+    await engine.evaluateAlarm(short, [court],
+        now: alarmAt.subtract(const Duration(minutes: 1)));
+    await engine.evaluateAlarm(short, [court], now: alarmAt);
+
+    final atT = await engine.store.loadHistory();
+    expect(atT, hasLength(1));
+    expect(atT.single.watchedUntil, alarmAt.add(const Duration(minutes: 1)),
+        reason: 'heads-up / history deadline follows THIS alarm\'s window');
+    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 1)));
+    expect(notifier.shown, isEmpty);
+    expect(notifier.extended, hasLength(1));
+    expect(notifier.extended.first.$1.watchedUntil,
+        alarmAt.add(const Duration(minutes: 1)));
+
+    // A mid-window resync (app open / sibling alarm) must NOT finalise early.
+    await engine.evaluateAlarm(short, [court],
+        now: alarmAt.add(const Duration(seconds: 5)));
+    expect(notifier.shown, isEmpty,
+        reason: 'T+5s is still inside the 1-min window');
+    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 1)),
+        reason: 'still aiming at the cap');
+    expect(await engine.store.loadHistory(), hasLength(1),
+        reason: 'no final row until the cap');
+
+    // Cap hit → final skip card + separate final history row.
+    await engine.evaluateAlarm(short, [court],
+        now: alarmAt.add(const Duration(minutes: 1)));
+    final after = await engine.store.loadHistory();
+    expect(after, hasLength(2));
+    expect(after.first.watchedUntil, isNull, reason: 'final row');
+    expect(after.last.watchedUntil, alarmAt.add(const Duration(minutes: 1)));
+    expect(notifier.shown, hasLength(1));
+  });
+
+  test('per-alarm 60-min retry: watchedUntil = T+60m', () async {
+    const long = NivaatAlarm(
+      id: 7,
+      hour: 6,
+      minute: 0,
+      courtId: 'c1',
+      courtSpeedLimitKmh: 4,
+      retryMinutesAfter: 60,
+    );
+    api.sample = wind(9.0, 10.0);
+    await engine.evaluateAlarm(long, [court],
+        now: alarmAt.subtract(const Duration(minutes: 1)));
+    await engine.evaluateAlarm(long, [court], now: alarmAt);
+    expect((await engine.store.loadHistory()).single.watchedUntil,
+        alarmAt.add(const Duration(minutes: 60)));
+    // Still retrying at +59m.
+    await engine.evaluateAlarm(long, [court],
+        now: alarmAt.add(const Duration(minutes: 59)));
+    expect(notifier.shown, isEmpty, reason: 'not finalised before the hour');
+    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 60)));
+  });
+
   test('no card of any kind before T', () async {
     api.sample = wind(9.0, 10.0); // windy
     await engine.evaluateAlarm(alarm, [court],
@@ -387,12 +463,42 @@ void main() {
     expect(history, hasLength(2));
     expect(history.first.outcome, CheckOutcome.skippedWindy);
     expect(history.first.watchedUntil, isNull, reason: 'the final row');
+    expect(history.first.whenChecked, alarmAt.add(const Duration(minutes: 30)),
+        reason: 'final row stamps the cap check, not the T reading');
     expect(history.last.watchedUntil, isNotNull, reason: 'the snapshot row');
     expect(notifier.shown, hasLength(1), reason: 'final card at the cap');
     expect(notifier.shown.first.$2, 'Home Court');
     expect((await engine.store.loadCheckState(7))!.alarmAt,
         alarmAt.add(const Duration(days: 1)),
         reason: "rolled on: tomorrow's occurrence already tracked");
+  });
+
+  test('cap wake a few seconds late still stamps checkedAt to that check',
+      () async {
+    // Device catch with a 1-min window: the wake scheduled for the cap often
+    // lands ~1–3s late. Without a grace past the cap, that jumped to tomorrow
+    // and reused the T reading as "checked" on the final skip row.
+    const short = NivaatAlarm(
+      id: 7,
+      hour: 6,
+      minute: 0,
+      courtId: 'c1',
+      courtSpeedLimitKmh: 4,
+      retryMinutesAfter: 1,
+    );
+    api.sample = wind(9.0, 10.0);
+    await engine.evaluateAlarm(short, [court],
+        now: alarmAt.subtract(const Duration(minutes: 1)));
+    await engine.evaluateAlarm(short, [court], now: alarmAt);
+
+    final lateCap = alarmAt.add(const Duration(minutes: 1, seconds: 2));
+    await engine.evaluateAlarm(short, [court], now: lateCap);
+
+    final history = await engine.store.loadHistory();
+    expect(history, hasLength(2));
+    expect(history.first.watchedUntil, isNull);
+    expect(history.first.whenChecked, lateCap,
+        reason: 'slightly-late cap wake must run a fresh check, not reuse T');
   });
 
   test('windy, then API dies exactly at the cap -> still labelled windy',
@@ -856,18 +962,84 @@ void main() {
       // Without this the "Still checking … watching until 06:30" heads-up
       // outlives the alarm and keeps promising something nothing is doing.
       api.sample = wind(9.0, 10.0); // windy
+      await engine.store.saveAlarms([alarm]);
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(minutes: 1)));
       await engine.evaluateAlarm(alarm, [court], now: alarmAt);
       expect(notifier.extended, hasLength(1), reason: 'heads-up is posted');
       expect(notifier.cancelled, isEmpty);
 
-      // The user deletes it mid-window (the controller passes enabled: false).
+      // Delete removes it from the store first (controller order), then
+      // evaluates the removed copy with enabled: false.
+      await engine.store.saveAlarms([]);
       await engine.evaluateAlarm(alarm.copyWith(enabled: false), [court],
           now: alarmAt.add(const Duration(minutes: 5)));
 
       expect(notifier.cancelled, contains(alarm.id),
           reason: "a dead alarm's cards must be pulled down");
+    });
+
+    test('toggling off mid-window drops the heads-up promise', () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      expect(notifier.extended, hasLength(1));
+      expect(notifier.shown, isEmpty, reason: 'final skip not posted yet');
+
+      // Toggle-off keeps the row in the store — only rings/checks disarm.
+      final off = alarm.copyWith(enabled: false);
+      await engine.store.saveAlarms([off]);
+      await engine.evaluateAlarm(off, [court],
+          now: alarmAt.add(const Duration(minutes: 5)));
+
+      expect(notifier.cancelled, isEmpty,
+          reason: 'full cancel is for delete/court-gone only');
+      expect(notifier.cancelledHeadsUp, contains(alarm.id),
+          reason: '"watching until 06:30" is a promise, and disabling the '
+              'alarm is what stops anyone watching');
+      expect(ring.scheduled, isEmpty, reason: 'rings still disarm');
+    });
+
+    test('toggling off after the final skip keeps N3 and drops N2', () async {
+      // Both cards are up: the product split is "record stays, promise goes".
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(minutes: 30)));
+      expect(notifier.extended, hasLength(1));
+      expect(notifier.shown, hasLength(1), reason: 'final skip card at the cap');
+
+      final off = alarm.copyWith(enabled: false);
+      await engine.store.saveAlarms([off]);
+      await engine.evaluateAlarm(off, [court],
+          now: alarmAt.add(const Duration(minutes: 31)));
+
+      expect(notifier.cancelled, isEmpty,
+          reason: 'cancelForAlarm would have pulled the skip card down too');
+      expect(notifier.cancelledHeadsUp, contains(alarm.id));
+      expect(notifier.shown, hasLength(1),
+          reason: 'the skip record card is left in the shade');
+    });
+
+    test('a missing court cancels cards even when the alarm is still saved',
+        () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      expect(notifier.extended, hasLength(1));
+
+      // Court gone → cards go (orphan promise); alarm row may still exist
+      // briefly before removeCourt finishes sweeping.
+      await engine.evaluateAlarm(alarm, const [],
+          now: alarmAt.add(const Duration(minutes: 5)));
+      expect(notifier.cancelled, contains(alarm.id));
     });
 
     test('a disabled alarm is disarmed in BOTH lockers', () async {
@@ -1043,6 +1215,125 @@ void main() {
         skipCourtSpeedKmh: 5.4,
         skipRawGustKmh: 10,
       );
+
+  test('nivaatAlarmListSub: default retry stays silent; others show +Nm', () {
+    expect(nivaatAlarmListSub(alarm, court), 'Every day · Home Court · ≤4 km/h');
+    expect(
+      nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: 1), court),
+      'Every day · Home Court · ≤4 km/h · +1m',
+    );
+    expect(
+      nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: 60), court),
+      'Every day · Home Court · ≤4 km/h · +60m',
+    );
+    expect(
+      nivaatAlarmListSub(alarm, null),
+      'Every day · court removed · ≤4 km/h',
+    );
+  });
+
+  test('nivaatInLabel / nivaatNextRingAt: countdown only for a future ring', () {
+    final now = DateTime(2026, 7, 12, 5, 0);
+    // Sentence case — Nivaat body text, not Arunoday's ALL-CAPS label strip.
+    expect(nivaatInLabel(alarmAt, now: now), 'in 1h 00m');
+    expect(nivaatInLabel(alarmAt, now: alarmAt), 'in 0h 00m');
+    expect(nivaatInLabel(alarmAt, now: alarmAt.add(const Duration(minutes: 1))),
+        '');
+    expect(nivaatNextRingAt(alarm, null, now: now), alarmAt);
+    expect(
+      nivaatNextRingAt(alarm.copyWith(enabled: false), null, now: now),
+      isNull,
+      reason: 'a home row with its switch off must not advertise a ring',
+    );
+    expect(
+      nivaatNextRingAt(alarm.copyWith(enabled: false), null,
+          now: now, ignoreEnabled: true),
+      alarmAt,
+      reason: 'the editor DOES count down for an off alarm — you are picking a '
+          'time there, so the time left is the feedback (Samyak, 2026-07-26)',
+    );
+    expect(
+      nivaatNextRingAt(alarm.copyWith(weekdays: {}), null,
+          now: now, ignoreEnabled: true),
+      isNull,
+      reason: 'no weekday can fire — nothing to count down to, even in the '
+          'editor',
+    );
+    // In-flight pre-T state wins over nextOccurrence.
+    final flying = CheckState(alarmId: 7, alarmAt: alarmAt);
+    expect(nivaatNextRingAt(alarm, flying, now: now), alarmAt);
+    // Post-T retry still open — hide countdown (late ring is anytime).
+    expect(
+      nivaatNextRingAt(alarm, flying,
+          now: alarmAt.add(const Duration(minutes: 10))),
+      isNull,
+      reason: 'must not flash tomorrow beside Still checking … until …',
+    );
+    expect(
+      nivaatNextRingAt(alarm.copyWith(retryMinutesAfter: 1), flying,
+          now: alarmAt.add(const Duration(seconds: 30))),
+      isNull,
+    );
+  });
+
+  test('nivaatInLabel switches to days past 24h', () {
+    // Nivaat alarms carry weekdays, so a multi-day gap is ordinary, not an
+    // edge: a Sat/Sun badminton alarm is five days out every Monday. Hours
+    // alone would read "in 120h 00m".
+    final monday = DateTime(2026, 7, 13, 6, 0);
+    expect(monday.weekday, DateTime.monday, reason: 'fixture sanity');
+    expect(nivaatInLabel(DateTime(2026, 7, 18, 10, 0), now: monday), 'in 5d 04h');
+    expect(nivaatInLabel(DateTime(2026, 7, 18, 6, 30), now: monday), 'in 5d 00h');
+    // The seam: hours up to 23h59m, days from 24h.
+    expect(
+        nivaatInLabel(monday.add(const Duration(hours: 23, minutes: 59)),
+            now: monday),
+        'in 23h 59m');
+    expect(nivaatInLabel(monday.add(const Duration(hours: 24)), now: monday),
+        'in 1d 00h');
+    // Day form truncates to the hour — each form drops what's below its
+    // smallest unit, and at a day's range half an hour is noise.
+    expect(
+        nivaatInLabel(monday.add(const Duration(hours: 24, minutes: 30)),
+            now: monday),
+        'in 1d 00h');
+  });
+
+  test('nivaatOccurrenceInFlight is the one rule home and the engine share',
+      () {
+    final state = CheckState(alarmId: 7, alarmAt: alarmAt);
+    final cap = alarm.retryCapAt(alarmAt);
+    expect(nivaatOccurrenceInFlight(alarm, state, cap), isTrue);
+    expect(
+      nivaatOccurrenceInFlight(
+          alarm, state, cap.add(const Duration(seconds: 3))),
+      isTrue,
+      reason: 'a cap wake landing a few seconds late is still this occurrence',
+    );
+    expect(
+      nivaatOccurrenceInFlight(
+          alarm, state, cap.add(const Duration(seconds: 6))),
+      isFalse,
+    );
+    // A state whose weekday is no longer selected isn't in flight — and home
+    // has to agree, or it would count down to an occurrence the engine has
+    // already dropped (the rule used to live twice, in slightly different
+    // forms).
+    final movedDay = alarm.copyWith(weekdays: {alarmAt.weekday % 7 + 1});
+    expect(nivaatOccurrenceInFlight(movedDay, state, alarmAt), isFalse);
+    expect(
+      nivaatNextRingAt(movedDay, state, now: alarmAt),
+      movedDay.nextOccurrence(alarmAt),
+      reason: 'falls through to the next real occurrence, like the engine',
+    );
+  });
+
+  test('nivaatUntilNextMinute aligns to the next wall-clock :00', () {
+    final mid = DateTime(2026, 7, 12, 6, 30, 17, 250);
+    expect(nivaatUntilNextMinute(mid), const Duration(seconds: 42, milliseconds: 750));
+    final onTheMinute = DateTime(2026, 7, 12, 6, 30);
+    expect(nivaatUntilNextMinute(onTheMinute), const Duration(minutes: 1));
+  });
 
   test('nivaatHomeWatchingLine: only while a snapshot window is still open', () {
     final snapshot = HistoryRecord(

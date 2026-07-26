@@ -76,5 +76,14 @@ void main() {
           isTrue);
       expect(controller.alarms.single.courtSpeedLimitKmh, 5);
     });
+
+    test('persists per-alarm retryMinutesAfter on upsert', () async {
+      expect(await controller.upsertAlarm(a.copyWith(retryMinutesAfter: 1)),
+          isTrue);
+      expect(controller.alarms.single.retryMinutesAfter, 1);
+      expect(await controller.upsertAlarm(a.copyWith(retryMinutesAfter: 60)),
+          isTrue);
+      expect(controller.alarms.single.retryMinutesAfter, 60);
+    });
   });
 }

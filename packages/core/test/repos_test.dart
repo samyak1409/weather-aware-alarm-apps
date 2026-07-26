@@ -39,6 +39,31 @@ void main() {
       await store.saveAlarms([alarm]);
       expect((await store.loadCourts()).single.name, 'Court');
       expect((await store.loadAlarms()).single.id, 7);
+      expect((await store.loadAlarms()).single.retryMinutesAfter,
+          CheckCascade.retryCapMinutesAfter,
+          reason: 'default retry window survives the store');
+    });
+
+    test('per-alarm retryMinutesAfter persists through the store', () async {
+      const short = NivaatAlarm(
+        id: 7,
+        hour: 6,
+        minute: 0,
+        courtId: 'c1',
+        retryMinutesAfter: 1,
+      );
+      await store.saveAlarms([short]);
+      expect((await store.loadAlarms()).single.retryMinutesAfter, 1);
+
+      const hour = NivaatAlarm(
+        id: 7,
+        hour: 6,
+        minute: 0,
+        courtId: 'c1',
+        retryMinutesAfter: 60,
+      );
+      await store.saveAlarms([hour]);
+      expect((await store.loadAlarms()).single.retryMinutesAfter, 60);
     });
 
     test('sound path saves, loads, and clears (remove)', () async {

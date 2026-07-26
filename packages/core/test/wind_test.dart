@@ -163,6 +163,62 @@ void main() {
           alarmAt.add(const Duration(minutes: 30)), alarmAt);
       expect(past, isNull);
     });
+
+    test('per-alarm retryCapMinutes: 1-min and 60-min windows', () {
+      // 1-min: one post-T retry at T+1, then over.
+      expect(
+        CheckCascade.nextCheckTime(alarmAt, alarmAt, retryCapMinutes: 1),
+        alarmAt.add(const Duration(minutes: 1)),
+      );
+      expect(
+        CheckCascade.nextCheckTime(
+          alarmAt.add(const Duration(minutes: 1)),
+          alarmAt,
+          retryCapMinutes: 1,
+        ),
+        isNull,
+      );
+      // 60-min: still booking near the end of the hour.
+      expect(
+        CheckCascade.nextCheckTime(
+          alarmAt.add(const Duration(minutes: 59)),
+          alarmAt,
+          retryCapMinutes: 60,
+        ),
+        alarmAt.add(const Duration(minutes: 60)),
+      );
+      expect(
+        CheckCascade.nextCheckTime(
+          alarmAt.add(const Duration(minutes: 60)),
+          alarmAt,
+          retryCapMinutes: 60,
+        ),
+        isNull,
+      );
+    });
+
+    test('inside the last minute: books the cap, never finalises early', () {
+      // Old rule (`next.isAfter(cap) ? null`) killed a 1-min window on any
+      // evaluate between T and T+1, and the last minute of a 30-min window on
+      // an off-minute wake.
+      expect(
+        CheckCascade.nextCheckTime(
+          alarmAt.add(const Duration(seconds: 5)),
+          alarmAt,
+          retryCapMinutes: 1,
+        ),
+        alarmAt.add(const Duration(minutes: 1)),
+        reason: '1-min window must survive a T+5s resync',
+      );
+      expect(
+        CheckCascade.nextCheckTime(
+          alarmAt.add(const Duration(minutes: 29, seconds: 30)),
+          alarmAt,
+        ),
+        alarmAt.add(const Duration(minutes: 30)),
+        reason: 'last half-minute of the default window books the cap',
+      );
+    });
   });
 
   group('NivaatAlarm.nextOccurrence', () {

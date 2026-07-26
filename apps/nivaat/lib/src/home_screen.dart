@@ -45,9 +45,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   NivaatController get c => widget.controller;
 
-  /// Fires when an active "+30m still checking" window ends so the home cue
+  /// Fires when an active still-checking retry window ends so the home cue
   /// clears without waiting for the next resync.
   Timer? _watchExpiry;
+
+  /// Ages the per-alarm "in Xh Ym" on every wall-clock :00.
+  Timer? _minuteTicker;
 
   @override
   void initState() {
@@ -55,6 +58,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_onChanged);
     _armWatchExpiry();
+    _armMinuteTicker();
     if (kScreenshotHarness) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(runScreenshotHarness(context, c));
@@ -65,9 +69,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _watchExpiry?.cancel();
+    _minuteTicker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_onChanged);
     super.dispose();
+  }
+
+  /// Single-shot and re-armed from the clock each hop, never `Timer.periodic`:
+  /// a periodic timer counts from its own last callback, so it drifts off :00
+  /// by however long the app spent suspended — and re-aiming at the wall clock
+  /// is the entire reason this ticker exists.
+  void _armMinuteTicker() {
+    _minuteTicker?.cancel();
+    _minuteTicker = Timer(nivaatUntilNextMinute(), () {
+      if (!mounted) return;
+      setState(() {});
+      _armMinuteTicker();
+    });
   }
 
   void _onChanged() {
@@ -89,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final delay = until.difference(DateTime.now());
     _watchExpiry = Timer(delay.isNegative ? Duration.zero : delay, () {
       if (!mounted) return;
-      // Re-arm: another alarm may still be inside its +30m window.
+      // Re-arm: another alarm may still be inside its retry window.
       _armWatchExpiry();
       setState(() {});
     });
@@ -98,8 +116,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Background isolates write history the UI isolate's prefs cache can't
-    // see — pull on every resume (bg checks also ping via ui_resync).
-    if (state == AppLifecycleState.resumed) unawaited(c.resync());
+    // see — pull on every resume (bg checks also ping via ui_resync). Repaint
+    // before re-arming the ticker: re-arming cancels the timer that came due
+    // while suspended, and that timer was what would have redrawn the stale
+    // minute. (The ticker re-aims itself every hop, so it can't drift beyond
+    // one tick on its own — this is only about the frame you're looking at.)
+    if (state != AppLifecycleState.resumed) return;
+    setState(() {});
+    _armMinuteTicker();
+    unawaited(c.resync());
   }
 
   Future<void> _addAlarm() async {
@@ -143,7 +168,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   // Sound, courts, and history live in settings now
                   // (2026-07-20, Samyak: one entry point is cleaner); a live
                   // "still checking" cue below doubles as a history shortcut
-                  // only while the +30m window is open (2026-07-22).
+                  // only while a retry window is open (2026-07-22).
                   IconButton(
                     icon: const Icon(Icons.tune, size: 20),
                     color: AppPalette.textSecondary,
@@ -211,7 +236,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Live "+30m still checking" cue only (MESSAGES N21). Tap → full history.
+  /// Live "still checking" cue only (MESSAGES N21). Tap → full history.
   ///
   /// Leading wind-accent ● in the text run (not a separate widget) — "live +
   /// tappable" without a word prefix. Full-width [InkWell] so a short line
@@ -279,6 +304,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         itemBuilder: (context, i) {
           final a = c.alarms[i];
           final court = c.courtById(a.courtId);
+          // Countdown sits with the clock (what it measures) — not buried in
+          // the court/limit sub. Enabled only; the switch already says off.
+          final inText = a.enabled
+              ? nivaatInLabel(nivaatNextRingAt(a, c.checkStates[a.id]))
+              : '';
           return InkWell(
             onTap: () => showAlarmSheet(context, c, alarm: a),
             child: Padding(
@@ -289,17 +319,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
-                          style: text.headlineMedium!.copyWith(
-                            color: a.enabled
-                                ? AppPalette.textPrimary
-                                : AppPalette.textSecondary,
-                          ),
+                        // Sits ON the clock's baseline, right beside it. It
+                        // was `Expanded` + end-aligned, which parked it against
+                        // the switch with the width of the row in between — so
+                        // it read as a label for the toggle, the opposite of
+                        // what it describes. `Flexible` (not `Expanded`) takes
+                        // only the width it needs and still ellipsises when a
+                        // long clock and "in 5d 04h" meet on a narrow phone.
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.baseline,
+                          textBaseline: TextBaseline.alphabetic,
+                          children: [
+                            Text(
+                              '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
+                              style: text.headlineMedium!.copyWith(
+                                color: a.enabled
+                                    ? AppPalette.textPrimary
+                                    : AppPalette.textSecondary,
+                              ),
+                            ),
+                            if (inText.isNotEmpty)
+                              Flexible(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(left: 10),
+                                  child: Text(
+                                    inText,
+                                    style: text.bodyMedium,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${fmtWeekdays(a.weekdays)} · ${court?.name ?? 'court removed'} · ≤${a.courtSpeedLimitKmh} km/h',
+                          nivaatAlarmListSub(a, court),
                           style: text.bodyMedium,
                         ),
                       ],

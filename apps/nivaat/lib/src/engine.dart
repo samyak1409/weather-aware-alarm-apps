@@ -79,7 +79,7 @@ String nivaatHistoryLine(HistoryRecord record) {
 /// at-T moment whose final outcome is its own later row. Null for final rows.
 ///
 /// The deadline uses [fmtCheckTime] against the alarm (`at`) — same rule as
-/// the check time — so a late-night alarm whose +30m cap crosses midnight
+/// the check time — so a late-night alarm whose retry cap crosses midnight
 /// reads `watched until 23 Jul 00:19`, never a bare `00:19` (2026-07-23).
 String? nivaatStillWatchingNote(HistoryRecord record, {DateTime? now}) {
   final until = record.watchedUntil;
@@ -91,7 +91,7 @@ String? nivaatStillWatchingNote(HistoryRecord record, {DateTime? now}) {
       : 'watched until $when';
 }
 
-/// Snapshot still inside its +30m window whose occurrence is **still being
+/// Snapshot still inside its retry window whose occurrence is **still being
 /// checked** — used by the home cue and its dismiss timer (MESSAGES.md N21).
 ///
 /// Cleared when: the cap passes; a **final** row exists for the same
@@ -129,6 +129,98 @@ HistoryRecord? nivaatSoonestOpenWatch(
 
 String _watchKey(int alarmId, DateTime at) =>
     '$alarmId@${at.millisecondsSinceEpoch}';
+
+/// Home alarm-list sub (MESSAGES.md N12). Non-default retry windows surface
+/// as `· +1m` / `· +60m` so a short test window is visible without opening
+/// the editor; the default 30 stays silent (the common case).
+String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation? court) {
+  final base =
+      '${fmtWeekdays(alarm.weekdays)} · ${court?.name ?? 'court removed'} '
+      '· ≤${alarm.courtSpeedLimitKmh} km/h';
+  if (alarm.retryMinutesAfter == CheckCascade.retryCapMinutesAfter) {
+    return base;
+  }
+  return '$base · +${alarm.retryMinutesAfter}m';
+}
+
+/// "in 1h 00m" until [t], minute-truncated (MESSAGES.md N12). Past a day it
+/// switches to "in 5d 04h" — [fmtDuration] alone would say "in 120h 00m", and
+/// a multi-day gap is routine here: a weekend-only alarm is five days out on
+/// a Monday. (Arunoday's `IN 7H 22M` never needed this — its wake is daily.)
+///
+/// Day form truncates to the hour, so 24h30m reads "in 1d 00h" — each form
+/// drops what's below its smallest unit, and at a day's range half an hour is
+/// noise. The seam is exact: 23h59m still reads "in 23h 59m".
+///
+/// Sentence case — Nivaat's home/editor meta is quiet body text, not Arunoday's
+/// ALL-CAPS label strip. Empty when [t] is null or already past.
+String nivaatInLabel(DateTime? t, {DateTime? now}) {
+  if (t == null) return '';
+  final n = now ?? DateTime.now();
+  final mins = DateTime(t.year, t.month, t.day, t.hour, t.minute)
+      .difference(DateTime(n.year, n.month, n.day, n.hour, n.minute))
+      .inMinutes;
+  if (mins < 0) return '';
+  const day = 24 * 60;
+  if (mins < day) return 'in ${fmtDuration(mins.toDouble())}';
+  return 'in ${mins ~/ day}d '
+      '${((mins % day) ~/ 60).toString().padLeft(2, '0')}h';
+}
+
+/// Delay until the next wall-clock minute (:00). Countdown tickers align here
+/// so "6:30 → in …" flips the moment 6:31 starts, not one minute after open.
+Duration nivaatUntilNextMinute([DateTime? now]) {
+  final n = now ?? DateTime.now();
+  final next = DateTime(n.year, n.month, n.day, n.hour, n.minute)
+      .add(const Duration(minutes: 1));
+  return next.difference(n);
+}
+
+/// Slack around a scheduled instant, both ends of an occurrence's life: a wake
+/// booked for T — or for the retry cap — routinely lands a second or three off.
+/// So a check arriving just early still counts as "at T", and one arriving just
+/// late still belongs to the occurrence it was booked for, instead of rolling
+/// to tomorrow and reusing the T reading (2026-07-26, 1-min window on device).
+const Duration kNivaatWakeGrace = Duration(seconds: 5);
+
+/// Is [state] still the occurrence the engine is working on at [t]?
+///
+/// One rule, two readers — the engine picks the occurrence to evaluate with it,
+/// and the UI decides what to count down to ([nivaatNextRingAt]) — so a screen
+/// can never disagree with the engine about which morning is live. The weekday
+/// test drops a state whose day is no longer selected.
+bool nivaatOccurrenceInFlight(
+  NivaatAlarm alarm,
+  CheckState state,
+  DateTime t,
+) =>
+    !t.isAfter(alarm.retryCapAt(state.alarmAt).add(kNivaatWakeGrace)) &&
+    alarm.weekdays.contains(state.alarmAt.weekday);
+
+/// Next moment this alarm may ring — the in-flight **pre-T** occurrence if any,
+/// else [NivaatAlarm.nextOccurrence]. Null when the alarm is off (unless
+/// [ignoreEnabled]), when no weekday is selected, or while a **post-T retry**
+/// is still open (a late ring is anytime — don't flash tomorrow beside
+/// "Still checking … until …").
+///
+/// [ignoreEnabled] exists for the **alarm editor**, and the split is deliberate
+/// (Samyak, 2026-07-26): the editor is where you are choosing a time, so "in 7h
+/// 20m" is the feedback that makes the choice — switched on or not. A home row
+/// is the opposite: its switch is off, so it must not advertise a ring. Same
+/// alarm, two different questions.
+DateTime? nivaatNextRingAt(
+  NivaatAlarm alarm,
+  CheckState? state, {
+  DateTime? now,
+  bool ignoreEnabled = false,
+}) {
+  if (!ignoreEnabled && !alarm.enabled) return null;
+  final t = now ?? DateTime.now();
+  if (state != null && nivaatOccurrenceInFlight(alarm, state, t)) {
+    return state.alarmAt.isAfter(t) ? state.alarmAt : null;
+  }
+  return alarm.nextOccurrence(t);
+}
 
 /// Home cue text for [nivaatSoonestOpenWatch], or null when home stays clean.
 /// The UI prefixes this with a wind-accent live ● (not a word).
@@ -215,6 +307,16 @@ class NivaatEngine {
   Future<void> _cancelCards(int alarmId) async {
     try {
       await notifier?.cancelForAlarm(alarmId);
+    } on Exception {
+      // A notification failure must never break the cascade.
+    }
+  }
+
+  /// Take down only the promise, leaving the record — see
+  /// [SkipNotifier.cancelHeadsUp].
+  Future<void> _cancelHeadsUp(int alarmId) async {
+    try {
+      await notifier?.cancelHeadsUp(alarmId);
     } on Exception {
       // A notification failure must never break the cascade.
     }
@@ -319,9 +421,19 @@ class NivaatEngine {
     if (next == null || court == null) {
       await _cancelAllRings(alarm.id);
       await checks.cancelCheck(alarm.id);
-      // The alarm is gone/disabled/court-less: its cards go with it, or a
-      // "still checking" heads-up outlives the thing it was checking.
-      await _cancelCards(alarm.id);
+      // Which cards survive depends on WHY this alarm went quiet. A delete
+      // (gone from the store) or a missing court orphans both. A toggle-off
+      // keeps the skip card — a record of a morning that really happened, and
+      // still worth reading — but takes the heads-up down: "watching until
+      // 06:30" is a promise about the next half hour, and flipping the switch
+      // is precisely what stops anyone watching (2026-07-26).
+      // Court-gone is checked first: it needs no store read to decide.
+      if (court == null ||
+          !(await store.loadAlarms()).any((a) => a.id == alarm.id)) {
+        await _cancelCards(alarm.id);
+      } else {
+        await _cancelHeadsUp(alarm.id);
+      }
       // A committed ring that already fired must reach history even while its
       // alarm is being disabled/deleted — clearing first silently dropped it
       // ("rang but never showed up in history", 2026-07-19 device testing).
@@ -371,20 +483,24 @@ class NivaatEngine {
       // checks only ever reschedule themselves.
       final upcoming = alarm.nextOccurrence(t);
       if (upcoming != null) {
-        final firstRung = CheckCascade.nextCheckTime(t, upcoming);
+        final firstRung = CheckCascade.nextCheckTime(
+          t,
+          upcoming,
+          retryCapMinutes: alarm.retryMinutesAfter,
+        );
         if (firstRung != null) await checks.scheduleCheck(alarm.id, firstRung);
       }
       return;
     }
 
     // An occurrence we're no longer tracking as current (the app first ran past
-    // its 30-min retry window, so `next` has already rolled on) still needs
-    // finalising — the app may never have run during [T, T+30]. A committed
+    // its retry window, so `next` has already rolled on) still needs
+    // finalising — the app may never have run during [T, T+cap]. A committed
     // ring fired → log "rang"; anything else (windy / gusty / no-data) is a
     // skip → log it AND post its one card, so a late first-open never silently
     // drops the occurrence. (Mutually exclusive with Rule 2, the in-window case
     // where next == stored.alarmAt.) Without this, iOS — no exact wakeups —
-    // loses the whole occurrence when first opened >30 min after T.
+    // loses the whole occurrence when first opened past the cap.
     if (stored != null &&
         stored.alarmAt != next &&
         t.isAfter(stored.alarmAt)) {
@@ -490,11 +606,14 @@ class NivaatEngine {
       }
     }
 
-    final nextCheck = CheckCascade.nextCheckTime(t, next);
+    final nextCheck = CheckCascade.nextCheckTime(
+      t,
+      next,
+      retryCapMinutes: alarm.retryMinutesAfter,
+    );
     // The grace covers scheduler jitter only; it must stay smaller than the gap
     // between creating an alarm and its T, or a skip would finalise early.
-    final atOrPastAlarm =
-        !t.isBefore(next.subtract(const Duration(seconds: 5)));
+    final atOrPastAlarm = !t.isBefore(next.subtract(kNivaatWakeGrace));
 
     // At/after T and ringing → final; we never retry a ring. A leftover "still
     // checking" heads-up is left in place — the ring itself is the update.
@@ -521,10 +640,10 @@ class NivaatEngine {
     }
 
     // At/after T but NOT ringing (windy/gusty/no-data): the skip is provisional.
-    // Keep re-checking every minute until the +30m cap, ringing late if the wind
-    // drops. Only at the cap do we finalise the skip and fire its card — using
-    // the last KNOWN reason (state), so a network blip exactly at the cap still
-    // reports "windy" rather than "couldn't check".
+    // Keep re-checking every minute until the alarm's retry cap, ringing late
+    // if the wind drops. Only at the cap do we finalise the skip and fire its
+    // card — using the last KNOWN reason (state), so a network blip exactly at
+    // the cap still reports "windy" rather than "couldn't check".
     if (atOrPastAlarm && nextCheck == null) {
       final record = _skipRecord(alarm, next, state);
       await store.upsertHistory(record);
@@ -540,10 +659,9 @@ class NivaatEngine {
     // final outcome (cap skip / late ring) will be a separate later row, so
     // dismissing the heads-up notification never hides what happened
     // (append-only log, 2026-07-20). Retries touch neither: this row is the
-    // snapshot of what the heads-up said.
+    // snapshot of what the heads-up said — deadline = this alarm's retry cap.
     if (atOrPastAlarm && !state.extendedCheckShown) {
-      final until =
-          next.add(const Duration(minutes: CheckCascade.retryCapMinutesAfter));
+      final until = alarm.retryCapAt(next);
       final snapshot = _skipRecord(alarm, next, state, watchedUntil: until);
       await _notifyExtendedCheck(snapshot, court.name, until);
       await store.upsertHistory(snapshot);
@@ -638,22 +756,20 @@ class NivaatEngine {
   }
 
   /// The occurrence this evaluation is about. An in-flight occurrence
-  /// (persisted state, still within the post-alarm retry window) wins over
+  /// (persisted state, still within the alarm's post-T retry window) wins over
   /// [NivaatAlarm.nextOccurrence], which would otherwise jump to next
   /// week/day the moment T passes.
+  ///
+  /// "Still in flight" is [nivaatOccurrenceInFlight] — the same rule the home
+  /// countdown reads, including its [kNivaatWakeGrace] past the cap.
   DateTime? _resolveOccurrence(
     NivaatAlarm alarm,
     CheckState? state,
     DateTime t,
   ) {
     if (!alarm.enabled) return null;
-    if (state != null) {
-      final cap = state.alarmAt
-          .add(const Duration(minutes: CheckCascade.retryCapMinutesAfter));
-      final inFlight = !t.isAfter(cap);
-      if (inFlight && alarm.weekdays.contains(state.alarmAt.weekday)) {
-        return state.alarmAt;
-      }
+    if (state != null && nivaatOccurrenceInFlight(alarm, state, t)) {
+      return state.alarmAt;
     }
     return alarm.nextOccurrence(t);
   }

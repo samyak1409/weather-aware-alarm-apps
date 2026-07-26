@@ -136,11 +136,12 @@ WindDecision decide(WindSample sample, WindThresholds thresholds) {
 }
 
 /// Check cascade (2026-07-15): T-1h, -30m, -15m, -10m, -5m, -2m, -1m, T-0, then
-/// every minute up to +30 min. The far pre-arm rungs (T-12h…-2h) were dropped —
-/// they only ever ran on Android (exact wakeups), where the near ladder + T-0
-/// carry it, and on iOS the whole ladder is opportunistic anyway. The post-T
-/// retries now run after *any* skip (windy/gusty/no-data), not just no-data, so
-/// a morning that calms within 30 min still rings (late) — see [NivaatEngine].
+/// every minute up to the per-alarm retry cap (default +30 min; options 1 / 30 /
+/// 60 since 2026-07-26). The far pre-arm rungs (T-12h…-2h) were dropped — they
+/// only ever ran on Android (exact wakeups), where the near ladder + T-0 carry
+/// it, and on iOS the whole ladder is opportunistic anyway. The post-T retries
+/// run after *any* skip (windy/gusty/no-data), not just no-data, so a morning
+/// that calms within the window still rings (late) — see [NivaatEngine].
 class CheckCascade {
   CheckCascade._();
 
@@ -148,27 +149,36 @@ class CheckCascade {
     60, 30, 15, 10, 5, 2, 1, 0,
   ];
 
-  /// Post-alarm retry window: keep re-checking a skipped occurrence for this
-  /// long, ringing late if the wind drops below the limit.
+  /// Choices offered in the alarm editor (1 is for short-window testing).
+  static const List<int> retryMinutesOptions = [1, 30, 60];
+
+  /// Default post-alarm retry window when the alarm doesn't pick another.
   static const int retryCapMinutesAfter = 30;
 
   /// The next moment a check should run, strictly after [now], for an alarm
-  /// firing at [alarmAt]. Returns null when the cascade is over (past the +30m
-  /// cap). Post-T retries always run to the cap — the engine stops early by
-  /// finalising the occurrence once it rings.
-  static DateTime? nextCheckTime(DateTime now, DateTime alarmAt) {
+  /// firing at [alarmAt]. Returns null when the cascade is over (past the retry
+  /// cap). [retryCapMinutes] is per-alarm ([NivaatAlarm.retryMinutesAfter]) and
+  /// post-T retries always run to it — the engine stops early by finalising the
+  /// occurrence once it rings.
+  static DateTime? nextCheckTime(
+    DateTime now,
+    DateTime alarmAt, {
+    int retryCapMinutes = retryCapMinutesAfter,
+  }) {
     DateTime? best;
     for (final m in ladderMinutesBefore) {
       final t = alarmAt.subtract(Duration(minutes: m));
       if (t.isAfter(now) && (best == null || t.isBefore(best))) best = t;
     }
     if (best != null) return best;
-    // Post-alarm minute-by-minute retries, capped.
-    final cap = alarmAt.add(const Duration(minutes: retryCapMinutesAfter));
-    if (now.isBefore(cap)) {
-      final next = now.add(const Duration(minutes: 1));
-      return next.isAfter(cap) ? null : next;
-    }
-    return null;
+    // Post-alarm minute-by-minute retries, capped. While still before the
+    // cap, book the next minute — or the cap itself when a +1m step would
+    // overshoot. Without that clamp, an off-minute wake in the last minute
+    // (or any evaluate between T and T+1m on a 1-min window) returned null
+    // and the engine finalised early (2026-07-26).
+    final cap = alarmAt.add(Duration(minutes: retryCapMinutes));
+    if (!now.isBefore(cap)) return null;
+    final next = now.add(const Duration(minutes: 1));
+    return next.isAfter(cap) ? cap : next;
   }
 }

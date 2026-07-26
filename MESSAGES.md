@@ -93,10 +93,10 @@ _Every body is now **just the evidence** (2026-07-22): the verdict lives in the 
   → `Too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · checked 06:00 · watching until 06:30`
 - **Body — no-data:** `Couldn't reach the wind · last tried {checktime} · watching until {checktime}`
   → `Couldn't reach the wind · last tried 06:00 · watching until 06:30`
-- The body is N3's plus ` · watching until {checktime}` — and that deadline phrase is word-for-word N17's history watch note (same `fmtCheckTime` vs the alarm, so a late-night cap crossing midnight dates itself).
+- The body is N3's plus ` · watching until {checktime}` — and that deadline phrase is word-for-word N17's history watch note (same `fmtCheckTime` vs the alarm, so a late-night cap crossing midnight dates itself). **`{checktime}` here is this alarm's retry cap** (T+1 / T+30 / T+60 — see N13), not a fixed +30m (2026-07-26). Pulled from the shade on delete, court-gone, **or toggle-off** — it promises something only a live alarm can keep; N3 survives a toggle-off.
 - **Left standing after the outcome — locked 2026-07-22, don't "fix" it.** Nothing cancels or rewrites this card, so after a late ring at 06:07 it still reads `Still checking … watching until 06:30`. Accepted: its counterpart arrives as its own card (N3) or as the ring itself (N1), and history keeps both moments as separate rows. Note the asymmetry is real — N17 ages `watching` → `watched` once the deadline passes; the notification cannot.
 
-### N3 — Skip card (final), at the +30m cap or on a late first-open
+### N3 — Skip card (final), at the alarm's retry cap or on a late first-open
 
 - **Title:** `{court} · {HH:MM} · Skipped` → `Society Court · 06:00 · Skipped`
 - **Body — windy:** `Too windy · {windgust} · checked {checktime}`
@@ -132,31 +132,31 @@ History is an **append-only log mirroring the notifications** (2026-07-20): an o
 
 ### N17 — Watch note (heads-up snapshot rows only)
 
-- While the +30m retry window runs: ` · watching until {checktime}` → ` · watching until 06:30` (same-day) / ` · watching until 23 Jul 00:19` (cap crosses midnight vs the alarm)
+- While the retry window runs: ` · watching until {checktime}` → ` · watching until 06:30` (same-day, default 30) / ` · watching until 06:01` (1-min window) / ` · watching until 23 Jul 00:19` (cap crosses midnight vs the alarm)
 - Forever after: ` · watched until {checktime}` → ` · watched until 06:30`
-- Appended to the sheet sub; marks the row as the at-T snapshot whose final outcome is its own later row (N5–N8). Final rows never carry it.
+- `{checktime}` is the snapshot's stored `watchedUntil` (= that alarm's retry cap at T). Appended to the sheet sub; marks the row as the at-T snapshot whose final outcome is its own later row (N5–N8). Final rows never carry it.
 
-### N21 — Home watching cue (only while a +30m window is open)
+### N21 — Home watching cue (only while a retry window is open)
 
 - Text: `Still checking wind · until {checktime}` → `Still checking wind · until 06:30`
 - Leading wind-accent filled bullet in the text (`● Still checking wind · until 06:30`) — "live + tappable", not a word prefix.
-- With several open windows, quotes the **soonest** cap (same pick the home dismiss timer uses).
+- With several open windows, quotes the **soonest** cap (same pick the home dismiss timer uses). Cap times come from each snapshot's `watchedUntil` (per-alarm).
 - **Clears when checking actually stops (2026-07-23)** — unlike N2 (a posted notification can't rewrite itself): a final row for the same `alarmId + at` (late ring / cap skip), the alarm gone/disabled, **or** live `CheckState` no longer targeting that occurrence (toggle-off discards it; toggle-on re-arms tomorrow — cue must not reappear for today's dead retries). Hidden the rest of the time (no permanent "last outcome" dump on home — 2026-07-22). Tap opens the history sheet.
 
 ## Home screen
 
 - **N9 — App label:** `NIVAAT`
-- **N21 — Watching cue** (only while a +30m retry window is open): see History § N21 above.
+- **N21 — Watching cue** (only while a retry window is open): see History § N21 above.
 - **N10 — Background note (footer, only when ≥1 alarm):** `Keep the phone charged and online before your alarm — the background wind check needs both.` Soft-wraps (no hard newlines — large accessibility text must reflow cleanly). Hidden on the empty intro. Rendered at 50% of secondary text opacity (2026-07-22) so it stays a quiet caveat.
 - **N11 — Empty state:** title `The windless alarm.` · body `Rings only when the wind at your court is low enough to play. The calmer the morning, the louder it rings.`
-- **N12 — Alarm list row (sub):** `{weekdays} · {court} · ≤{limit} km/h` → `Every day · Society Court · ≤4 km/h` — court deleted → `court removed`
+- **N12 — Alarm list row:** clock `HH:MM` with trailing `in {Xh Ym}` on the same line (enabled only) → `06:40` … `in 1h 00m`; **past 24h it switches to `in {Nd HHh}`** → `in 5d 04h` (a weekend-only alarm is five days out every Monday — hours alone would read `in 120h 00m`; the day form truncates to the hour, so 24h30m reads `in 1d 00h` — each form drops what's below its smallest unit, and the seam is exact: 23h59m still reads `in 23h 59m`); sub `{weekdays} · {court} · ≤{limit} km/h` → `Every day · Society Court · ≤4 km/h` — court deleted → `court removed`. Non-default retry appends ` · +{n}m` on the sub. Countdown is sentence-case (Nivaat body text — not Arunoday's ALL-CAPS `IN 7H 22M` label strip); sits **immediately after the clock, on its baseline** — not end-aligned against the toggle, which read as a label for the switch (2026-07-26). Toggle-off hides it; **also hidden while a post-T retry is open** (late ring is anytime — don't flash tomorrow beside the Still checking cue). Ticks on wall-clock :00.
 - **N18 — Background-checks banner** (shown while the OS throttles background wind checks; hidden while the first-run exemption dialog is up):
   - **Android:** `Battery optimisation can delay or skip Nivaat's background wind checks — it could miss a wind change and ring on a windy morning, or stay silent on a calm one.` · button `Allow background use` (re-opens the system exemption dialog)
   - **iOS:** `Background App Refresh is off — Nivaat can only check the wind while the app is open.` · button `Open Settings`
 
 ## Sheets & dialogs
 
-- **N13 — Alarm editor:** title `NEW ALARM` / `EDIT ALARM` · row `Court` · row `Max wind at court` · hint `Gust guard auto: ≤{n} km/h` → `Gust guard auto: ≤15 km/h` · buttons `Delete`, `Save`
+- **N13 — Alarm editor:** title `NEW ALARM` / `EDIT ALARM` · big clock · live `in {Xh Ym}` / `in {Nd HHh}` under it (updates with the picker + on wall-clock :00; blank only when no weekday can fire — **a switched-off alarm still counts down here** (2026-07-26, Samyak: you are picking a time, so the time left is the feedback; its home row stays silent, where the switch is the statement); the slot keeps its height either way so nothing jumps) · day chips · row `Court` (flex Row, not ListTile — a 0.67-of-SCREEN trailing cap asserted at 2× text on a 390 pt phone; label is explicit `bodyLarge` so leaving ListTile doesn't demote it to grey bodyMedium) · row `Max wind at court` · hint `Gust guard auto: ≤{n} km/h` → `Gust guard auto: ≤15 km/h` · **Keep checking** (2026-07-26): label + hint `Rings late if the wind drops in time.` — the hint states the payoff, since nothing else tells you the alarm still rings, i.e. why you'd pick 60m over 1m — on one row with trailing segments `1m` / `30m` / `60m` (default **30**, `retryMinutesAfter`; Row not ListTile — wide trailer overflows ListTile on narrow phones; segments clamp their own text scale so `60m` never crops) · buttons `Delete`, `Save`
 - **N20 — Duplicate-time error (alarm editor, inline above Save):** `Another alarm is already at {HH:MM}.` → `Another alarm is already at 06:00.` — any other alarm with the same HH:MM (court / weekdays ignored). Shown live on open and after picking a time; Save stays disabled while it shows (not a SnackBar — those land on the hidden home Scaffold).
 - **N14 — Courts sheet:** header `COURTS` · hint `Save your courts — each alarm checks the wind at its own court.`
 - **N15 — Delete-court dialog:** title `DELETE COURT` · body (variants):

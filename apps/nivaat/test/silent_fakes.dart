@@ -20,6 +20,9 @@ class SilentNotifier extends SkipNotifier {
 
   @override
   Future<void> cancelForAlarm(int alarmId) async {}
+
+  @override
+  Future<void> cancelHeadsUp(int alarmId) async {}
 }
 
 class SilentRing implements AlarmScheduler {

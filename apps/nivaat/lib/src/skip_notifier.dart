@@ -183,8 +183,8 @@ class SkipNotifier {
     );
   }
 
-  /// The final "here's why it didn't ring" card, at the +30m cap — a separate,
-  /// alerting notification (does not replace the heads-up).
+  /// The final "here's why it didn't ring" card, at the alarm's retry cap — a
+  /// separate, alerting notification (does not replace the heads-up).
   Future<void> showSkip(HistoryRecord record, String courtName) async {
     await ensureInitialized();
     final body = nivaatSkipBody(record);
@@ -198,10 +198,10 @@ class SkipNotifier {
     );
   }
 
-  /// Pull down both of [alarmId]'s cards. Called when an alarm stops being a
-  /// live thing — deleted, disabled, or its court removed.
+  /// Pull down both of [alarmId]'s cards. Called when the alarm is **deleted**
+  /// (or its court is gone) — everything it ever said is now orphaned.
   ///
-  /// Without this a heads-up card outlives its alarm and keeps making a
+  /// Without this a heads-up card outlives a deleted alarm and keeps making a
   /// promise nothing is keeping: "Still checking … watching until 06:30" sits
   /// in the shade after you delete the alarm at 06:05, until you swipe it away
   /// by hand. Cancelling an id that isn't posted is a no-op, so this is safe
@@ -210,5 +210,16 @@ class SkipNotifier {
     await ensureInitialized();
     await _plugin.cancel(id: NivaatIds.headsUp(alarmId));
     await _plugin.cancel(id: NivaatIds.skip(alarmId));
+  }
+
+  /// Pull down only the heads-up. Called on **toggle-off**, where the two
+  /// cards part ways (2026-07-26): the skip card is a record of a morning that
+  /// really happened and stays, but the heads-up is a promise about the next
+  /// half hour — "watching until 06:30" — and disabling the alarm is exactly
+  /// what stops anyone watching. Same false promise the delete case fixed,
+  /// just reached by a switch instead of a delete.
+  Future<void> cancelHeadsUp(int alarmId) async {
+    await ensureInitialized();
+    await _plugin.cancel(id: NivaatIds.headsUp(alarmId));
   }
 }

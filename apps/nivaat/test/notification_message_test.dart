@@ -80,6 +80,16 @@ void main() {
       );
     });
 
+    test('watching until follows the per-alarm retry cap (1-min window)', () {
+      final shortUntil = at.add(const Duration(minutes: 1));
+      expect(
+        nivaatExtendedCheckBody(
+            record(CheckOutcome.skippedWindy, wind: 6, gust: 18), shortUntil),
+        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · checked 06:00 · '
+        'watching until 06:01',
+      );
+    });
+
     test('gusty', () {
       expect(
         nivaatExtendedCheckBody(

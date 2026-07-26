@@ -7,7 +7,7 @@
 /// (`id ~/ 10000` = which kind, `id % 10000` = which alarm):
 ///
 ///     10000 + alarmId   ring armed for the occurrence's own time
-///     20000 + alarmId   LATE ring, armed after T inside the retry window
+///     20000 + alarmId   LATE ring, armed after T inside the per-alarm retry window
 ///     30000 + alarmId   wind check (Android AlarmManager request code)
 ///     40000 + alarmId   "still checking" notification
 ///     50000 + alarmId   "skipped" notification
@@ -44,7 +44,7 @@ class NivaatIds {
   /// converge on ONE armed ring, not scatter eight of them.
   static int ring(int alarmId) => ringBlock + alarmId;
 
-  /// The LATE ring: armed at or after T, when a retry inside the +30m window
+  /// The LATE ring: armed at or after T, when a retry inside the retry window
   /// finds the wind has calmed and rings a few seconds from now.
   ///
   /// It needs its own locker because the very pass that arms it then closes

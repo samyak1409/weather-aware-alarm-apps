@@ -143,7 +143,7 @@ class ArunodaySettings {
       );
 }
 
-/// One Nivaat alarm: a time, a court, a wind threshold.
+/// One Nivaat alarm: a time, a court, a wind threshold, a retry window.
 class NivaatAlarm {
   const NivaatAlarm({
     required this.id,
@@ -151,6 +151,7 @@ class NivaatAlarm {
     required this.minute,
     required this.courtId,
     this.courtSpeedLimitKmh = WindThresholds.defaultLimit,
+    this.retryMinutesAfter = CheckCascade.retryCapMinutesAfter,
     this.weekdays = const {1, 2, 3, 4, 5, 6, 7},
     this.enabled = true,
   });
@@ -162,12 +163,20 @@ class NivaatAlarm {
   final String courtId;
   final int courtSpeedLimitKmh;
 
+  /// How long after T to keep re-checking a skip (1 / 30 / 60). Stored per
+  /// alarm; drives `watchedUntil`, the heads-up deadline, and the cascade cap.
+  final int retryMinutesAfter;
+
   /// DateTime.weekday values (1 = Mon .. 7 = Sun).
   final Set<int> weekdays;
   final bool enabled;
 
   WindThresholds get thresholds =>
       WindThresholds(courtSpeedLimitKmh: courtSpeedLimitKmh);
+
+  /// Cap instant for an occurrence at [alarmAt] (T + [retryMinutesAfter]).
+  DateTime retryCapAt(DateTime alarmAt) =>
+      alarmAt.add(Duration(minutes: retryMinutesAfter));
 
   /// Next occurrence strictly after [now].
   DateTime? nextOccurrence(DateTime now) {
@@ -185,6 +194,7 @@ class NivaatAlarm {
     int? minute,
     String? courtId,
     int? courtSpeedLimitKmh,
+    int? retryMinutesAfter,
     Set<int>? weekdays,
     bool? enabled,
   }) =>
@@ -194,6 +204,7 @@ class NivaatAlarm {
         minute: minute ?? this.minute,
         courtId: courtId ?? this.courtId,
         courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
+        retryMinutesAfter: retryMinutesAfter ?? this.retryMinutesAfter,
         weekdays: weekdays ?? this.weekdays,
         enabled: enabled ?? this.enabled,
       );
@@ -204,6 +215,7 @@ class NivaatAlarm {
         'minute': minute,
         'courtId': courtId,
         'courtSpeedLimitKmh': courtSpeedLimitKmh,
+        'retryMinutesAfter': retryMinutesAfter,
         'weekdays': weekdays.toList(),
         'enabled': enabled,
       };
@@ -219,11 +231,32 @@ class NivaatAlarm {
         courtSpeedLimitKmh:
             ((j['courtSpeedLimitKmh'] as int?) ?? WindThresholds.defaultLimit)
                 .clamp(WindThresholds.minLimit, WindThresholds.maxLimit),
+        // Missing key → default 30 (alarms saved before per-alarm windows).
+        // Unknown values snap to the nearest offered option.
+        retryMinutesAfter: clampRetryMinutes(
+          (j['retryMinutesAfter'] as int?) ??
+              CheckCascade.retryCapMinutesAfter,
+        ),
         weekdays: (j['weekdays'] as List? ?? const [1, 2, 3, 4, 5, 6, 7])
             .cast<int>()
             .toSet(),
         enabled: j['enabled'] as bool? ?? true,
       );
+
+  /// Snap [raw] onto [CheckCascade.retryMinutesOptions] (nearest; ties → lower).
+  static int clampRetryMinutes(int raw) {
+    final options = CheckCascade.retryMinutesOptions;
+    var best = options.first;
+    var bestDist = (raw - best).abs();
+    for (final o in options.skip(1)) {
+      final d = (raw - o).abs();
+      if (d < bestDist) {
+        best = o;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
 }
 
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
@@ -266,10 +299,10 @@ class HistoryRecord {
   /// rows → falls back to [at]. See [whenChecked].
   final DateTime? checkedAt;
 
-  /// Set only on the provisional "still checking" row written at T (= the
-  /// +30m retry cap it kept watching toward). Marks the row as the heads-up
-  /// snapshot — its final counterpart (a late ring, or the cap's skip) is a
-  /// separate later row. Null on every final row.
+  /// Set only on the provisional "still checking" row written at T (= that
+  /// alarm's retry cap it kept watching toward — 1/30/60 min). Marks the row
+  /// as the heads-up snapshot — its final counterpart (a late ring, or the
+  /// cap's skip) is a separate later row. Null on every final row.
   final DateTime? watchedUntil;
   final double? courtSpeedKmh;
   final double? rawGustKmh;

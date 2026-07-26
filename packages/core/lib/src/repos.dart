@@ -70,7 +70,7 @@ class CheckState {
   /// occurrence (at T), so the minute-by-minute retries don't re-post it.
   final bool extendedCheckShown;
 
-  /// The last KNOWN skip reading — kept across no-data retries so the +30m
+  /// The last KNOWN skip reading — kept across no-data retries so the final
   /// card reports the real reason even if the cap check itself has no data.
   /// Null until a check actually reads a skip-worthy wind. [skipGusty]
   /// distinguishes gusty from windy (only meaningful when the speeds are set).

@@ -111,20 +111,24 @@ void main() {
     });
 
     test('copyWith and JSON round-trip', () {
-      final e = alarm.copyWith(enabled: false, weekdays: const {6, 7});
+      final e = alarm.copyWith(
+          enabled: false, weekdays: const {6, 7}, retryMinutesAfter: 60);
       expect(e.enabled, isFalse);
       expect(e.weekdays, const {6, 7});
+      expect(e.retryMinutesAfter, 60);
       expect(e.id, 7); // id is preserved
       final back = NivaatAlarm.fromJson(e.toJson());
       expect(back.enabled, isFalse);
       expect(back.weekdays, const {6, 7});
       expect(back.courtId, 'c1');
+      expect(back.retryMinutesAfter, 60);
     });
 
     test('fromJson applies defaults for missing optional fields', () {
       final a = NivaatAlarm.fromJson(
           {'id': 9, 'hour': 6, 'minute': 0, 'courtId': 'c'});
       expect(a.courtSpeedLimitKmh, WindThresholds.defaultLimit);
+      expect(a.retryMinutesAfter, CheckCascade.retryCapMinutesAfter);
       expect(a.weekdays, const {1, 2, 3, 4, 5, 6, 7});
       expect(a.enabled, isTrue);
     });
@@ -139,6 +143,49 @@ void main() {
       final high = NivaatAlarm.fromJson(
           {'id': 2, 'hour': 6, 'minute': 0, 'courtId': 'c', 'courtSpeedLimitKmh': 9});
       expect(high.courtSpeedLimitKmh, 6);
+    });
+
+    test('retryMinutesAfter round-trips and snaps unknown values onto 1/30/60',
+        () {
+      final short = alarm.copyWith(retryMinutesAfter: 1);
+      expect(short.retryCapAt(DateTime(2026, 7, 12, 6, 0)),
+          DateTime(2026, 7, 12, 6, 1));
+      final back = NivaatAlarm.fromJson(short.toJson());
+      expect(back.retryMinutesAfter, 1);
+
+      final hour = NivaatAlarm.fromJson({
+        'id': 1,
+        'hour': 6,
+        'minute': 0,
+        'courtId': 'c',
+        'retryMinutesAfter': 60,
+      });
+      expect(hour.retryMinutesAfter, 60);
+
+      // clampRetryMinutes walks the options in order and keeps the FIRST
+      // nearest, so "ties prefer the lower" only holds while the list is
+      // ascending. Reorder it and 45 would snap to 60.
+      expect(
+        CheckCascade.retryMinutesOptions,
+        orderedEquals(List.of(CheckCascade.retryMinutesOptions)..sort()),
+        reason: 'retryMinutesOptions must stay ascending',
+      );
+
+      // Nearest option; ties prefer the lower (45 → 30). Boundary only —
+      // fromJson (and the editor) clamp; copyWith does not.
+      expect(NivaatAlarm.clampRetryMinutes(45), 30);
+      expect(NivaatAlarm.clampRetryMinutes(2), 1);
+      expect(NivaatAlarm.clampRetryMinutes(50), 60);
+      expect(
+        NivaatAlarm.fromJson({
+          'id': 1,
+          'hour': 6,
+          'minute': 0,
+          'courtId': 'c',
+          'retryMinutesAfter': 45,
+        }).retryMinutesAfter,
+        30,
+      );
     });
   });
 
