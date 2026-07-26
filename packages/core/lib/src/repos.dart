@@ -205,13 +205,16 @@ class NivaatStore {
 
   /// Inserts [record], REPLACING any existing row for the same EVENT — same
   /// occurrence (alarmId + at) and same kind (heads-up snapshot vs final,
-  /// told apart by `watchedUntil`). History is an append-only log (user
-  /// decision 2026-07-20): the "still checking" row written at T and the
-  /// final outcome row (cap skip, or a late ring) are separate entries that
-  /// both stay — the replace half exists ONLY so a foreground/background
-  /// double-write of the same event converges on one row instead of
-  /// duplicating it. New events prepend (newest first). Keeps the newest
-  /// [_historyLimit] entries.
+  /// told apart by `watchedUntil`). History is append-only **for events**
+  /// (user decision 2026-07-20): the "still checking" row written at T and
+  /// the final outcome row (cap skip, or a late ring) are separate entries
+  /// that both stay. The replace half converges a foreground/background
+  /// double-write of the same event onto one row, and also applies the two
+  /// explicit **snapshot annotations** (2026-07-26): move `watchedUntil`
+  /// when Keep checking changes mid-window, or stamp `watchStoppedAt` when
+  /// the user kills an open watch — never rewrite wind numbers / limits.
+  /// New events prepend (newest first). Keeps the newest [_historyLimit]
+  /// entries.
   Future<void> upsertHistory(HistoryRecord record) async {
     final all = await loadHistory();
     final i = all.indexWhere((r) =>

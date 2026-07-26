@@ -73,32 +73,103 @@ String nivaatHistoryLine(HistoryRecord record) {
   return summary.isEmpty ? head : '$head · $summary';
 }
 
-/// The note for a heads-up snapshot row (`watchedUntil` set): "watching until
-/// …" while the retry window still runs — the same promise the heads-up
-/// card makes — then "watched until …" forever, marking it as the
-/// at-T moment whose final outcome is its own later row. Null for final rows.
+/// Whether [history] already has a final row for the same occurrence as
+/// [snapshot] (`alarmId + at`, `watchedUntil == null`).
+///
+/// Early-exit scan — for the history sheet's per-row call. Bulk engine
+/// scans use [nivaatFinalizedWatchKeys] once instead.
+bool nivaatHistoryHasFinal(
+  Iterable<HistoryRecord> history,
+  HistoryRecord snapshot,
+) {
+  if (snapshot.watchedUntil == null) return false;
+  final key = _watchKey(snapshot.alarmId, snapshot.at);
+  for (final h in history) {
+    if (h.watchedUntil == null && _watchKey(h.alarmId, h.at) == key) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Keys of occurrences that already have a final row (`watchedUntil == null`).
+///
+/// Not equivalent to [nivaatHistoryHasFinal]: that returns false when the
+/// probe itself is a final (its null-guard). This set still contains that
+/// key. Callers must only look up **snapshot** rows (`watchedUntil != null`)
+/// — every current bulk site does. Built once for O(n) engine scans
+/// (soonest-open, heads-up promise, stamp-stopped). Not for per-row UI.
+Set<String> nivaatFinalizedWatchKeys(Iterable<HistoryRecord> history) => {
+      for (final h in history)
+        if (h.watchedUntil == null) _watchKey(h.alarmId, h.at),
+    };
+
+/// The note for a heads-up snapshot row (`watchedUntil` set). Null for finals.
+///
+/// - Live: `watching until 06:30`
+/// - Final landed: `watched until 06:30`
+/// - User killed the watch early: `watching until 06:30 · stopped at 06:05`
+///   (keeps the planned cap — what the window was set for)
+/// - Past cap, no final, not user-stopped: `watching until 06:30 · failed`
+///
+/// Pass [hasFinal] from the full log ([nivaatHistoryHasFinal]) — required,
+/// because without it a completed morning past the cap wrongly reads
+/// `· failed`.
 ///
 /// The deadline uses [fmtCheckTime] against the alarm (`at`) — same rule as
 /// the check time — so a late-night alarm whose retry cap crosses midnight
 /// reads `watched until 23 Jul 00:19`, never a bare `00:19` (2026-07-23).
-String? nivaatStillWatchingNote(HistoryRecord record, {DateTime? now}) {
+String? nivaatStillWatchingNote(
+  HistoryRecord record, {
+  DateTime? now,
+  required bool hasFinal,
+}) {
   final until = record.watchedUntil;
   if (until == null) return null;
-  final t = now ?? DateTime.now();
   final when = fmtCheckTime(until, record.at);
-  return t.isBefore(until)
-      ? 'watching until $when'
-      : 'watched until $when';
+  final stopped = record.watchStoppedAt;
+  if (stopped != null) {
+    return 'watching until $when · stopped at '
+        '${fmtCheckTime(stopped, record.at)}';
+  }
+  if (hasFinal) return 'watched until $when';
+  final t = now ?? DateTime.now();
+  if (t.isBefore(until)) return 'watching until $when';
+  return 'watching until $when · failed';
+}
+
+/// Does saving [next] over [previous] kill an in-flight occurrence?
+///
+/// **Continue** (false): wind limit, Keep checking widen/shrink, weekdays that
+/// still include the in-flight day (add-only or drop-other-days).
+/// **Abandon** (true): time, court, drop the in-flight weekday, disable.
+bool nivaatEditAbandonsInFlight(
+  NivaatAlarm previous,
+  NivaatAlarm next, {
+  CheckState? state,
+  DateTime? now,
+}) {
+  if (!next.enabled && previous.enabled) return true;
+  if (previous.hour != next.hour || previous.minute != next.minute) {
+    return true;
+  }
+  if (previous.courtId != next.courtId) return true;
+  final t = now ?? DateTime.now();
+  if (state != null && nivaatOccurrenceInFlight(previous, state, t)) {
+    return !next.weekdays.contains(state.alarmAt.weekday);
+  }
+  return false;
 }
 
 /// Snapshot still inside its retry window whose occurrence is **still being
 /// checked** — used by the home cue and its dismiss timer (MESSAGES.md N21).
 ///
 /// Cleared when: the cap passes; a **final** row exists for the same
-/// `alarmId + at` (late ring / cap skip); that alarm is gone / disabled; or
-/// live [CheckState] no longer targets that occurrence (toggle-off discards
-/// it; toggle-on re-arms *tomorrow* — without this, the cue would lie until
-/// the cap). With several open windows, returns the **soonest** cap.
+/// `alarmId + at` (late ring / cap skip); that alarm is gone / disabled;
+/// the snapshot was user-stopped (`watchStoppedAt`); or live [CheckState] no
+/// longer targets that occurrence (toggle-off abandons it; toggle-on re-arms
+/// *tomorrow* — without this, the cue would lie until the cap). With several
+/// open windows, returns the **soonest** cap.
 HistoryRecord? nivaatSoonestOpenWatch(
   Iterable<HistoryRecord> history, {
   required Iterable<NivaatAlarm> alarms,
@@ -106,18 +177,18 @@ HistoryRecord? nivaatSoonestOpenWatch(
   DateTime? now,
 }) {
   final t = now ?? DateTime.now();
+  // Materialize once — a lazy `history.where(...)` must not re-run per row.
+  final rows = List<HistoryRecord>.of(history);
+  final finalized = nivaatFinalizedWatchKeys(rows);
   final liveIds = {for (final a in alarms) if (a.enabled) a.id};
-  final finalized = {
-    for (final h in history)
-      if (h.watchedUntil == null) _watchKey(h.alarmId, h.at)
-  };
   final inFlight = {
     for (final s in checkStates) _watchKey(s.alarmId, s.alarmAt)
   };
   HistoryRecord? soonest;
-  for (final h in history) {
+  for (final h in rows) {
     final until = h.watchedUntil;
     if (until == null || !t.isBefore(until)) continue;
+    if (h.watchStoppedAt != null) continue;
     if (!liveIds.contains(h.alarmId)) continue;
     if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
     if (!inFlight.contains(_watchKey(h.alarmId, h.at))) continue;
@@ -312,7 +383,7 @@ class NivaatEngine {
     }
   }
 
-  /// Take down only the promise, leaving the record — see
+  /// Take down only an open mid-window heads-up — see
   /// [SkipNotifier.cancelHeadsUp].
   Future<void> _cancelHeadsUp(int alarmId) async {
     try {
@@ -320,6 +391,68 @@ class NivaatEngine {
     } on Exception {
       // A notification failure must never break the cascade.
     }
+  }
+
+  /// Is there still a live "watching until…" promise for [alarmId] at [t]?
+  ///
+  /// Reads **history**, not [CheckState]: abandon clears state before
+  /// [evaluateAlarm], so a CheckState-only test would miss mid-window and
+  /// leave a false promise in the shade. An open snapshot (future
+  /// `watchedUntil`, not user-stopped, no final for same `alarmId+at`) is
+  /// the durable signal that N2 is still promising, not remembering.
+  Future<bool> _headsUpStillPromising(int alarmId, DateTime t) async {
+    final history = await store.loadHistory();
+    final finalized = nivaatFinalizedWatchKeys(history);
+    for (final h in history) {
+      if (h.alarmId != alarmId) continue;
+      final until = h.watchedUntil;
+      if (until == null || !t.isBefore(until)) continue;
+      if (h.watchStoppedAt != null) continue;
+      if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /// Stamp `watchStoppedAt` on the snapshot the user just killed — the live
+  /// window (`watchedUntil` still ahead) and/or the occurrence in [stored].
+  /// Never rewrites an ancient `· failed` row when they toggle off next week.
+  Future<void> _stampWatchStopped(
+    int alarmId,
+    DateTime t, {
+    CheckState? stored,
+  }) async {
+    final history = await store.loadHistory();
+    final finalized = nivaatFinalizedWatchKeys(history);
+    for (final h in history) {
+      if (h.alarmId != alarmId) continue;
+      final until = h.watchedUntil;
+      if (until == null || h.watchStoppedAt != null) continue;
+      if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
+      final liveWindow = t.isBefore(until);
+      final thisOccurrence = stored != null && stored.alarmAt == h.at;
+      if (!liveWindow && !thisOccurrence) continue;
+      await store.upsertHistory(h.copyWith(watchStoppedAt: t));
+    }
+  }
+
+  /// Move only `watchedUntil` on the open snapshot for [alarmId]/[alarmAt].
+  /// Returns the updated row (so the quiet N2 refresh can reuse it without a
+  /// second history load), or null if no snapshot was found.
+  Future<HistoryRecord?> _rewriteSnapshotCap(
+    int alarmId,
+    DateTime alarmAt,
+    DateTime newUntil,
+  ) async {
+    final history = await store.loadHistory();
+    for (final h in history) {
+      if (h.alarmId != alarmId || h.at != alarmAt) continue;
+      if (h.watchedUntil == null) continue;
+      final updated = h.copyWith(watchedUntil: newUntil);
+      await store.upsertHistory(updated);
+      return updated;
+    }
+    return null;
   }
 
   /// Clear EVERY armed ring for this alarm — both the pre-arm and late-ring
@@ -379,13 +512,11 @@ class NivaatEngine {
   }) =>
       _enqueue(alarm.id, () => _evaluate(alarm, courts, now: now));
 
-  /// The controller's edit path: an edit invalidates the in-flight occurrence,
-  /// but its state may hold the only evidence of a ring that already FIRED —
-  /// blind-clearing here was how an edited alarm's ring vanished from history
-  /// for good (2026-07-19 device testing). Finalise that ring into history,
-  /// then drop the state. Pass the PRE-edit alarm: the fired ring belongs to
-  /// its old court/thresholds.
-  Future<void> discardOccurrence(NivaatAlarm alarm, {DateTime? now}) =>
+  /// User killed the in-flight occurrence (toggle-off, abandon edit, …).
+  /// Finalise a fired-but-unlogged ring, stamp open snapshots `stopped at`,
+  /// drop the heads-up promise, clear cascade state. Pass the PRE-edit alarm
+  /// when an edit abandoned: the fired ring belongs to its old thresholds.
+  Future<void> abandonOccurrence(NivaatAlarm alarm, {DateTime? now}) =>
       _enqueue(alarm.id, () async {
         final t = now ?? DateTime.now();
         final stored = await store.loadCheckState(alarm.id);
@@ -394,15 +525,85 @@ class NivaatEngine {
             t.isAfter(stored.alarmAt)) {
           await store.upsertHistory(_rangRecord(alarm, stored));
         }
-        // Disarm BOTH lockers, not just the one this occurrence would use: an
-        // edit can move the alarm to a different day (hence the other locker),
-        // which would otherwise leave the OLD time armed and ringing. It also
-        // means a re-evaluation that can't reach the network leaves no ring at
-        // all rather than a stale one — the right trade for Nivaat, where a
-        // ring is only ever legitimate if a wind check just approved it.
+        // Cancel N2 only while it is still a live promise — after a final
+        // skip/late ring both cards are history (same rule as quiet-branch).
+        // Order: decide [dropHeadsUp] BEFORE [_stampWatchStopped] — the stamp
+        // makes [_headsUpStillPromising] false.
+        final dropHeadsUp = await _headsUpStillPromising(alarm.id, t);
+        await _stampWatchStopped(alarm.id, t, stored: stored);
+        if (dropHeadsUp) await _cancelHeadsUp(alarm.id);
         await _cancelAllRings(alarm.id);
+        await checks.cancelCheck(alarm.id);
         await store.clearCheckState(alarm.id);
       });
+
+  /// Keep-checking / add-only weekdays / limit: keep the same occurrence
+  /// flying. Limit-only returns early (state stays; the follow-up evaluate
+  /// re-decides under the new thresholds). A new retry cap rewrites only
+  /// `watchedUntil` on the existing snapshot — wind numbers and limits stay
+  /// whatever the first heads-up said — and quietly refreshes N2's deadline
+  /// in place (no cancel). Shrink past "now" still leaves finalisation to
+  /// the next [evaluateAlarm] (window over — not `stopped at`), and **keeps
+  /// N2** so the final skip posts beside it. Widening after the *old* cap
+  /// has already passed must not resurrect a dead window — defence in depth
+  /// finalises that stale state here (a real edit always resyncs first, which
+  /// usually clears it before Save).
+  Future<void> retainInFlightEdits(
+    NivaatAlarm previous,
+    NivaatAlarm next, {
+    DateTime? now,
+  }) =>
+      _enqueue(next.id, () async {
+        final t = now ?? DateTime.now();
+        final state = await store.loadCheckState(next.id);
+        if (state == null) return;
+        if (previous.retryMinutesAfter == next.retryMinutesAfter) return;
+        SavedLocation? court;
+        for (final c in await store.loadCourts()) {
+          if (c.id == next.courtId) court = c;
+        }
+        // Old window already over → finalise now. Evaluate under the NEW
+        // longer cap would see inFlight again and resurrect a dead morning.
+        // Leave N2 standing — both cards stay after a final.
+        if (!nivaatOccurrenceInFlight(previous, state, t)) {
+          await _finaliseAbandonedWindow(previous, state, court, t);
+          return;
+        }
+        final newCap = next.retryCapAt(state.alarmAt);
+        final updated =
+            await _rewriteSnapshotCap(next.id, state.alarmAt, newCap);
+        // Deadline only — never rebuild N2 from [next] (that would put new
+        // limits next to the old wind reading: "Too windy · wind 5 (≤20)").
+        if (updated != null && state.extendedCheckShown && court != null) {
+          await _notifyExtendedCheck(
+            updated,
+            court.name,
+            newCap,
+            quietUpdate: true,
+          );
+        }
+      });
+
+  /// Cap already passed (or Keep checking widened after death): write the
+  /// final skip/rang for [state] and clear it. Not a user `stopped at`.
+  Future<void> _finaliseAbandonedWindow(
+    NivaatAlarm alarm,
+    CheckState state,
+    SavedLocation? court,
+    DateTime t,
+  ) async {
+    if (state.ringScheduled) {
+      await store.upsertHistory(_rangRecord(alarm, state));
+    } else if (court != null) {
+      final record = _skipRecord(alarm, state.alarmAt, state);
+      await store.upsertHistory(record);
+      await _notifySkip(record, court.name);
+    } else {
+      await store.upsertHistory(_skipRecord(alarm, state.alarmAt, state));
+    }
+    await checks.cancelCheck(alarm.id);
+    await store.clearCheckState(alarm.id);
+  }
 
   Future<void> _evaluate(
     NivaatAlarm alarm,
@@ -423,15 +624,22 @@ class NivaatEngine {
       await checks.cancelCheck(alarm.id);
       // Which cards survive depends on WHY this alarm went quiet. A delete
       // (gone from the store) or a missing court orphans both. A toggle-off
-      // keeps the skip card — a record of a morning that really happened, and
-      // still worth reading — but takes the heads-up down: "watching until
-      // 06:30" is a promise about the next half hour, and flipping the switch
-      // is precisely what stops anyone watching (2026-07-26).
+      // drops the heads-up only while it is still a live promise — mid-window,
+      // no final yet — because "watching until 06:30" would then be a lie.
+      // Once the window closed (cap skip or late ring), both cards are history
+      // of a morning that really was checked; leave them (2026-07-26).
+      // Decision uses history ([_headsUpStillPromising]), not [stored]: the
+      // controller abandons CheckState before this evaluate runs.
       // Court-gone is checked first: it needs no store read to decide.
-      if (court == null ||
-          !(await store.loadAlarms()).any((a) => a.id == alarm.id)) {
+      // Alarm-delete stamps `stopped at` (history stays); court-gone wipes the
+      // court log afterward so a stamp would be pointless.
+      if (court == null) {
         await _cancelCards(alarm.id);
-      } else {
+      } else if (!(await store.loadAlarms()).any((a) => a.id == alarm.id)) {
+        await _stampWatchStopped(alarm.id, t, stored: stored);
+        await _cancelCards(alarm.id);
+      } else if (await _headsUpStillPromising(alarm.id, t)) {
+        await _stampWatchStopped(alarm.id, t, stored: stored);
         await _cancelHeadsUp(alarm.id);
       }
       // A committed ring that already fired must reach history even while its
@@ -747,9 +955,18 @@ class NivaatEngine {
   }
 
   Future<void> _notifyExtendedCheck(
-      HistoryRecord record, String courtName, DateTime until) async {
+    HistoryRecord record,
+    String courtName,
+    DateTime until, {
+    bool quietUpdate = false,
+  }) async {
     try {
-      await notifier?.showExtendedCheck(record, courtName, until);
+      await notifier?.showExtendedCheck(
+        record,
+        courtName,
+        until,
+        quietUpdate: quietUpdate,
+      );
     } on Exception {
       // A notification failure must never break the cascade.
     }

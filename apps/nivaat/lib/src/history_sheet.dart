@@ -63,7 +63,10 @@ class _HistorySheet extends StatelessWidget {
                       final line = nivaatHistoryLine(h);
                       // A young skip row may still flip to "rang" (retry window)
                       // — say so, with the same promise the heads-up card made.
-                      final watching = nivaatStillWatchingNote(h);
+                      final watching = nivaatStillWatchingNote(
+                        h,
+                        hasFinal: nivaatHistoryHasFinal(c.history, h),
+                      );
                       return ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(icon, size: 20),

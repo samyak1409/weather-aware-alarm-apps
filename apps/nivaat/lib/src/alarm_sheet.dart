@@ -112,11 +112,11 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   /// `ignoreEnabled` unreachable and the behaviour accidental. It is a decision,
   /// so it now reads like one.)
   ///
-  /// No [CheckState] on purpose: saving calls `discardOccurrence`, which throws
-  /// away any occurrence still in flight — so the honest answer for "if I save
-  /// this" is the next fresh occurrence, even mid retry-window. That is the
-  /// other reason this legitimately differs from home, which describes the
-  /// occurrence running right now.
+  /// No [CheckState] on purpose: the draft is "if I save this clock/weekdays",
+  /// not the live cascade. Mid-window continue edits may keep today's flight
+  /// alive on save, but the countdown here still answers the draft time
+  /// (2026-07-26, Samyak — picker feedback; home stays quiet beside Still
+  /// checking). See SPEC / MESSAGES N13.
   DateTime? get _draftNextRing => nivaatNextRingAt(
         NivaatAlarm(
           id: widget.existing?.id ?? 0,

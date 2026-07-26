@@ -262,10 +262,13 @@ class NivaatAlarm {
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
 
 /// One line of Nivaat history: what happened and why. The trust mechanism —
-/// a skipped alarm must always be explainable. History is an append-only log
-/// of events, like the notifications (user decision 2026-07-20): the
-/// "still checking" moment at T and the final outcome are SEPARATE rows that
-/// both stay forever — nothing is overwritten.
+/// a skipped alarm must always be explainable. History is append-only **for
+/// events** (user decision 2026-07-20 / 2026-07-26): the "still checking"
+/// moment at T and the final outcome are SEPARATE rows that both stay forever
+/// — new events never overwrite other events. Explicit **snapshot
+/// annotations** (same row, via [copyWith]): Keep checking mid-window may
+/// move [watchedUntil] only; user kill stamps [watchStoppedAt] — wind
+/// numbers / limits stay decision-time.
 class HistoryRecord {
   const HistoryRecord({
     required this.alarmId,
@@ -274,6 +277,7 @@ class HistoryRecord {
     required this.outcome,
     this.checkedAt,
     this.watchedUntil,
+    this.watchStoppedAt,
     this.courtSpeedKmh,
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
@@ -304,6 +308,12 @@ class HistoryRecord {
   /// as the heads-up snapshot — its final counterpart (a late ring, or the
   /// cap's skip) is a separate later row. Null on every final row.
   final DateTime? watchedUntil;
+
+  /// When the user explicitly killed an open watch (toggle-off, abandon edit,
+  /// delete alarm, …). Snapshot rows only. Null = not user-stopped — the note
+  /// then ages to `watched until` (final exists) or `· failed` (past cap, no
+  /// final). See Nivaat `nivaatStillWatchingNote`.
+  final DateTime? watchStoppedAt;
   final double? courtSpeedKmh;
   final double? rawGustKmh;
 
@@ -314,6 +324,32 @@ class HistoryRecord {
   final int? courtSpeedLimitKmh;
   final double? rawGustLimitKmh;
   final double? volume;
+
+  HistoryRecord copyWith({
+    DateTime? checkedAt,
+    DateTime? watchedUntil,
+    DateTime? watchStoppedAt,
+    double? courtSpeedKmh,
+    double? rawGustKmh,
+    int? courtSpeedLimitKmh,
+    double? rawGustLimitKmh,
+    double? volume,
+    CheckOutcome? outcome,
+  }) =>
+      HistoryRecord(
+        alarmId: alarmId,
+        courtId: courtId,
+        at: at,
+        outcome: outcome ?? this.outcome,
+        checkedAt: checkedAt ?? this.checkedAt,
+        watchedUntil: watchedUntil ?? this.watchedUntil,
+        watchStoppedAt: watchStoppedAt ?? this.watchStoppedAt,
+        courtSpeedKmh: courtSpeedKmh ?? this.courtSpeedKmh,
+        rawGustKmh: rawGustKmh ?? this.rawGustKmh,
+        courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
+        rawGustLimitKmh: rawGustLimitKmh ?? this.rawGustLimitKmh,
+        volume: volume ?? this.volume,
+      );
 
   /// The wind-check time, defaulting to [at] when unrecorded. For a no-data
   /// skip this is the last *attempt* (there was no successful reading); for
@@ -342,6 +378,7 @@ class HistoryRecord {
         'outcome': outcome.name,
         'checkedAt': checkedAt?.toIso8601String(),
         'watchedUntil': watchedUntil?.toIso8601String(),
+        'watchStoppedAt': watchStoppedAt?.toIso8601String(),
         'courtSpeedKmh': courtSpeedKmh,
         'rawGustKmh': rawGustKmh,
         'courtSpeedLimitKmh': courtSpeedLimitKmh,
@@ -359,6 +396,10 @@ class HistoryRecord {
           _ => null,
         },
         watchedUntil: switch (j['watchedUntil']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
+        watchStoppedAt: switch (j['watchStoppedAt']) {
           final String s => DateTime.parse(s),
           _ => null,
         },

@@ -155,31 +155,72 @@ class SkipNotifier {
   // the card that's still worth acting on. Renamed 2026-07-22, id reset to drop
   // the `_v2` (that suffix only existed because Android freezes a channel's
   // importance at creation, and the 2026-07-12 silent→audible switch needed a
-  // fresh id; with no installed base there's nothing to migrate).
+  // fresh id; with no installed base there's nothing to migrate). Channel
+  // fields live in one place — Android freezes them at first create, so two
+  // copies drifting apart would make the live channel depend on which card
+  // posted first that install.
+  static const String _channelId = 'nivaat_alarm_updates';
+  static const String _channelName = 'Alarm updates';
+  static const String _channelDescription =
+      "Still checking, and why an alarm didn't ring";
+
   static const NotificationDetails _details = NotificationDetails(
     android: AndroidNotificationDetails(
-      'nivaat_alarm_updates',
-      'Alarm updates',
-      channelDescription: "Still checking, and why an alarm didn't ring",
+      _channelId,
+      _channelName,
+      channelDescription: _channelDescription,
       importance: Importance.high,
       priority: Priority.high,
     ),
     iOS: DarwinNotificationDetails(presentBadge: false),
   );
 
+  // Mid-window Keep-checking tweak: same id, body deadline only. Android
+  // onlyAlertOnce keeps the first post loud and later updates quiet. iOS:
+  // presentSound:false quiets foreground AND background (plugin docs);
+  // presentBanner:false suppresses the banner (presentAlert is iOS 10–14
+  // only — inert at our floor of 26). presentList left unset so it falls
+  // back to defaultPresentList:true — the card stays in Notification Center.
+  static const NotificationDetails _headsUpQuietDetails = NotificationDetails(
+    android: AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      channelDescription: _channelDescription,
+      importance: Importance.high,
+      priority: Priority.high,
+      onlyAlertOnce: true,
+    ),
+    iOS: DarwinNotificationDetails(
+      presentBadge: false,
+      presentSound: false,
+      presentBanner: false,
+    ),
+  );
+
   /// Heads-up posted at T for a skipped occurrence: the reason so far, plus a
   /// note that the app keeps checking in the background until [until] and will
   /// ring if it clears. Left in place afterwards (a late ring, or the separate
   /// final card at the cap, follows it — it isn't cleared).
+  ///
+  /// Pass [quietUpdate] when only the deadline moved (Keep checking edit) —
+  /// same notification id, no cancel/re-post flicker; uses
+  /// [_headsUpQuietDetails] (Android `onlyAlertOnce`; iOS `presentSound` /
+  /// `presentBanner` false — not `presentAlert`, inert below 26). Wind
+  /// numbers stay whatever the first heads-up said.
   Future<void> showExtendedCheck(
-      HistoryRecord record, String courtName, DateTime until) async {
+    HistoryRecord record,
+    String courtName,
+    DateTime until, {
+    bool quietUpdate = false,
+  }) async {
     await ensureInitialized();
     await _plugin.show(
       id: NivaatIds.headsUp(record.alarmId),
       title:
           nivaatNotificationTitle(courtName, record.at, kNivaatStillChecking),
       body: nivaatExtendedCheckBody(record, until),
-      notificationDetails: _details,
+      notificationDetails:
+          quietUpdate ? _headsUpQuietDetails : _details,
     );
   }
 
@@ -212,12 +253,11 @@ class SkipNotifier {
     await _plugin.cancel(id: NivaatIds.skip(alarmId));
   }
 
-  /// Pull down only the heads-up. Called on **toggle-off**, where the two
-  /// cards part ways (2026-07-26): the skip card is a record of a morning that
-  /// really happened and stays, but the heads-up is a promise about the next
-  /// half hour — "watching until 06:30" — and disabling the alarm is exactly
-  /// what stops anyone watching. Same false promise the delete case fixed,
-  /// just reached by a switch instead of a delete.
+  /// Pull down only the heads-up. Called on **toggle-off mid-window**, while
+  /// "watching until 06:30" is still a live promise — disabling the alarm is
+  /// exactly what stops anyone watching (2026-07-26). After the retry cap (or
+  /// a late ring) the heads-up is history of a window that really ran, so
+  /// toggle-off leaves it; only delete / court-gone take both cards down.
   Future<void> cancelHeadsUp(int alarmId) async {
     await ensureInitialized();
     await _plugin.cancel(id: NivaatIds.headsUp(alarmId));

@@ -11,7 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeNotifier extends SkipNotifier {
   final List<(HistoryRecord, String)> shown = [];
-  final List<(HistoryRecord, String)> extended = [];
+  final List<(HistoryRecord, String, DateTime, bool)> extended = [];
   final List<int> cancelled = [];
   final List<int> cancelledHeadsUp = [];
 
@@ -25,8 +25,12 @@ class FakeNotifier extends SkipNotifier {
 
   @override
   Future<void> showExtendedCheck(
-      HistoryRecord record, String courtName, DateTime until) async {
-    extended.add((record, courtName));
+    HistoryRecord record,
+    String courtName,
+    DateTime until, {
+    bool quietUpdate = false,
+  }) async {
+    extended.add((record, courtName, until, quietUpdate));
   }
 
   @override
@@ -979,6 +983,14 @@ void main() {
           reason: "a dead alarm's cards must be pulled down");
     });
 
+    /// Controller toggle path: [abandonOccurrence] then evaluate.
+    Future<void> toggleOffViaControllerPath(DateTime now) async {
+      final off = alarm.copyWith(enabled: false);
+      await engine.store.saveAlarms([off]);
+      await engine.abandonOccurrence(alarm, now: now);
+      await engine.evaluateAlarm(off, [court], now: now);
+    }
+
     test('toggling off mid-window drops the heads-up promise', () async {
       api.sample = wind(9.0, 10.0);
       await engine.store.saveAlarms([alarm]);
@@ -988,11 +1000,8 @@ void main() {
       expect(notifier.extended, hasLength(1));
       expect(notifier.shown, isEmpty, reason: 'final skip not posted yet');
 
-      // Toggle-off keeps the row in the store — only rings/checks disarm.
-      final off = alarm.copyWith(enabled: false);
-      await engine.store.saveAlarms([off]);
-      await engine.evaluateAlarm(off, [court],
-          now: alarmAt.add(const Duration(minutes: 5)));
+      final stopAt = alarmAt.add(const Duration(minutes: 5));
+      await toggleOffViaControllerPath(stopAt);
 
       expect(notifier.cancelled, isEmpty,
           reason: 'full cancel is for delete/court-gone only');
@@ -1000,10 +1009,16 @@ void main() {
           reason: '"watching until 06:30" is a promise, and disabling the '
               'alarm is what stops anyone watching');
       expect(ring.scheduled, isEmpty, reason: 'rings still disarm');
+      final snap = (await engine.store.loadHistory())
+          .singleWhere((h) => h.watchedUntil != null);
+      expect(snap.watchStoppedAt, stopAt);
+      expect(
+          nivaatStillWatchingNote(snap, now: stopAt, hasFinal: false),
+          'watching until 06:30 · stopped at 06:05');
     });
 
-    test('toggling off after the final skip keeps N3 and drops N2', () async {
-      // Both cards are up: the product split is "record stays, promise goes".
+    test('toggling off after the final skip keeps both shade cards', () async {
+      // Window already ran to the cap: both cards are history, not a promise.
       api.sample = wind(9.0, 10.0);
       await engine.store.saveAlarms([alarm]);
       await engine.evaluateAlarm(alarm, [court],
@@ -1014,16 +1029,38 @@ void main() {
       expect(notifier.extended, hasLength(1));
       expect(notifier.shown, hasLength(1), reason: 'final skip card at the cap');
 
-      final off = alarm.copyWith(enabled: false);
-      await engine.store.saveAlarms([off]);
-      await engine.evaluateAlarm(off, [court],
-          now: alarmAt.add(const Duration(minutes: 31)));
+      await toggleOffViaControllerPath(
+          alarmAt.add(const Duration(minutes: 31)));
 
       expect(notifier.cancelled, isEmpty,
-          reason: 'cancelForAlarm would have pulled the skip card down too');
-      expect(notifier.cancelledHeadsUp, contains(alarm.id));
+          reason: 'cancelForAlarm would have pulled both cards down');
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'we did check until the cap — N2 is no longer a false promise');
       expect(notifier.shown, hasLength(1),
           reason: 'the skip record card is left in the shade');
+      expect(notifier.extended, hasLength(1),
+          reason: 'the heads-up stays as the at-T half of that morning');
+    });
+
+    test('toggling off after a late ring keeps the heads-up', () async {
+      // Late ring is the final result; N2 was left standing on purpose.
+      // Snapshot's watchedUntil is still in the future — the final row is
+      // what marks the promise closed (not the calendar alone).
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      api.sample = wind(5.0, 5.0);
+      final late = alarmAt.add(const Duration(minutes: 7));
+      await engine.evaluateAlarm(alarm, [court], now: late);
+      expect(notifier.extended, hasLength(1));
+
+      await toggleOffViaControllerPath(late.add(const Duration(minutes: 1)));
+
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'final result already landed — N2 is history, not a promise');
+      expect(notifier.extended, hasLength(1));
     });
 
     test('a missing court cancels cards even when the alarm is still saved',
@@ -1056,8 +1093,7 @@ void main() {
     });
   });
 
-  test('nivaatStillWatchingNote: snapshot rows watch then remember; final rows stay quiet',
-      () {
+  test('nivaatStillWatchingNote: live / final / stopped / failed', () {
     final snapshot = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
@@ -1066,20 +1102,36 @@ void main() {
         outcome: CheckOutcome.skippedWindy);
     expect(
         nivaatStillWatchingNote(snapshot,
-            now: alarmAt.add(const Duration(minutes: 10))),
-        'watching until 06:30',
-        reason: 'inside the retry window — a late ring may still follow');
+            now: alarmAt.add(const Duration(minutes: 10)), hasFinal: false),
+        'watching until 06:30');
     expect(
         nivaatStillWatchingNote(snapshot,
-            now: alarmAt.add(const Duration(minutes: 30))),
+            now: alarmAt.add(const Duration(minutes: 30)), hasFinal: true),
         'watched until 06:30',
-        reason: 'stays forever as the mark of the at-T moment');
-    final finalSkip = HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: alarmAt,
-        outcome: CheckOutcome.skippedWindy);
-    expect(nivaatStillWatchingNote(finalSkip, now: alarmAt), isNull,
+        reason: 'final landed — planned cap kept as watched until');
+    expect(
+        nivaatStillWatchingNote(snapshot,
+            now: alarmAt.add(const Duration(minutes: 30)), hasFinal: false),
+        'watching until 06:30 · failed',
+        reason: 'past cap, no final, not user-stopped');
+    expect(
+        nivaatStillWatchingNote(
+            snapshot.copyWith(
+                watchStoppedAt: alarmAt.add(const Duration(minutes: 5))),
+            now: alarmAt.add(const Duration(minutes: 40)),
+            hasFinal: false),
+        'watching until 06:30 · stopped at 06:05',
+        reason: 'planned cap preserved; stopped appends');
+    expect(
+        nivaatStillWatchingNote(
+            HistoryRecord(
+                alarmId: 7,
+                courtId: 'c1',
+                at: alarmAt,
+                outcome: CheckOutcome.skippedWindy),
+            now: alarmAt,
+            hasFinal: false),
+        isNull,
         reason: 'final rows carry no watch note');
   });
 
@@ -1093,9 +1145,402 @@ void main() {
         watchedUntil: late.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     expect(
-        nivaatStillWatchingNote(snapshot, now: late.add(const Duration(hours: 1))),
+        nivaatStillWatchingNote(snapshot,
+            now: late.add(const Duration(hours: 1)), hasFinal: true),
         'watched until 23 Jul 00:19',
         reason: 'same rule as fmtCheckTime — bare 00:19 would look earlier than 23:49');
+  });
+
+  test('nivaatEditAbandonsInFlight: limit/retry/add-weekday continue; time/court/drop abandon',
+      () {
+    final flying = CheckState(alarmId: 7, alarmAt: alarmAt);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(courtSpeedLimitKmh: 6),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isFalse);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(retryMinutesAfter: 60),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isFalse);
+    expect(
+        nivaatEditAbandonsInFlight(
+            alarm,
+            alarm.copyWith(weekdays: {...alarm.weekdays, alarmAt.weekday % 7 + 1}),
+            state: flying,
+            now: alarmAt.add(const Duration(minutes: 5))),
+        isFalse);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(hour: 7),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isTrue);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(courtId: 'other'),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isTrue);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(weekdays: {}),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isTrue);
+    expect(
+        nivaatEditAbandonsInFlight(alarm, alarm.copyWith(enabled: false),
+            state: flying, now: alarmAt.add(const Duration(minutes: 5))),
+        isTrue);
+  });
+
+  group('mid-window edits keep or abandon the occurrence', () {
+    test('raising the wind limit mid-window keeps retries flying', () async {
+      // Windy at ≤4 → raise to ≤6 → wind 5 now rings late under the new limit.
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      expect(notifier.extended, hasLength(1));
+
+      final looser = alarm.copyWith(courtSpeedLimitKmh: 6);
+      await engine.store.saveAlarms([looser]);
+      await engine.retainInFlightEdits(alarm, looser,
+          now: alarmAt.add(const Duration(minutes: 5)));
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(looser, [court],
+          now: alarmAt.add(const Duration(minutes: 5)));
+      expect(
+          ring.scheduled.containsKey(lateRing) ||
+              ring.log.any((e) => e.id == lateRing),
+          isTrue,
+          reason: 'same morning rings late under the raised limit');
+      expect(
+          (await engine.store.loadHistory())
+              .where((h) => h.watchStoppedAt != null),
+          isEmpty,
+          reason: 'continue path — not a user stop');
+    });
+
+    test('upsertAlarm raising the limit mid-window still late-rings', () async {
+      // End-to-end through the controller dispatch — hard-wiring always-
+      // abandon must fail this. Pins [now] for the clock; awaits
+      // [lastEvaluation] so production's fire-and-forget interleaving still runs.
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      final controller = NivaatController(engine: engine);
+      await controller.init();
+      expect(
+          await controller.upsertAlarm(alarm,
+              now: alarmAt.subtract(const Duration(minutes: 1))),
+          isTrue);
+      await controller.lastEvaluation;
+      await engine.evaluateAlarm(
+          controller.alarms.single, controller.courts,
+          now: alarmAt);
+      expect(notifier.extended, hasLength(1));
+
+      api.sample = wind(5.0, 5.0);
+      final t = alarmAt.add(const Duration(minutes: 5));
+      expect(
+          await controller.upsertAlarm(
+              alarm.copyWith(courtSpeedLimitKmh: 6),
+              now: t),
+          isTrue);
+      await controller.lastEvaluation;
+      expect(
+          ring.scheduled.containsKey(lateRing) ||
+              ring.log.any((e) => e.id == lateRing),
+          isTrue,
+          reason: 'controller continue path — not abandonOccurrence');
+      expect(
+          (await engine.store.loadHistory())
+              .where((h) => h.watchStoppedAt != null),
+          isEmpty);
+    });
+
+    test('widening Keep checking mid-window moves the deadline only', () async {
+      api.sample = wind(9.0, 10.0);
+      final short = alarm.copyWith(retryMinutesAfter: 1);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([short]);
+      await engine.evaluateAlarm(short, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(short, [court], now: alarmAt);
+      expect((await engine.store.loadHistory()).single.watchedUntil,
+          alarmAt.add(const Duration(minutes: 1)));
+      final firstBody = nivaatExtendedCheckBody(
+        notifier.extended.single.$1,
+        notifier.extended.single.$3,
+      );
+
+      final longer = short.copyWith(retryMinutesAfter: 30);
+      final newCap = alarmAt.add(const Duration(minutes: 30));
+      await engine.store.saveAlarms([longer]);
+      await engine.retainInFlightEdits(short, longer,
+          now: alarmAt.add(const Duration(seconds: 30)));
+      expect((await engine.store.loadHistory()).single.watchedUntil, newCap);
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'deadline updates in place — no cancel/re-post');
+      expect(notifier.extended, hasLength(2));
+      expect(notifier.extended.last.$4, isTrue, reason: 'quiet update');
+      final refreshed = nivaatExtendedCheckBody(
+        notifier.extended.last.$1,
+        notifier.extended.last.$3,
+      );
+      expect(refreshed, endsWith('watching until 06:30'));
+      // Wind / limits stay the first heads-up's — only the deadline moved.
+      expect(
+        refreshed.replaceFirst(' · watching until 06:30', ''),
+        firstBody.replaceFirst(' · watching until 06:01', ''),
+      );
+    });
+
+    test('raising limit + widening Keep checking keeps first-heads-up numbers',
+        () async {
+      // The natural edit while staring at "Still checking, too windy": loosen
+      // the limit AND extend the window. N2 must not read "Too windy · (≤20)".
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      expect(notifier.extended, hasLength(1));
+
+      final edited = alarm.copyWith(
+        courtSpeedLimitKmh: 20,
+        retryMinutesAfter: 60,
+      );
+      final newCap = alarmAt.add(const Duration(minutes: 60));
+      await engine.store.saveAlarms([edited]);
+      await engine.retainInFlightEdits(alarm, edited,
+          now: alarmAt.add(const Duration(minutes: 5)));
+
+      expect(notifier.extended, hasLength(2));
+      final body = nivaatExtendedCheckBody(
+        notifier.extended.last.$1,
+        notifier.extended.last.$3,
+      );
+      expect(body, contains('≤4'),
+          reason: 'limits from the decision, not the Save');
+      expect(body, isNot(contains('≤20')));
+      expect(body, endsWith('watching until 07:00'));
+      expect(
+        (await engine.store.loadHistory())
+            .singleWhere((h) => h.watchedUntil != null)
+            .courtSpeedLimitKmh,
+        4,
+        reason: 'history snapshot keeps decision-time limits too',
+      );
+      expect(
+        (await engine.store.loadHistory())
+            .singleWhere((h) => h.watchedUntil != null)
+            .watchedUntil,
+        newCap,
+      );
+    });
+
+    test('shrinking Keep checking past now finalises and keeps both cards',
+        () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+
+      final tiny = alarm.copyWith(retryMinutesAfter: 1);
+      final t = alarmAt.add(const Duration(minutes: 2));
+      final newCap = alarmAt.add(const Duration(minutes: 1));
+      await engine.store.saveAlarms([tiny]);
+      await engine.retainInFlightEdits(alarm, tiny, now: t);
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'old promise updates to the new cap — not pulled');
+      expect(
+        (await engine.store.loadHistory()).single.watchedUntil,
+        newCap,
+      );
+      expect(notifier.extended, hasLength(2));
+      expect(
+        nivaatExtendedCheckBody(
+          notifier.extended.last.$1,
+          notifier.extended.last.$3,
+        ),
+        endsWith('watching until 06:01'),
+      );
+
+      await engine.evaluateAlarm(tiny, [court], now: t);
+
+      final history = await engine.store.loadHistory();
+      expect(
+          history.any((h) =>
+              h.watchedUntil == null &&
+              h.at == alarmAt &&
+              h.outcome != CheckOutcome.rang),
+          isTrue,
+          reason: 'cap already past → final skip for today, not stopped at');
+      expect(history.where((h) => h.watchStoppedAt != null), isEmpty);
+      expect(notifier.shown, isNotEmpty, reason: 'final skip card posted');
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'both cards stay — N2 deadline updated, N3 beside it');
+    });
+
+    test('changing the alarm time mid-window abandons with stopped at',
+        () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+
+      final moved = alarm.copyWith(hour: 7);
+      final t = alarmAt.add(const Duration(minutes: 5));
+      await engine.store.saveAlarms([moved]);
+      await engine.abandonOccurrence(alarm, now: t);
+      await engine.evaluateAlarm(moved, [court], now: t);
+
+      expect(notifier.cancelledHeadsUp, contains(alarm.id));
+      final snap = (await engine.store.loadHistory())
+          .firstWhere((h) => h.watchedUntil != null);
+      expect(snap.watchStoppedAt, t);
+      expect(snap.at, alarmAt, reason: 'snapshot stays the abandoned morning');
+    });
+
+    test('adding a weekday mid-window keeps today flying', () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      final otherDay = alarmAt.weekday % 7 + 1;
+      final added =
+          alarm.copyWith(weekdays: {...alarm.weekdays, otherDay});
+      expect(
+          nivaatEditAbandonsInFlight(alarm, added,
+              state: await engine.store.loadCheckState(7),
+              now: alarmAt.add(const Duration(minutes: 5))),
+          isFalse);
+      await engine.store.saveAlarms([added]);
+      await engine.retainInFlightEdits(alarm, added,
+          now: alarmAt.add(const Duration(minutes: 5)));
+      await engine.evaluateAlarm(added, [court],
+          now: alarmAt.add(const Duration(minutes: 5)));
+      expect((await engine.store.loadCheckState(7))!.alarmAt, alarmAt);
+      expect(notifier.cancelledHeadsUp, isEmpty);
+    });
+
+    test('dropping the in-flight weekday abandons with stopped at', () async {
+      api.sample = wind(9.0, 10.0);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([alarm]);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+      final withoutToday = alarm.copyWith(
+          weekdays: {...alarm.weekdays}..remove(alarmAt.weekday));
+      final t = alarmAt.add(const Duration(minutes: 5));
+      expect(
+          nivaatEditAbandonsInFlight(alarm, withoutToday,
+              state: await engine.store.loadCheckState(7), now: t),
+          isTrue);
+      await engine.store.saveAlarms([withoutToday]);
+      await engine.abandonOccurrence(alarm, now: t);
+      expect(notifier.cancelledHeadsUp, contains(alarm.id));
+      expect(
+          (await engine.store.loadHistory())
+              .singleWhere((h) => h.watchedUntil != null)
+              .watchStoppedAt,
+          t);
+    });
+
+    test('widening Keep checking after the old cap does not resurrect',
+        () async {
+      // Defence in depth: a real Save always resyncs first (which finalises
+      // the dead window), so this branch is rarely hit end-to-end. Keep N2.
+      api.sample = wind(9.0, 10.0);
+      final short = alarm.copyWith(retryMinutesAfter: 1);
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms([short]);
+      await engine.evaluateAlarm(short, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+      await engine.evaluateAlarm(short, [court], now: alarmAt);
+      // Past T+1 without evaluating the cap — state still today.
+      final longer = short.copyWith(retryMinutesAfter: 30);
+      final t = alarmAt.add(const Duration(minutes: 2));
+      await engine.store.saveAlarms([longer]);
+      await engine.retainInFlightEdits(short, longer, now: t);
+      final history = await engine.store.loadHistory();
+      expect(
+          history
+              .firstWhere((h) => h.watchedUntil != null)
+              .watchedUntil,
+          alarmAt.add(const Duration(minutes: 1)),
+          reason: 'must not rewrite a dead 1m window into +30m');
+      expect(
+          history.any((h) => h.watchedUntil == null && h.at == alarmAt),
+          isTrue,
+          reason: 'finalises immediately instead of reviving under +30m');
+      expect(await engine.store.loadCheckState(7), isNull,
+          reason: 'dead window cleared; evaluate must not reopen it');
+      expect(notifier.cancelledHeadsUp, isEmpty,
+          reason: 'both cards stay after the defence final');
+      expect(notifier.shown, isNotEmpty);
+    });
+
+    test('toggle-off later does not rewrite an ancient failed snapshot',
+        () async {
+      final oldAt = alarmAt.subtract(const Duration(days: 7));
+      await engine.store.upsertHistory(HistoryRecord(
+        alarmId: alarm.id,
+        courtId: court.id,
+        at: oldAt,
+        watchedUntil: oldAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy,
+      ));
+      // No final for that week — shows `· failed`. Toggle off today.
+      await engine.store.saveAlarms([alarm.copyWith(enabled: false)]);
+      await engine.abandonOccurrence(alarm,
+          now: alarmAt.add(const Duration(hours: 1)));
+      expect(
+          (await engine.store.loadHistory()).single.watchStoppedAt,
+          isNull,
+          reason: 'ancient failed rows stay failed, not stopped at today');
+    });
+  });
+
+  test('nivaatHistoryHasFinal keys on alarmId + at', () {
+    final snap = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final finalRow = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        outcome: CheckOutcome.rang,
+        volume: 1);
+    expect(nivaatHistoryHasFinal([snap], snap), isFalse);
+    expect(nivaatHistoryHasFinal([snap, finalRow], snap), isTrue);
+    // Bulk keys include finals; hasFinal guards them out — not equivalent
+    // when the probe is itself a final row.
+    expect(nivaatHistoryHasFinal([snap, finalRow], finalRow), isFalse);
+    expect(
+        nivaatFinalizedWatchKeys([snap, finalRow])
+            .contains(
+                '${finalRow.alarmId}@${finalRow.at.millisecondsSinceEpoch}'),
+        isTrue);
+    expect(
+        nivaatHistoryHasFinal([
+          snap,
+          HistoryRecord(
+              alarmId: 7,
+              courtId: 'c1',
+              at: alarmAt.add(const Duration(days: 1)),
+              outcome: CheckOutcome.rang,
+              volume: 1),
+        ], snap),
+        isFalse,
+        reason: 'a final for another morning does not close this snapshot');
   });
 
   test('an off-step volume snaps to the nearest file, ties going louder', () {

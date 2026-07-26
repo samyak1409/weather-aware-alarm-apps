@@ -24,6 +24,11 @@ class NivaatController extends ChangeNotifier {
   Map<int, CheckState> checkStates = {};
   bool loaded = false;
 
+  /// Most recent fire-and-forget evaluate kicked off by [upsertAlarm] (or
+  /// null before the first). Tests await this; production never reads it.
+  @visibleForTesting
+  Future<void>? lastEvaluation;
+
   SavedLocation? courtById(String id) {
     for (final c in courts) {
       if (c.id == id) return c;
@@ -178,7 +183,14 @@ class NivaatController extends ChangeNotifier {
 
   /// Returns `false` when [alarm] collides on HH:MM with another alarm
   /// (MESSAGES N20) so callers don't treat a no-op as a successful save.
-  Future<bool> upsertAlarm(NivaatAlarm alarm) async {
+  ///
+  /// Pass [now] in tests to pin wall-clock decisions (abandon vs continue,
+  /// and the follow-up evaluate). Production callers leave it null.
+  ///
+  /// The follow-up evaluate is always fire-and-forget (same as production) —
+  /// await [lastEvaluation] in tests when you need its outcome. [now] only
+  /// chooses the clock; it does not change concurrency.
+  Future<bool> upsertAlarm(NivaatAlarm alarm, {DateTime? now}) async {
     // Belt-and-suspenders: the alarm sheet refuses first (N20). Never persist
     // a colliding HH:MM even if a future caller skips the UI check.
     if (nivaatAlarmTimeConflict(alarms, alarm) != null) return false;
@@ -192,17 +204,32 @@ class NivaatController extends ChangeNotifier {
       alarms.add(alarm);
     }
     await store.saveAlarms(alarms);
-    // Edits invalidate the in-flight occurrence: start the cascade fresh.
-    // Through the engine (not a blind clearCheckState) so a ring that already
-    // fired is finalised into history first — and against the PRE-edit alarm,
-    // whose court/thresholds that ring belongs to.
-    await engine.discardOccurrence(previous ?? alarm);
+    // Mid-window: limit / Keep checking / add-only weekdays KEEP flying under
+    // the new settings. Time, court, drop-today, toggle-off ABANDON (stamp
+    // `stopped at`, drop N2). New alarm / no state: abandon is a cheap clear.
+    //
+    // CheckState is read outside the engine's per-alarm queue — benign: both
+    // branches re-read inside the lane, so a stale classify degrades to a
+    // no-op (retain finds nothing / abandon clears an already-cleared id).
+    final prior = previous;
+    if (prior == null) {
+      await engine.abandonOccurrence(alarm, now: now);
+    } else {
+      final state = await store.loadCheckState(alarm.id);
+      if (nivaatEditAbandonsInFlight(prior, alarm, state: state, now: now)) {
+        await engine.abandonOccurrence(prior, now: now);
+      } else {
+        await engine.retainInFlightEdits(prior, alarm, now: now);
+      }
+    }
     // Drop stale in-flight state before notify so the home cue can't flash
-    // "still checking" for an occurrence we just discarded (toggle / edit).
+    // "still checking" for an occurrence we just abandoned (toggle / edit).
     await _reloadCheckStates();
     notifyListeners();
-    // The wind evaluation hits the network — never block the UI on it.
-    unawaited(_evaluateInBackground(alarm));
+    // Wind evaluation hits the network — never block the UI on it. Tests
+    // await [lastEvaluation] when they need the late-ring / finalise outcome.
+    lastEvaluation = _evaluateInBackground(alarm, now: now);
+    unawaited(lastEvaluation!);
     return true;
   }
 
@@ -220,8 +247,8 @@ class NivaatController extends ChangeNotifier {
     }
   }
 
-  Future<void> _evaluateInBackground(NivaatAlarm alarm) async {
-    await engine.evaluateAlarm(alarm, courts);
+  Future<void> _evaluateInBackground(NivaatAlarm alarm, {DateTime? now}) async {
+    await engine.evaluateAlarm(alarm, courts, now: now);
     history = await _loadHistory();
     await _reloadCheckStates();
     notifyListeners();
