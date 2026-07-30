@@ -13,11 +13,32 @@ import 'history_sheet.dart';
 import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
 
-/// Home footer caveat (MESSAGES.md N10). Soft-wrap only — no hard `\n`
+/// X3's two Nivaat variants. Android's ring shows an on-screen Stop, so losing
+/// notifications costs strictly more there; iOS rings through AlarmKit, whose
+/// alert is the OS's own. Named constants so `message_test` can assert BOTH —
+/// only one is ever reachable on a given device, and the unreachable one is
+/// exactly the kind of string that rots unseen (MESSAGES.md X3).
+@visibleForTesting
+const String kNivaatNotificationsOffAndroid =
+    'Notifications are off — a ringing alarm shows nothing on screen '
+    "(sound only, no Stop), and Nivaat can't tell you when it skips an alarm "
+    'for wind, or why.';
+
+@visibleForTesting
+const String kNivaatNotificationsOffIos =
+    "Notifications are off — Nivaat can't tell you when it skips an alarm "
+    'for wind, or why.';
+
+/// Home footer caveat (MESSAGES.md N13). Soft-wrap only — no hard `\n`
 /// (large accessibility text must reflow cleanly).
+///
+/// `connected to the internet`, not `online` (2026-07-31, Samyak): to a
+/// general reader "online" first suggests *signed in*, which this app has no
+/// concept of. The longer phrase is the plain-English one, and the note is a
+/// quiet footer with room to wrap.
 @visibleForTesting
 const String nivaatBackgroundNote =
-    'Keep the phone charged and online before your '
+    'Keep the phone charged and connected to the internet before your '
     'alarm — the background wind check needs both.';
 
 class HomeScreen extends StatefulWidget {
@@ -189,11 +210,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     Future.value(false),
                 recheckAfter: widget.permissionFlow,
                 message: Platform.isAndroid
-                    ? 'Notifications are off — a ringing alarm shows nothing '
-                        'on screen (sound only, no Stop), and Nivaat can\'t '
-                        'tell you when it skips an alarm for wind, or why.'
-                    : 'Notifications are off — Nivaat can\'t tell you when it '
-                        'skips an alarm for wind, or why.',
+                    ? kNivaatNotificationsOffAndroid
+                    : kNivaatNotificationsOffIos,
               ),
               BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
             ],
@@ -236,7 +254,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Live "still checking" cue only (MESSAGES N21). Tap → full history.
+  /// Live "still checking" cue only (MESSAGES N11). Tap → full history.
   ///
   /// Leading wind-accent ● in the text run (not a separate widget) — "live +
   /// tappable" without a word prefix. Full-width [InkWell] so a short line
@@ -273,13 +291,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// The intro hero (MESSAGES.md N14).
+  ///
+  /// Sits one-third down, not centred — the same 1:2 spacer rhythm Arunoday's
+  /// A9 uses (2026-07-31, Samyak: the two intros are the same screen in two
+  /// apps and were landing at visibly different heights). Centring reads lower
+  /// than it measures here, because the block hangs below its own midpoint and
+  /// nothing balances it: A9 has an `Add location` button under the copy,
+  /// while Nivaat's action is the FAB, off in the corner.
   Widget _empty(TextTheme text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          const Spacer(),
           Text('The windless alarm.', style: text.headlineMedium),
           const SizedBox(height: 12),
           Text(
@@ -287,6 +313,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'The calmer the morning, the louder it rings.',
             style: text.bodyMedium,
           ),
+          const Spacer(flex: 2),
         ],
       ),
     );

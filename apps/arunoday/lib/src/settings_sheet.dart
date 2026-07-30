@@ -2,6 +2,7 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'messages.dart';
 import 'time_conflict.dart';
 
 // --- Offset math shared by the wake & bedtime ±1h dialogs (pure & tested).
@@ -61,17 +62,9 @@ class _SettingsPageState extends State<_SettingsPage> {
     return (d != null && d.isAfter(DateTime.now())) ? d : null;
   }
 
-  /// Runs on the candidate coords inside the picker, before naming/returning.
-  String? _validatePlace(double lat, double lon) {
-    if (!Solar.hasDailyDawnAllYear(DateTime.now().year, lat, lon)) {
-      return 'No daily dawn here (polar) — Arunoday needs a real dawn.';
-    }
-    final dup = c.existingLocationSameDawn(lat, lon);
-    return dup == null ? null : 'Same dawn as ${dup.name} — already added.';
-  }
-
   Future<void> _addLocation() async {
-    final place = await showLocationSearch(context, validate: _validatePlace);
+    // Same refusals as the home screen's add — one copy, on the controller.
+    final place = await showLocationSearch(context, validate: c.placeRefusal);
     if (place == null || !mounted) return;
     final loc = SavedLocation(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -91,13 +84,20 @@ class _SettingsPageState extends State<_SettingsPage> {
   }
 
   Future<void> _editOffset() async {
+    // No dawn = nothing to offset from, so there is no dialog to show. Can't
+    // happen from a real screen — you reach settings only from the armed home,
+    // and a location with no daily dawn is refused when you add it (A16) — but
+    // opening a picker anchored to nothing is worse than opening none: it
+    // silently drops its collision check (see [_OffsetDialogState._conflict]).
+    final dawn = _anchorDawn();
+    if (dawn == null) return;
     final current = c.settings.wakeOffsetMinutes;
     final bed = c.bedtimeMinutes;
     final result = await showDialog<int>(
       context: context,
       builder: (_) => _OffsetDialog(
         initialMinutes: current,
-        nextDawn: _anchorDawn(),
+        nextDawn: dawn,
         bedtimeMinuteOfDay: bed?.round(),
       ),
     );
@@ -126,7 +126,12 @@ class _SettingsPageState extends State<_SettingsPage> {
   }
 
   Future<void> _editBedtime() async {
+    // Same precondition as [_editOffset]: no sleep plan, no anchor, no dialog.
+    // The old code opened one anyway, anchored to a fabricated 22:00 — and
+    // then discarded whatever you saved, because the write below needs the
+    // auto value the dialog didn't have.
     final auto = c.plan?.bedtimeMinutes.round();
+    if (auto == null) return;
     final wake = c.nextWake;
     final wakeMinuteOfDay =
         wake == null ? null : wake.hour * 60 + wake.minute;
@@ -141,7 +146,7 @@ class _SettingsPageState extends State<_SettingsPage> {
       ),
     );
     // Collision is refused inside the dialog (Save disabled).
-    if (result == null || auto == null) return; // result = signed offset
+    if (result == null) return; // result = signed offset
     await c.update(c.settings.copyWith(
       bedtimeOffsetMinutes: () => result == 0 ? null : result, // 0 → Auto
     ));
@@ -305,9 +310,7 @@ class _SettingsPageState extends State<_SettingsPage> {
             if (plan != null) ...[
               const SizedBox(height: 12),
               Text(
-                'Year here: sleep ${fmtDuration(plan.minSleepMinutes)} '
-                '(summer) to ${fmtDuration(plan.maxSleepMinutes)} (winter) — '
-                'the natural swing of dawn at this latitude.',
+                arunodaySleepReadout(plan),
                 style: text.bodyMedium,
               ),
             ],
@@ -341,15 +344,17 @@ class _SettingsPageState extends State<_SettingsPage> {
 class _BedtimeDialog extends StatefulWidget {
   const _BedtimeDialog({
     required this.initialOffset,
-    this.autoMinutes,
+    required this.autoMinutes,
     this.wakeMinuteOfDay,
   });
 
   /// Signed offset from auto, −720..720 (the source of truth, like wake).
   final int initialOffset;
-  final int? autoMinutes;
 
-  /// Next wake's minute-of-day — live collision cue (MESSAGES A18).
+  /// The sleep plan's bedtime — the anchor [initialOffset] is measured from.
+  final int autoMinutes;
+
+  /// Next wake's minute-of-day — live collision cue (MESSAGES A16).
   final int? wakeMinuteOfDay;
 
   @override
@@ -359,7 +364,7 @@ class _BedtimeDialog extends StatefulWidget {
 class _BedtimeDialogState extends State<_BedtimeDialog> {
   late int _offset = widget.initialOffset;
 
-  int get _auto => widget.autoMinutes ?? 22 * 60;
+  int get _auto => widget.autoMinutes;
   int get _absolute => ((_auto + _offset) % 1440 + 1440) % 1440;
 
   String? get _conflict => arunodayBedtimeConflictsWithWake(
@@ -389,7 +394,6 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final auto = widget.autoMinutes;
     final conflict = _conflict;
     return AlertDialog(
       title: Text('BEDTIME', style: text.labelSmall),
@@ -403,8 +407,7 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
           ),
           const SizedBox(height: 8),
           Text(
-            '${auto == null ? 'manual' : 'auto is ${fmtMinutesOfDay(auto.toDouble())}'}'
-            ' · tap the time to pick exactly',
+            arunodayBedtimePickerHint(widget.autoMinutes),
             style: text.bodyMedium,
             textAlign: TextAlign.center,
           ),
@@ -451,14 +454,19 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
 class _OffsetDialog extends StatefulWidget {
   const _OffsetDialog({
     required this.initialMinutes,
-    this.nextDawn,
+    required this.nextDawn,
     this.bedtimeMinuteOfDay,
   });
 
   final int initialMinutes;
-  final DateTime? nextDawn;
 
-  /// Current bedtime minute-of-day — live collision cue (MESSAGES A18).
+  /// The dawn this offset is measured from — the anchor for the hint, the
+  /// wake-time picker, and the collision check. Required: a picker with no
+  /// anchor can't validate what it saves, so [_SettingsPageState._editOffset]
+  /// declines to open one instead.
+  final DateTime nextDawn;
+
+  /// Current bedtime minute-of-day — live collision cue (MESSAGES A16).
   final int? bedtimeMinuteOfDay;
 
   @override
@@ -468,15 +476,11 @@ class _OffsetDialog extends StatefulWidget {
 class _OffsetDialogState extends State<_OffsetDialog> {
   late int _minutes = widget.initialMinutes;
 
-  String? get _conflict {
-    final dawn = widget.nextDawn;
-    if (dawn == null) return null;
-    return arunodayWakeConflictsWithBedtime(
-      wakeOffsetMinutes: _minutes,
-      dawn: dawn,
-      bedtimeMinuteOfDay: widget.bedtimeMinuteOfDay,
-    );
-  }
+  String? get _conflict => arunodayWakeConflictsWithBedtime(
+        wakeOffsetMinutes: _minutes,
+        dawn: widget.nextDawn,
+        bedtimeMinuteOfDay: widget.bedtimeMinuteOfDay,
+      );
 
   /// Clamped to ±12h: beyond that an "offset from dawn" loses its meaning
   /// (a day-D wake lands on day D+1 and collides with D+1's own wake).
@@ -487,9 +491,7 @@ class _OffsetDialogState extends State<_OffsetDialog> {
   /// Pick the desired wake clock time; the dawn offset is back-computed
   /// (wrapped to the nearest half-day, so 04:30 before a 05:36 dawn = −1:06).
   Future<void> _pickWakeTime() async {
-    final dawn = widget.nextDawn;
-    if (dawn == null) return;
-    final dawnM = dawn.hour * 60 + dawn.minute;
+    final dawnM = widget.nextDawn.hour * 60 + widget.nextDawn.minute;
     final currentWake = ((dawnM + _minutes) % 1440 + 1440) % 1440;
     final picked = await showTimePicker(
       context: context,
@@ -516,23 +518,18 @@ class _OffsetDialogState extends State<_OffsetDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           InkWell(
-            onTap: widget.nextDawn == null ? null : _pickWakeTime,
+            onTap: _pickWakeTime,
             child: Text(fmtOffset(_minutes), style: text.displayLarge),
           ),
           const SizedBox(height: 8),
           Text(
-            widget.nextDawn == null
-                ? 'relative to civil dawn'
-                : 'dawn ${fmtClock(widget.nextDawn!)}'
-                    ' · wake ${fmtClock(widget.nextDawn!.add(Duration(minutes: _minutes)))}',
+            arunodayWakeOffsetHint(widget.nextDawn, _minutes),
             style: text.bodyMedium,
             textAlign: TextAlign.center,
           ),
-          if (widget.nextDawn != null) ...[
-            const SizedBox(height: 2),
-            Text('tap the offset to pick the wake time',
-                style: text.bodyMedium, textAlign: TextAlign.center),
-          ],
+          const SizedBox(height: 2),
+          Text('tap the offset to pick the wake time',
+              style: text.bodyMedium, textAlign: TextAlign.center),
           const SizedBox(height: 16),
           Wrap(
             alignment: WrapAlignment.center,

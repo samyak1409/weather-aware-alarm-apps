@@ -67,6 +67,18 @@ class NivaatController extends ChangeNotifier {
     return store.loadHistory();
   }
 
+  /// N21's refusal, or null to accept the place. Lives here, not inline in the
+  /// courts sheet, for the reason this repo keeps relearning: a string built
+  /// inside a widget is a string no test can name (2026-07-31).
+  ///
+  /// "Area" rather than a distance: the rule is a ~100 m radius, and no
+  /// wording of "within 100 m" survives contact with a user who is standing
+  /// at the other end of the same park.
+  String? courtRefusal(double lat, double lon) {
+    final dup = existingCourtNear(lat, lon);
+    return dup == null ? null : 'Same area as ${dup.name} — already added.';
+  }
+
   /// An already-saved court within ~100 m (true great-circle distance), else
   /// null. Tighter than Arunoday's 1 km: distinct courts can sit close
   /// together, so only reject what is essentially the exact same spot.
@@ -182,7 +194,7 @@ class NivaatController extends ChangeNotifier {
       alarms.isEmpty ? 1 : alarms.map((a) => a.id).reduce((a, b) => a > b ? a : b) + 1;
 
   /// Returns `false` when [alarm] collides on HH:MM with another alarm
-  /// (MESSAGES N20) so callers don't treat a no-op as a successful save.
+  /// (MESSAGES N18) so callers don't treat a no-op as a successful save.
   ///
   /// Pass [now] in tests to pin wall-clock decisions (abandon vs continue,
   /// and the follow-up evaluate). Production callers leave it null.
@@ -191,7 +203,7 @@ class NivaatController extends ChangeNotifier {
   /// await [lastEvaluation] in tests when you need its outcome. [now] only
   /// chooses the clock; it does not change concurrency.
   Future<bool> upsertAlarm(NivaatAlarm alarm, {DateTime? now}) async {
-    // Belt-and-suspenders: the alarm sheet refuses first (N20). Never persist
+    // Belt-and-suspenders: the alarm sheet refuses first (N18). Never persist
     // a colliding HH:MM even if a future caller skips the UI check.
     if (nivaatAlarmTimeConflict(alarms, alarm) != null) return false;
 
@@ -205,19 +217,22 @@ class NivaatController extends ChangeNotifier {
     }
     await store.saveAlarms(alarms);
     // Mid-window: limit / Keep checking / add-only weekdays KEEP flying under
-    // the new settings. Time, court, drop-today, toggle-off ABANDON (stamp
-    // `stopped at`, drop N2). New alarm / no state: abandon is a cheap clear.
+    // the new settings. Time, court, drop-today and toggle-off ABANDON — the
+    // card is rewritten to `Cancelled` and a matching row appended, because
+    // the alarm still exists and deserves an explanation. (Delete is the
+    // opposite and takes the card down; see [deleteAlarm].) A brand-new alarm
+    // has no occurrence to abandon, so this is just a cheap clear.
     //
     // CheckState is read outside the engine's per-alarm queue — benign: both
     // branches re-read inside the lane, so a stale classify degrades to a
     // no-op (retain finds nothing / abandon clears an already-cleared id).
     final prior = previous;
     if (prior == null) {
-      await engine.abandonOccurrence(alarm, now: now);
+      await engine.abandonOccurrence(alarm, now: now, keepCard: true);
     } else {
       final state = await store.loadCheckState(alarm.id);
       if (nivaatEditAbandonsInFlight(prior, alarm, state: state, now: now)) {
-        await engine.abandonOccurrence(prior, now: now);
+        await engine.abandonOccurrence(prior, now: now, keepCard: true);
       } else {
         await engine.retainInFlightEdits(prior, alarm, now: now);
       }
@@ -233,6 +248,11 @@ class NivaatController extends ChangeNotifier {
     return true;
   }
 
+  /// Deleting mid-window still closes the morning's story — the history rows
+  /// survive an alarm's deletion, so leaving the last one open would strand a
+  /// row reading "watching until 06:30" that nothing will ever answer. What it
+  /// does NOT do is keep the card: a notification for an alarm that no longer
+  /// exists is an orphan, which is the bug that started all this.
   Future<void> deleteAlarm(int id) async {
     final removed = alarms.where((a) => a.id == id).toList();
     alarms = alarms.where((a) => a.id != id).toList();
@@ -243,7 +263,10 @@ class NivaatController extends ChangeNotifier {
     };
     notifyListeners();
     for (final a in removed) {
-      unawaited(_evaluateInBackground(a.copyWith(enabled: false)));
+      unawaited(() async {
+        await engine.abandonOccurrence(a);
+        await _evaluateInBackground(a.copyWith(enabled: false));
+      }());
     }
   }
 
@@ -254,12 +277,13 @@ class NivaatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleAlarm(int id, bool enabled) async {
+  Future<void> toggleAlarm(int id, bool enabled, {DateTime? now}) async {
     final i = alarms.indexWhere((a) => a.id == id);
     if (i < 0) return;
     // Same id / same HH:MM → conflict helper always allows; don't ignore the
     // bool (unused_result hygiene + catches a broken guard if it ever fires).
-    final ok = await upsertAlarm(alarms[i].copyWith(enabled: enabled));
+    final ok =
+        await upsertAlarm(alarms[i].copyWith(enabled: enabled), now: now);
     assert(ok, 'toggleAlarm must never hit an HH:MM conflict');
   }
 }

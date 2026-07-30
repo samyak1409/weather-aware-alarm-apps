@@ -70,25 +70,42 @@ class _RingGateState extends State<RingGate> {
       builder: (context, snapshot) {
         final ringing = snapshot.data?.alarms ?? const <AlarmSettings>{};
         if (ringing.isEmpty) return widget.child;
-        return _RingScreen(
+        return RingScreen(
           appName: widget.appName,
           alarms: ringing.toList(),
           actionsBuilder: widget.actionsBuilder,
+          onStop: () async {
+            for (final a in ringing) {
+              await Alarm.stop(a.id);
+            }
+          },
         );
       },
     );
   }
 }
 
-class _RingScreen extends StatelessWidget {
-  const _RingScreen({
+/// What you see while an alarm sounds (MESSAGES.md X1) — app label, the
+/// alarm's scheduled time, the ring notification's own body, any app actions,
+/// and STOP.
+///
+/// Public and plugin-free on purpose (2026-07-26). [RingGate] decides *when*
+/// this appears, which only the `alarm` plugin can drive and so only a device
+/// can exercise; what it *says* is just widgets and is asserted by
+/// `shared_message_test`. Splitting the two is what makes the most important
+/// screen in either app testable at all — the one you read at 6am, half awake.
+class RingScreen extends StatelessWidget {
+  const RingScreen({
+    super.key,
     required this.appName,
     required this.alarms,
+    required this.onStop,
     this.actionsBuilder,
   });
 
   final String appName;
   final List<AlarmSettings> alarms;
+  final Future<void> Function() onStop;
   final Widget Function(BuildContext context, AlarmSettings alarm)?
       actionsBuilder;
 
@@ -125,11 +142,7 @@ class _RingScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 64,
                 child: FilledButton(
-                  onPressed: () async {
-                    for (final a in alarms) {
-                      await Alarm.stop(a.id);
-                    }
-                  },
+                  onPressed: onStop,
                   child: const Text('STOP', style: TextStyle(letterSpacing: 2)),
                 ),
               ),

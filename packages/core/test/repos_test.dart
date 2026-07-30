@@ -98,7 +98,7 @@ void main() {
         ringCourtSpeedKmh: 2.4,
         ringRawGustKmh: 9.0,
         ringVolume: 0.85,
-        extendedCheckShown: true,
+        cardShown: true,
         skipCourtSpeedKmh: 7.2,
         skipRawGustKmh: 16.0,
         skipGusty: true,
@@ -113,42 +113,48 @@ void main() {
       expect(b, a);
     });
 
-    test('upsertHistory: same event converges; heads-up and final stay apart',
+    test('upsertHistory: one row per push; a racing double-write converges',
         () async {
       final at = DateTime(2026, 7, 13, 6, 0);
       final cap = at.add(const Duration(minutes: 30));
-      HistoryRecord row(CheckOutcome outcome,
+      HistoryRecord push(int seq,
               {DateTime? watched, DateTime? when, int alarm = 7}) =>
           HistoryRecord(
               alarmId: alarm,
               courtId: 'c1',
               at: when ?? at,
+              kind: watched == null
+                  ? HistoryKind.outcome
+                  : HistoryKind.stillChecking,
+              pushSeq: seq,
               watchedUntil: watched,
-              outcome: outcome);
+              outcome: CheckOutcome.skippedWindy);
 
-      // The heads-up snapshot written twice (racing isolates) -> ONE row.
-      await store.upsertHistory(row(CheckOutcome.skippedWindy, watched: cap));
-      await store.upsertHistory(row(CheckOutcome.skippedWindy, watched: cap));
+      // Two isolates handling the SAME push read the same counter, so they
+      // write the same number and land on one row.
+      await store.upsertHistory(push(1, watched: cap));
+      await store.upsertHistory(push(1, watched: cap));
+      expect(await store.loadHistory(), hasLength(1),
+          reason: 'a double-write of one push converges');
+
+      // The next push is a new row; the first survives it (append-only).
+      await store.upsertHistory(push(2));
       var h = await store.loadHistory();
-      expect(h, hasLength(1), reason: 'double-write of one event converges');
-
-      // The final outcome is a SEPARATE row — the snapshot survives it
-      // (append-only log, user decision 2026-07-20).
-      await store.upsertHistory(row(CheckOutcome.rang));
-      h = await store.loadHistory();
       expect(h, hasLength(2));
-      expect(h.first.outcome, CheckOutcome.rang, reason: 'final prepends');
-      expect(h.last.watchedUntil, cap, reason: 'snapshot row still there');
+      expect(h.first.pushSeq, 2, reason: 'newest prepends');
+      expect(h.last.watchedUntil, cap, reason: 'the promise it made stands');
 
-      // A racing double-write of the final converges onto it too.
-      await store.upsertHistory(row(CheckOutcome.rang));
-      expect(await store.loadHistory(), hasLength(2));
+      // Two pushes with IDENTICAL content — Keep checking 30 → 60 → 30 — must
+      // both stay. This is exactly why the key cannot be the row's text.
+      await store.upsertHistory(push(3, watched: cap));
+      final same = await store.loadHistory();
+      expect(same, hasLength(3));
+      expect(same.where((r) => r.watchedUntil == cap), hasLength(2));
 
-      // Different occurrence / different alarm = new rows.
-      await store.upsertHistory(
-          row(CheckOutcome.skippedGusty, when: at.add(const Duration(days: 1))));
-      await store.upsertHistory(row(CheckOutcome.skippedWindy, alarm: 8));
-      expect(await store.loadHistory(), hasLength(4));
+      // Different occurrence / different alarm = new rows whatever the seq.
+      await store.upsertHistory(push(1, when: at.add(const Duration(days: 1))));
+      await store.upsertHistory(push(1, alarm: 8));
+      expect(await store.loadHistory(), hasLength(5));
     });
 
     test('refresh() reloads prefs without disturbing stored data', () async {
@@ -160,9 +166,12 @@ void main() {
       expect(await store.loadSoundPath(), '/tones/x.ogg');
     });
 
-    test('history prepends newest and caps at 60', () async {
+    test('history prepends newest and is never trimmed', () async {
+      // 65 mornings: one past the 60-row ceiling this store used to enforce
+      // (removed 2026-07-31 — the log is permanent, per SPEC). The oldest row
+      // must still be there, because nothing but a court delete removes one.
       for (var i = 0; i < 65; i++) {
-        await store.addHistory(HistoryRecord(
+        await store.upsertHistory(HistoryRecord(
           alarmId: i,
           courtId: 'c1',
           at: DateTime(2026, 7, 13, 6, i % 60),
@@ -172,16 +181,36 @@ void main() {
         ));
       }
       final h = await store.loadHistory();
-      expect(h.length, 60, reason: 'capped at the 60 newest');
+      expect(h.length, 65, reason: 'nothing is dropped');
       expect(h.first.alarmId, 64, reason: 'newest is first');
-      expect(h.last.alarmId, 5, reason: 'oldest kept is #5 (0-4 dropped)');
+      expect(h.last.alarmId, 0, reason: 'the very first row survives');
+    });
+
+    test('one morning can push past the old ceiling on its own', () async {
+      // The other direction: 65 pushes of a SINGLE occurrence, which is what a
+      // morning does when you keep moving the Keep-checking deadline. Distinct
+      // pushSeq, so none of them converges onto another.
+      for (var i = 0; i < 65; i++) {
+        await store.upsertHistory(HistoryRecord(
+          alarmId: 7,
+          courtId: 'c1',
+          at: DateTime(2026, 7, 13, 6, 0),
+          kind: HistoryKind.stillChecking,
+          pushSeq: i,
+          watchedUntil: DateTime(2026, 7, 13, 6, 30),
+          outcome: CheckOutcome.skippedWindy,
+        ));
+      }
+      final h = await store.loadHistory();
+      expect(h, hasLength(65));
+      expect(h.last.pushSeq, 0, reason: 'the morning\'s first promise stands');
     });
 
     test('removeHistoryForCourt drops every row for that court, keeps others',
         () async {
       // Two rows for c1 (one from an alarm that no longer matters), one for c2.
       for (final (id, courtId) in [(1, 'c1'), (9, 'c1'), (2, 'c2')]) {
-        await store.addHistory(HistoryRecord(
+        await store.upsertHistory(HistoryRecord(
           alarmId: id,
           courtId: courtId,
           at: DateTime(2026, 7, 13, 6, id),

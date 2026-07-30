@@ -116,7 +116,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   /// not the live cascade. Mid-window continue edits may keep today's flight
   /// alive on save, but the countdown here still answers the draft time
   /// (2026-07-26, Samyak — picker feedback; home stays quiet beside Still
-  /// checking). See SPEC / MESSAGES N13.
+  /// checking). See SPEC / MESSAGES N17.
   DateTime? get _draftNextRing => nivaatNextRingAt(
         NivaatAlarm(
           id: widget.existing?.id ?? 0,

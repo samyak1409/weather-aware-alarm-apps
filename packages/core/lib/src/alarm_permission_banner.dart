@@ -4,6 +4,13 @@ import 'alarmkit_scheduler.dart';
 import 'nudge_banner.dart';
 import 'system_settings.dart';
 
+/// X2's banner text. Built here rather than inline in `build()` so it can be
+/// asserted without mounting a widget whose visibility depends on an iOS-only
+/// permission check that can never be true on a test host.
+String alarmsOffMessage(String appName) =>
+    "Alarms are turned off — $appName can't ring until you allow alarms for "
+    'it in Settings.';
+
 /// Shown when the user has **denied** AlarmKit on iOS. Since iOS has no
 /// `alarm`-package fallback (by design), a denied permission means nothing can
 /// ring — so this banner tells the user plainly and opens Settings to fix it.
@@ -65,8 +72,7 @@ class _AlarmPermissionBannerState extends State<AlarmPermissionBanner>
   Widget build(BuildContext context) {
     if (!_denied) return const SizedBox.shrink();
     return NudgeBanner(
-      message: 'Alarms are turned off — ${widget.appName} can\'t ring until '
-          'you allow alarms for it in Settings.',
+      message: alarmsOffMessage(widget.appName),
       actionLabel: 'Open Settings',
       // The banner is iOS-only, so this never runs on Android.
       onAction: openIosAppSettings,

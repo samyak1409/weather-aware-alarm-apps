@@ -5,6 +5,7 @@ import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
+import 'messages.dart';
 import 'notifications.dart';
 import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
@@ -63,13 +64,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _addLocation() async {
-    final place = await showLocationSearch(context, validate: (lat, lon) {
-      if (!Solar.hasDailyDawnAllYear(DateTime.now().year, lat, lon)) {
-        return 'No daily dawn here (polar) — Arunoday needs a real dawn.';
-      }
-      final dup = c.existingLocationSameDawn(lat, lon);
-      return dup == null ? null : 'Same dawn as ${dup.name} — already added.';
-    });
+    final place = await showLocationSearch(context, validate: c.placeRefusal);
     if (place == null || !mounted) return;
     final loc = SavedLocation(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -87,21 +82,6 @@ class _HomeScreenState extends State<HomeScreen>
   DateTime? get _delayedUntil {
     final d = c.settings.bedtimeDelayedUntil;
     return (d != null && d.isAfter(DateTime.now())) ? d : null;
-  }
-
-  /// " · AUTO" / " · AUTO +2:00": how the bedtime relates to the auto plan,
-  /// mirroring the wake line's "DAWN +0:00" (offset hidden when it IS auto).
-  String _bedtimeModeLabel() => ' · ${c.bedtimeModeDescription.toUpperCase()}';
-
-  /// " · IN 7H 22M" until [t], minute-truncated to match the clocks.
-  static String _inLabel(DateTime? t) {
-    if (t == null) return '';
-    final now = DateTime.now();
-    final mins = DateTime(t.year, t.month, t.day, t.hour, t.minute)
-        .difference(DateTime(now.year, now.month, now.day, now.hour, now.minute))
-        .inMinutes;
-    if (mins < 0) return '';
-    return ' · IN ${fmtDuration(mins.toDouble()).toUpperCase()}';
   }
 
   @override
@@ -201,20 +181,29 @@ class _HomeScreenState extends State<HomeScreen>
               margin: const EdgeInsets.only(top: 16, bottom: 4),
               denied: notificationsDenied,
               recheckAfter: widget.permissionFlow,
-              message: 'Notifications are off — a ringing alarm shows nothing '
-                  'on screen (sound only, no Stop), and bedtime reminders '
-                  'can\'t appear.',
+              message: kArunodayNotificationsOff,
             ),
         ],
         const Spacer(),
+        // The `—` on both clocks is defence, not a state you can reach: this
+        // whole branch needs a location, and a location with no daily dawn is
+        // refused when you add it (A16), so dawn — and everything derived from
+        // it — resolves. No-location is the empty intro above (A9), which is
+        // what the doc used to mis-describe this as. Kept because the honest
+        // alternative is `nextWake!`, and this repo already has one scar from
+        // force-unwrapping an optional that "couldn't" be null (N4's volume,
+        // which made history permanently un-openable).
         Text(
           nextWake == null ? '—' : fmtClock(nextWake),
           style: text.displayLarge,
         ),
         const SizedBox(height: 4),
         Text(
-          'WAKE · DAWN${fmtOffset(offset)}'
-          '${c.settings.wakeEnabled ? _inLabel(nextWake) : ' · OFF'}',
+          arunodayWakeLine(
+            offsetMinutes: offset,
+            enabled: c.settings.wakeEnabled,
+            nextWake: nextWake,
+          ),
           style: text.labelSmall,
         ),
         const SizedBox(height: 40),
@@ -224,19 +213,19 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         const SizedBox(height: 4),
         Text(
-          'BEDTIME'
-          '${_bedtimeModeLabel()}'
-          '${_delayedUntil != null ? ' · AGAIN ${fmtClock(_delayedUntil!)}' : ''}'
-          '${sleep == null ? '' : ' · ${fmtDuration(sleep).toUpperCase()} TONIGHT'}'
-          // IN (enabled) and OFF (disabled) are opposites — same final slot.
-          '${c.settings.bedtimeEnabled ? _inLabel(c.nextBedtimeRing) : ' · OFF'}',
+          arunodayBedtimeLine(
+            mode: c.bedtimeModeDescription,
+            enabled: c.settings.bedtimeEnabled,
+            again: _delayedUntil,
+            sleepMinutes: sleep,
+            nextRing: c.nextBedtimeRing,
+          ),
           style: text.labelSmall,
         ),
         const Spacer(flex: 2),
         if (dawnShown != null) ...[
           Text(
-            'Dawn ${dawnRolled ? 'tomorrow' : 'today'} ${fmtClock(dawnShown)}'
-            '${sunriseShown == null ? '' : ' · Sunrise ${fmtClock(sunriseShown)}'}',
+            arunodayFooterLine(dawnShown, sunriseShown, rolled: dawnRolled),
             style: text.bodyMedium,
           ),
           const SizedBox(height: 2),

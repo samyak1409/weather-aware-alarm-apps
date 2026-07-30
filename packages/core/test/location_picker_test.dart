@@ -87,13 +87,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Save with empty field falls back to default name', (tester) async {
+  testWidgets('an empty field disables Save instead of restoring the default',
+      (tester) async {
+    // 2026-07-31: clearing the field used to silently re-substitute
+    // `My location` on Save. Whitespace counts as empty — Save is driven by
+    // the trimmed value, the same value it would have written.
     String? saved;
+    var closed = false;
     await tester.pumpWidget(MaterialApp(
       home: Builder(
         builder: (context) => TextButton(
           onPressed: () async {
             saved = await showNamePlaceDialogForTest(context);
+            closed = true;
           },
           child: const Text('open'),
         ),
@@ -102,11 +108,29 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
+    expect(find.text('NAME THIS PLACE'), findsOneWidget, reason: 'X5 title');
+    expect(find.text('My location'), findsOneWidget,
+        reason: 'X5 default, pre-filled in the field');
+
     await tester.enterText(find.byType(TextField), '   ');
+    await tester.pump();
+    expect(tester.widget<TextButton>(find.widgetWithText(TextButton, 'Save')).onPressed,
+        isNull);
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
+    expect(closed, isFalse, reason: 'a dead Save leaves the dialog open');
 
-    expect(saved, 'My location');
+    // Keyboard submit must not be the back door round the disabled button.
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(closed, isFalse);
+
+    // Type something and Save comes back.
+    await tester.enterText(find.byType(TextField), 'Home');
+    await tester.pump();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(saved, 'Home');
   });
 
   testWidgets('keyboard submit saves the typed name', (tester) async {

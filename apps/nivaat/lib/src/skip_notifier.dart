@@ -1,14 +1,14 @@
 import 'dart:io';
 
 import 'package:core/core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ids.dart';
 
-/// Title of all three Nivaat cards (MESSAGES.md N1/N2/N3):
-/// `{court} · {HH:MM} · {status}` — [kNivaatRing] / [kNivaatStillChecking] /
-/// [kNivaatSkipped].
+/// Title of every Nivaat card (MESSAGES.md N1/N2):
+/// `{court} · {HH:MM} · {status}`.
 ///
 /// The app name is deliberately absent (2026-07-22): both OS notification
 /// headers already print it above the title, so "Nivaat" spent the scannable
@@ -18,12 +18,18 @@ import 'ids.dart';
 String nivaatNotificationTitle(String courtName, DateTime at, String status) =>
     '$courtName · ${fmtClock(at)} · $status';
 
-/// The three title statuses. Sentence-capitalised: they head a title now, not
-/// a mid-sentence clause (2026-07-22). The ring's is the verdict itself — it
+/// The title statuses. Sentence-capitalised: they head a title, not a
+/// mid-sentence clause (2026-07-22). The ring's is the verdict itself — it
 /// moved up out of the body, where the numbers now stand alone.
+///
+/// [kNivaatStillChecking] / [kNivaatSkipped] / [kNivaatCancelled] are three
+/// states of the SAME card (2026-07-26), not three cards — see [SkipNotifier].
+/// `Cancelled` rather than `Stopped` because the ring's own button is literally
+/// `Stop`, and "Stopped" on a card would read as "you silenced the alarm".
 const String kNivaatRing = 'Play! 🏸';
 const String kNivaatStillChecking = 'Still checking';
 const String kNivaatSkipped = 'Skipped';
+const String kNivaatCancelled = 'Cancelled';
 
 // One reason phrase, shared by both cards (within-notification consistency).
 // Court-free since 2026-07-22 — the title names it now.
@@ -34,17 +40,26 @@ String _reason(HistoryRecord record) => switch (record.outcome) {
       CheckOutcome.rang => '',
     };
 
-/// ` · checked HH:MM` — or ` · last tried HH:MM` when no check ever succeeded.
-/// On every card including the ring (2026-07-22), as reinforcement that the
-/// result came from a real reading. `alarmAt` only decides whether the date is
-/// needed: a ring booked from last night's forecast reads ` · checked 17 Jul
-/// 22:00`, never a bare `22:00` that looks like this morning.
+/// ` · last checked HH:MM` — the freshness of the reading behind this row.
+/// One helper for every surface, so a card and its history row can't drift.
 ///
-/// The same value its history row shows — the engine writes `lastCheckAt` on
-/// the very branch that schedules the ring, so N1 and N5 always agree.
-String nivaatCheckedNote(DateTime whenChecked, DateTime alarmAt,
-        {bool tried = false}) =>
-    ' · ${tried ? 'last tried' : 'checked'} '
+/// Three labels (2026-07-26):
+/// * `last checked` — the most recent successful reading. The default,
+///   because retries mean there is almost always more than one.
+/// * `last tried` — no reading ever succeeded, so this is the last attempt.
+/// * `checked` — the ring only. One check approved it; "last" would imply
+///   others that never happened.
+///
+/// `alarmAt` only decides whether the date is needed: a ring booked from last
+/// night's forecast reads ` · checked 17 Jul 22:00`, never a bare `22:00` that
+/// looks like this morning.
+String nivaatCheckedNote(
+  DateTime whenChecked,
+  DateTime alarmAt, {
+  bool tried = false,
+  bool ring = false,
+}) =>
+    ' · ${tried ? 'last tried' : ring ? 'checked' : 'last checked'} '
     '${fmtCheckTime(whenChecked, alarmAt)}';
 
 String _checked(HistoryRecord record) => nivaatCheckedNote(
@@ -53,23 +68,69 @@ String _checked(HistoryRecord record) => nivaatCheckedNote(
       tried: record.outcome == CheckOutcome.skippedNoData,
     );
 
-// Reason + numbers + freshness: the whole of the final card, and the head of
-// the heads-up. No-data carries no numbers, so its middle drops out.
+// Reason + numbers + freshness: the head of every state of the card.
+// No-data carries no numbers, so its middle drops out.
 String _reasonNumsChecked(HistoryRecord record) {
   final nums = record.windGustSummary;
   return '${_reason(record)}${nums.isEmpty ? '' : ' · $nums'}'
       '${_checked(record)}';
 }
 
-/// Body of the at-T heads-up (MESSAGES.md N2) — the final card's body plus the
-/// deadline still being watched.
-String nivaatExtendedCheckBody(HistoryRecord record, DateTime until) =>
-    '${_reasonNumsChecked(record)} · watching until ${fmtCheckTime(until, record.at)}';
+/// `watching until 06:30` — the deadline the card is promising. Bare phrase;
+/// every caller supplies its own ` · ` joiner (the notification bodies and the
+/// history sheet's sub join differently, but must never word it differently).
+String nivaatWatchingUntilPhrase(DateTime until, DateTime alarmAt) =>
+    'watching until ${fmtCheckTime(until, alarmAt)}';
 
-/// Body of the final skip card (MESSAGES.md N3). Empty for a ring — that
-/// occurrence is never notified, the ring speaks for itself.
-String nivaatSkipBody(HistoryRecord record) =>
-    record.outcome == CheckOutcome.rang ? '' : _reasonNumsChecked(record);
+/// `watched until 06:30` — how far checking actually reached, used ONLY when
+/// that differs from the last reading. They match on almost every morning;
+/// when they don't, the final attempt failed to reach the network, and this is
+/// the one thing separating "we gave up at 06:29" from "we tried at 06:30 and
+/// got nothing" (2026-07-26).
+String nivaatWatchedUntilPhrase(DateTime endedAt, DateTime alarmAt) =>
+    'watched until ${fmtCheckTime(endedAt, alarmAt)}';
+
+/// `stopped 06:05` — when YOU ended the morning.
+String nivaatStoppedPhrase(DateTime stoppedAt, DateTime alarmAt) =>
+    'stopped ${fmtCheckTime(stoppedAt, alarmAt)}';
+
+/// True when checking outlasted the last successful reading — see
+/// [nivaatWatchedUntilPhrase]. Compared at displayed granularity, since a row
+/// that prints the same minute twice is noise, not information.
+///
+/// Compared through [fmtCheckTime] — literally what the row renders — rather
+/// than a bare clock, so "displayed granularity" stays true if a window ever
+/// spans midnight and the two moments share an HH:MM.
+bool nivaatOutlastedLastReading(HistoryRecord record) {
+  final endedAt = record.checkingEndedAt;
+  return endedAt != null &&
+      fmtCheckTime(endedAt, record.at) !=
+          fmtCheckTime(record.whenChecked, record.at);
+}
+
+/// Body while the retry window runs (MESSAGES.md N2 · still checking).
+String nivaatStillCheckingBody(HistoryRecord record, DateTime until) =>
+    '${_reasonNumsChecked(record)} · '
+    '${nivaatWatchingUntilPhrase(until, record.at)}';
+
+/// Body once the morning ends without a ring (MESSAGES.md N2 · skipped).
+/// Empty for a ring — that morning's card is the ring itself.
+String nivaatSkippedBody(HistoryRecord record) {
+  if (record.outcome == CheckOutcome.rang) return '';
+  final reach = nivaatOutlastedLastReading(record)
+      ? ' · ${nivaatWatchedUntilPhrase(record.checkingEndedAt!, record.at)}'
+      : '';
+  return '${_reasonNumsChecked(record)}$reach';
+}
+
+/// Body when you stopped the morning yourself (MESSAGES.md N2 · cancelled).
+/// Richer than its history row on purpose: the row sits beside the still-
+/// checking row that already carries the numbers, the card has no neighbour.
+String nivaatCancelledBody(HistoryRecord record) {
+  final stoppedAt = record.checkingEndedAt;
+  return '${_reasonNumsChecked(record)}'
+      '${stoppedAt == null ? '' : ' · ${nivaatStoppedPhrase(stoppedAt, record.at)}'}';
+}
 
 /// The trust mechanism, part 2 (SPEC.md): every skipped alarm leaves a
 /// notification saying exactly why — windy, gusty, or no data.
@@ -142,124 +203,96 @@ class SkipNotifier {
     return options != null && !options.isEnabled;
   }
 
-  // The "still checking" heads-up (at T) and the final skip card (at the cap)
-  // are SEPARATE notifications with distinct ids ([NivaatIds.headsUp] /
-  // [NivaatIds.skip]) — so the cap fires a fresh, alerting card and does NOT
-  // overwrite the heads-up. Per-alarm ids, so a new day's occurrence replaces
-  // its own kind.
-
-  // Shared card style — a normal audible notification.
+  // ONE CARD PER MORNING (2026-07-26). A single notification id
+  // ([NivaatIds.card]) posts at T as "Still checking" and is rewritten in
+  // place to "Skipped" or "Cancelled" as the morning resolves. There is no
+  // second card: the earlier design left the heads-up standing beside a fresh
+  // skip card, so the shade kept a promise ("watching until 06:30") that the
+  // morning had already broken.
   //
-  // One channel carries BOTH cards, so it can't be named for only one of them:
-  // muting "Skipped alarms" would also have killed the still-checking heads-up,
-  // the card that's still worth acting on. Renamed 2026-07-22, id reset to drop
+  // Every push ALERTS. Rewriting is new information every time — even the
+  // Keep-checking deadline move, which is a change you made and want
+  // confirmed. That is why there is no quiet variant and no `onlyAlertOnce`:
+  // one style, no platform-specific presentation flags to reason about.
+  //
+  // Posting to an id that is not currently showing CREATES it, so a card you
+  // swiped away comes back with the outcome — which is the right answer, since
+  // the outcome is news you haven't seen.
+  //
+  // The channel carries every state, so it can't be named for one of them:
+  // muting "Skipped alarms" would also have killed the still-checking card,
+  // the one that's still worth acting on. Renamed 2026-07-22, id reset to drop
   // the `_v2` (that suffix only existed because Android freezes a channel's
   // importance at creation, and the 2026-07-12 silent→audible switch needed a
-  // fresh id; with no installed base there's nothing to migrate). Channel
-  // fields live in one place — Android freezes them at first create, so two
-  // copies drifting apart would make the live channel depend on which card
-  // posted first that install.
-  static const String _channelId = 'nivaat_alarm_updates';
-  static const String _channelName = 'Alarm updates';
-  static const String _channelDescription =
+  // fresh id; with no installed base there's nothing to migrate).
+  //
+  // Public (2026-07-31) so `notification_message_test` can lock them: the name
+  // and description are user-visible in Android's notification settings — the
+  // one screen where you decide whether to keep hearing this app — and the id
+  // is worse than user-visible, it is PERSISTED. Android keeps a channel by id
+  // and freezes its importance at creation, so an innocuous rename here
+  // orphans the live channel and silently resets the user's choice.
+  @visibleForTesting
+  static const String channelId = 'nivaat_alarm_updates';
+  @visibleForTesting
+  static const String channelName = 'Alarm updates';
+  @visibleForTesting
+  static const String channelDescription =
       "Still checking, and why an alarm didn't ring";
 
   static const NotificationDetails _details = NotificationDetails(
     android: AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: _channelDescription,
+      channelId,
+      channelName,
+      channelDescription: channelDescription,
       importance: Importance.high,
       priority: Priority.high,
     ),
     iOS: DarwinNotificationDetails(presentBadge: false),
   );
 
-  // Mid-window Keep-checking tweak: same id, body deadline only. Android
-  // onlyAlertOnce keeps the first post loud and later updates quiet. iOS:
-  // presentSound:false quiets foreground AND background (plugin docs);
-  // presentBanner:false suppresses the banner (presentAlert is iOS 10–14
-  // only — inert at our floor of 26). presentList left unset so it falls
-  // back to defaultPresentList:true — the card stays in Notification Center.
-  static const NotificationDetails _headsUpQuietDetails = NotificationDetails(
-    android: AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: _channelDescription,
-      importance: Importance.high,
-      priority: Priority.high,
-      onlyAlertOnce: true,
-    ),
-    iOS: DarwinNotificationDetails(
-      presentBadge: false,
-      presentSound: false,
-      presentBanner: false,
-    ),
-  );
-
-  /// Heads-up posted at T for a skipped occurrence: the reason so far, plus a
-  /// note that the app keeps checking in the background until [until] and will
-  /// ring if it clears. Left in place afterwards (a late ring, or the separate
-  /// final card at the cap, follows it — it isn't cleared).
-  ///
-  /// Pass [quietUpdate] when only the deadline moved (Keep checking edit) —
-  /// same notification id, no cancel/re-post flicker; uses
-  /// [_headsUpQuietDetails] (Android `onlyAlertOnce`; iOS `presentSound` /
-  /// `presentBanner` false — not `presentAlert`, inert below 26). Wind
-  /// numbers stay whatever the first heads-up said.
-  Future<void> showExtendedCheck(
+  Future<void> _push(
     HistoryRecord record,
     String courtName,
-    DateTime until, {
-    bool quietUpdate = false,
-  }) async {
+    String status,
+    String body,
+  ) async {
     await ensureInitialized();
-    await _plugin.show(
-      id: NivaatIds.headsUp(record.alarmId),
-      title:
-          nivaatNotificationTitle(courtName, record.at, kNivaatStillChecking),
-      body: nivaatExtendedCheckBody(record, until),
-      notificationDetails:
-          quietUpdate ? _headsUpQuietDetails : _details,
-    );
-  }
-
-  /// The final "here's why it didn't ring" card, at the alarm's retry cap — a
-  /// separate, alerting notification (does not replace the heads-up).
-  Future<void> showSkip(HistoryRecord record, String courtName) async {
-    await ensureInitialized();
-    final body = nivaatSkipBody(record);
     if (body.isEmpty) return;
-
     await _plugin.show(
-      id: NivaatIds.skip(record.alarmId),
-      title: nivaatNotificationTitle(courtName, record.at, kNivaatSkipped),
+      id: NivaatIds.card(record.alarmId),
+      title: nivaatNotificationTitle(courtName, record.at, status),
       body: body,
       notificationDetails: _details,
     );
   }
 
-  /// Pull down both of [alarmId]'s cards. Called when the alarm is **deleted**
-  /// (or its court is gone) — everything it ever said is now orphaned.
+  /// Posted at T when the alarm didn't ring: the reason so far, plus the
+  /// deadline the app keeps checking toward. Re-posted with a new deadline
+  /// whenever Keep checking is edited mid-window.
+  Future<void> showStillChecking(
+          HistoryRecord record, String courtName, DateTime until) =>
+      _push(record, courtName, kNivaatStillChecking,
+          nivaatStillCheckingBody(record, until));
+
+  /// The morning ended without a ring. Rewrites the same card.
+  Future<void> showSkipped(HistoryRecord record, String courtName) =>
+      _push(record, courtName, kNivaatSkipped, nivaatSkippedBody(record));
+
+  /// You ended the morning yourself — toggled the alarm off, or edited its
+  /// time or court so today's window was abandoned. Rewrites the same card.
+  Future<void> showCancelled(HistoryRecord record, String courtName) =>
+      _push(record, courtName, kNivaatCancelled, nivaatCancelledBody(record));
+
+  /// Take [alarmId]'s card down. Used when the alarm is **deleted** or its
+  /// court is gone — a card for something that no longer exists is an orphan
+  /// no rewrite can fix — and when a late ring lands, where the ring itself
+  /// becomes that morning's card.
   ///
-  /// Without this a heads-up card outlives a deleted alarm and keeps making a
-  /// promise nothing is keeping: "Still checking … watching until 06:30" sits
-  /// in the shade after you delete the alarm at 06:05, until you swipe it away
-  /// by hand. Cancelling an id that isn't posted is a no-op, so this is safe
-  /// to call on every pass. History keeps the durable record either way.
+  /// Cancelling an id that isn't posted is a no-op, so this is safe on every
+  /// pass. History keeps the durable record either way.
   Future<void> cancelForAlarm(int alarmId) async {
     await ensureInitialized();
-    await _plugin.cancel(id: NivaatIds.headsUp(alarmId));
-    await _plugin.cancel(id: NivaatIds.skip(alarmId));
-  }
-
-  /// Pull down only the heads-up. Called on **toggle-off mid-window**, while
-  /// "watching until 06:30" is still a live promise — disabling the alarm is
-  /// exactly what stops anyone watching (2026-07-26). After the retry cap (or
-  /// a late ring) the heads-up is history of a window that really ran, so
-  /// toggle-off leaves it; only delete / court-gone take both cards down.
-  Future<void> cancelHeadsUp(int alarmId) async {
-    await ensureInitialized();
-    await _plugin.cancel(id: NivaatIds.headsUp(alarmId));
+    await _plugin.cancel(id: NivaatIds.card(alarmId));
   }
 }

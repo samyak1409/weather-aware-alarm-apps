@@ -2,183 +2,16 @@ import 'dart:io';
 
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nivaat/src/check_scheduler.dart';
 import 'package:nivaat/src/controller.dart';
 import 'package:nivaat/src/engine.dart';
-import 'package:nivaat/src/ids.dart';
 import 'package:nivaat/src/skip_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class FakeNotifier extends SkipNotifier {
-  final List<(HistoryRecord, String)> shown = [];
-  final List<(HistoryRecord, String, DateTime, bool)> extended = [];
-  final List<int> cancelled = [];
-  final List<int> cancelledHeadsUp = [];
+import 'engine_fakes.dart';
 
-  @override
-  Future<void> ensureInitialized() async {}
-
-  @override
-  Future<void> showSkip(HistoryRecord record, String courtName) async {
-    shown.add((record, courtName));
-  }
-
-  @override
-  Future<void> showExtendedCheck(
-    HistoryRecord record,
-    String courtName,
-    DateTime until, {
-    bool quietUpdate = false,
-  }) async {
-    extended.add((record, courtName, until, quietUpdate));
-  }
-
-  @override
-  Future<void> cancelForAlarm(int alarmId) async {
-    cancelled.add(alarmId);
-  }
-
-  @override
-  Future<void> cancelHeadsUp(int alarmId) async {
-    cancelledHeadsUp.add(alarmId);
-  }
-}
-
-class FakeRing implements AlarmScheduler {
-  final Map<int, ({DateTime at, double volume, String title, String body})>
-      scheduled = {};
-
-  /// Every scheduleRing call in order — [scheduled] only keeps the latest per
-  /// id, which hides e.g. a late ring that finalising then rolls over.
-  final List<({int id, DateTime at})> log = [];
-
-  /// Every cancel in order. Needed because a cancel can be immediately
-  /// followed by a write to the same locker inside one pass, which [scheduled]
-  /// alone cannot distinguish from "never cancelled".
-  final List<int> cancelled = [];
-  final Set<int> ringingIds = {};
-
-  @override
-  Future<void> ensureInitialized() async {}
-
-  @override
-  Future<void> scheduleRing({
-    required int id,
-    required DateTime at,
-    required String title,
-    required String body,
-    required double volume,
-  }) async {
-    scheduled[id] = (at: at, volume: volume, title: title, body: body);
-    log.add((id: id, at: at));
-  }
-
-  @override
-  Future<void> cancel(int id) async {
-    cancelled.add(id);
-    scheduled.remove(id);
-  }
-
-  @override
-  Future<Set<int>> scheduledIds() async => scheduled.keys.toSet();
-
-  @override
-  Future<bool> isRinging(int id) async => ringingIds.contains(id);
-}
-
-/// Throws Exception on any scheduler touch — guards resync/init soft-fail
-/// paths (Errors must still propagate; see controller.resync).
-class BoomRing extends FakeRing {
-  Never _boom() => throw Exception('scheduler boom');
-
-  @override
-  Future<void> cancel(int id) async => _boom();
-
-  @override
-  Future<void> scheduleRing({
-    required int id,
-    required DateTime at,
-    required String title,
-    required String body,
-    required double volume,
-  }) async =>
-      _boom();
-}
-
-/// Programming Error on any scheduler touch — must NOT be swallowed by resync.
-class ErrorRing extends FakeRing {
-  Never _boom() => throw StateError('programming boom');
-
-  @override
-  Future<void> cancel(int id) async => _boom();
-
-  @override
-  Future<void> scheduleRing({
-    required int id,
-    required DateTime at,
-    required String title,
-    required String body,
-    required double volume,
-  }) async =>
-      _boom();
-}
-
-class FakeChecks implements CheckScheduler {
-  final Map<int, DateTime> booked = {};
-
-  @override
-  Future<void> initialize() async {}
-
-  @override
-  Future<void> scheduleCheck(int alarmId, DateTime at) async =>
-      booked[alarmId] = at;
-
-  @override
-  Future<void> cancelCheck(int alarmId) async => booked.remove(alarmId);
-}
-
-class FakeApi extends OpenMeteo {
-  FakeApi();
-
-  WindSample? sample;
-  bool fail = false;
-  bool lastCallWasCurrent = false;
-
-  @override
-  Future<WindSample> forecastWindAt(double lat, double lon, DateTime target) async {
-    lastCallWasCurrent = false;
-    if (fail || sample == null) throw OpenMeteoException('down');
-    return sample!;
-  }
-
-  @override
-  Future<WindSample> currentWind(double lat, double lon) async {
-    lastCallWasCurrent = true;
-    if (fail || sample == null) throw OpenMeteoException('down');
-    return sample!;
-  }
-}
-
-WindSample wind(double rawSpeed, double rawGust) => WindSample(
-      rawSpeedKmh: rawSpeed,
-      rawGustKmh: rawGust,
-      observedAt: DateTime(2026, 7, 11),
-      isForecast: false,
-    );
-
-const court = SavedLocation(id: 'c1', name: 'Home Court', lat: 26.17, lon: 75.79);
-// Pin the limit (don't rely on the default) so these wind-decision scenarios
-// stay valid if the default changes: raw gust limit 4/0.6*2.2 = 14.667.
-const alarm =
-    NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1', courtSpeedLimitKmh: 4);
-final alarmAt = DateTime(2026, 7, 12, 6, 0); // 11 Jul 2026 is a Saturday
-
-// Ring lockers are split by ROLE: the pre-arm for an occurrence's own time
-// vs a LATE ring armed after T. That separation is what stops the next
-// occurrence's pre-arm from evicting a late ring.
-final todayRing = NivaatIds.ring(alarm.id);
-final lateRing = NivaatIds.lateRing(alarm.id);
-
+/// Records every push to the morning's single card, in order, plus the body
+/// each one rendered — the body is where every wording decision lands, so a
+/// test that only counts pushes would miss all of them.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -372,13 +205,13 @@ void main() {
     expect(checks.booked[7], alarmAt, reason: 'final ladder check booked at T');
   });
 
-  test('windy at T, calm in the retry window -> rings late (heads-up left in place)',
+  test('windy at T, calm in the retry window -> rings late, card gives way',
       () async {
-    api.sample = wind(9.0, 10.0); // windy — heads-up posted at T
+    api.sample = wind(9.0, 10.0); // windy — the morning's card posts at T
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 1)));
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-    expect(notifier.extended, hasLength(1), reason: 'heads-up at T');
+    expect(notifier.extended, hasLength(1), reason: '"still checking" at T');
     expect((await engine.store.loadHistory()).single.outcome,
         CheckOutcome.skippedWindy,
         reason: 'provisional row from the missed T');
@@ -403,8 +236,8 @@ void main() {
     expect(ring.scheduled[todayRing]!.at,
         alarmAt.add(const Duration(days: 1)),
         reason: 'tomorrow pre-arms into its own locker, evicting nothing');
-    // Append-only log (2026-07-20): the late ring is a NEW row; the heads-up
-    // snapshot stays below it — both moments really happened.
+    // Append-only log (2026-07-20): the late ring is a NEW row; the
+    // still-checking row stays below it — both moments really happened.
     final history = await engine.store.loadHistory();
     expect(history, hasLength(2));
     expect(history.first.outcome, CheckOutcome.rang);
@@ -413,11 +246,17 @@ void main() {
         reason: 'records the check that drove the ring (06:07), not the anchor');
     expect(history.first.at, alarmAt, reason: 'anchor stays the alarm time');
     expect(history.last.outcome, CheckOutcome.skippedWindy,
-        reason: 'the at-T snapshot survives the late ring');
+        reason: 'the at-T row survives the late ring');
     expect(history.last.watchedUntil, isNotNull);
     expect(notifier.shown, isEmpty, reason: 'a ring needs no skip card');
     expect(notifier.extended, hasLength(1),
-        reason: 'heads-up is not cleared by the late ring');
+        reason: 'still the only card push this morning made');
+    // The ROW stays, the CARD does not: the ring is this morning's
+    // notification now, and a "still checking" card beside a sounding alarm
+    // is noise. (`extended` counts pushes that happened, not what is showing.)
+    expect(notifier.cancelled, contains(alarm.id),
+        reason: 'the late ring takes the card down');
+    expect(notifier.card, isNull);
     expect((await engine.store.loadCheckState(7))!.alarmAt,
         alarmAt.add(const Duration(days: 1)),
         reason: 'rolled straight on to tomorrow (calm -> pre-armed)');
@@ -769,11 +608,19 @@ void main() {
     await engine.store.saveAlarms([alarm, alarm2]); // alarm.courtId == court.id
     // c1 has two rows from its live alarm (7) plus one from an alarm deleted
     // earlier (99) — court-keyed, so that orphan is still c1's and gets deleted.
-    for (final (id, courtId) in [(7, 'c1'), (7, 'c1'), (99, 'c1'), (8, 'c2')]) {
-      await engine.store.addHistory(HistoryRecord(
+    // Alarm 7's pair is ONE morning pushed twice, so they carry different push
+    // numbers; sharing one would converge them into a single row by design.
+    for (final (id, courtId, seq) in [
+      (7, 'c1', 1),
+      (7, 'c1', 2),
+      (99, 'c1', 1),
+      (8, 'c2', 1)
+    ]) {
+      await engine.store.upsertHistory(HistoryRecord(
           alarmId: id,
           courtId: courtId,
           at: DateTime(2026, 7, 13, 6, id % 60),
+          pushSeq: seq,
           outcome: CheckOutcome.rang));
     }
     await controller.init();
@@ -983,85 +830,8 @@ void main() {
           reason: "a dead alarm's cards must be pulled down");
     });
 
-    /// Controller toggle path: [abandonOccurrence] then evaluate.
-    Future<void> toggleOffViaControllerPath(DateTime now) async {
-      final off = alarm.copyWith(enabled: false);
-      await engine.store.saveAlarms([off]);
-      await engine.abandonOccurrence(alarm, now: now);
-      await engine.evaluateAlarm(off, [court], now: now);
-    }
-
-    test('toggling off mid-window drops the heads-up promise', () async {
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      expect(notifier.extended, hasLength(1));
-      expect(notifier.shown, isEmpty, reason: 'final skip not posted yet');
-
-      final stopAt = alarmAt.add(const Duration(minutes: 5));
-      await toggleOffViaControllerPath(stopAt);
-
-      expect(notifier.cancelled, isEmpty,
-          reason: 'full cancel is for delete/court-gone only');
-      expect(notifier.cancelledHeadsUp, contains(alarm.id),
-          reason: '"watching until 06:30" is a promise, and disabling the '
-              'alarm is what stops anyone watching');
-      expect(ring.scheduled, isEmpty, reason: 'rings still disarm');
-      final snap = (await engine.store.loadHistory())
-          .singleWhere((h) => h.watchedUntil != null);
-      expect(snap.watchStoppedAt, stopAt);
-      expect(
-          nivaatStillWatchingNote(snap, now: stopAt, hasFinal: false),
-          'watching until 06:30 · stopped at 06:05');
-    });
-
-    test('toggling off after the final skip keeps both shade cards', () async {
-      // Window already ran to the cap: both cards are history, not a promise.
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.add(const Duration(minutes: 30)));
-      expect(notifier.extended, hasLength(1));
-      expect(notifier.shown, hasLength(1), reason: 'final skip card at the cap');
-
-      await toggleOffViaControllerPath(
-          alarmAt.add(const Duration(minutes: 31)));
-
-      expect(notifier.cancelled, isEmpty,
-          reason: 'cancelForAlarm would have pulled both cards down');
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'we did check until the cap — N2 is no longer a false promise');
-      expect(notifier.shown, hasLength(1),
-          reason: 'the skip record card is left in the shade');
-      expect(notifier.extended, hasLength(1),
-          reason: 'the heads-up stays as the at-T half of that morning');
-    });
-
-    test('toggling off after a late ring keeps the heads-up', () async {
-      // Late ring is the final result; N2 was left standing on purpose.
-      // Snapshot's watchedUntil is still in the future — the final row is
-      // what marks the promise closed (not the calendar alone).
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      api.sample = wind(5.0, 5.0);
-      final late = alarmAt.add(const Duration(minutes: 7));
-      await engine.evaluateAlarm(alarm, [court], now: late);
-      expect(notifier.extended, hasLength(1));
-
-      await toggleOffViaControllerPath(late.add(const Duration(minutes: 1)));
-
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'final result already landed — N2 is history, not a promise');
-      expect(notifier.extended, hasLength(1));
-    });
+    // Toggle-off, delete, edit-abandon and the whole card lifecycle moved to
+    // morning_story_test.dart, which asserts them as whole rendered strings.
 
     test('a missing court cancels cards even when the alarm is still saved',
         () async {
@@ -1093,62 +863,75 @@ void main() {
     });
   });
 
-  test('nivaatStillWatchingNote: live / final / stopped / failed', () {
-    final snapshot = HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: alarmAt,
-        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
-        outcome: CheckOutcome.skippedWindy);
-    expect(
-        nivaatStillWatchingNote(snapshot,
-            now: alarmAt.add(const Duration(minutes: 10)), hasFinal: false),
-        'watching until 06:30');
-    expect(
-        nivaatStillWatchingNote(snapshot,
-            now: alarmAt.add(const Duration(minutes: 30)), hasFinal: true),
-        'watched until 06:30',
-        reason: 'final landed — planned cap kept as watched until');
-    expect(
-        nivaatStillWatchingNote(snapshot,
-            now: alarmAt.add(const Duration(minutes: 30)), hasFinal: false),
-        'watching until 06:30 · failed',
-        reason: 'past cap, no final, not user-stopped');
-    expect(
-        nivaatStillWatchingNote(
-            snapshot.copyWith(
-                watchStoppedAt: alarmAt.add(const Duration(minutes: 5))),
-            now: alarmAt.add(const Duration(minutes: 40)),
-            hasFinal: false),
-        'watching until 06:30 · stopped at 06:05',
-        reason: 'planned cap preserved; stopped appends');
-    expect(
-        nivaatStillWatchingNote(
-            HistoryRecord(
-                alarmId: 7,
-                courtId: 'c1',
-                at: alarmAt,
-                outcome: CheckOutcome.skippedWindy),
-            now: alarmAt,
-            hasFinal: false),
-        isNull,
-        reason: 'final rows carry no watch note');
-  });
+  group('nivaatHistoryNote (MESSAGES.md N10)', () {
+    HistoryRecord row(
+      HistoryKind kind, {
+      DateTime? watchedUntil,
+      DateTime? checkedAt,
+      DateTime? endedAt,
+    }) =>
+        HistoryRecord(
+          alarmId: 7,
+          courtId: 'c1',
+          at: alarmAt,
+          kind: kind,
+          watchedUntil: watchedUntil,
+          checkedAt: checkedAt,
+          checkingEndedAt: endedAt,
+          outcome: CheckOutcome.skippedWindy,
+        );
 
-  test('nivaatStillWatchingNote: dates the cap when it crosses midnight vs the alarm',
-      () {
-    final late = DateTime(2026, 7, 22, 23, 49);
-    final snapshot = HistoryRecord(
+    test('a still-checking row states its promise, forever', () {
+      final r = row(HistoryKind.stillChecking,
+          watchedUntil: alarmAt.add(const Duration(minutes: 30)));
+      expect(nivaatHistoryNote(r), 'watching until 06:30');
+    });
+
+    test('an outcome row stays quiet when checking ended on its last reading',
+        () {
+      final r = row(HistoryKind.outcome,
+          checkedAt: alarmAt.add(const Duration(minutes: 30)),
+          endedAt: alarmAt.add(const Duration(minutes: 30)));
+      expect(nivaatHistoryNote(r), isNull,
+          reason: 'printing 06:30 twice on one line is noise, not information');
+    });
+
+    test('...and speaks up when it outlasted that reading', () {
+      final r = row(HistoryKind.outcome,
+          checkedAt: alarmAt.add(const Duration(minutes: 29)),
+          endedAt: alarmAt.add(const Duration(minutes: 30)));
+      expect(nivaatHistoryNote(r), 'watched until 06:30',
+          reason: 'the 06:30 attempt is all that separates this from giving '
+              'up at 06:29');
+    });
+
+    test('seconds inside the same minute do not count as outlasting', () {
+      final r = row(HistoryKind.outcome,
+          checkedAt: alarmAt.add(const Duration(minutes: 30)),
+          endedAt: alarmAt.add(const Duration(minutes: 30, seconds: 40)));
+      expect(nivaatHistoryNote(r), isNull,
+          reason: 'both display 06:30 — compared as shown, not as instants');
+    });
+
+    test('a cancelled row says when you stopped it', () {
+      final r = row(HistoryKind.cancelled,
+          endedAt: alarmAt.add(const Duration(minutes: 5)));
+      expect(nivaatHistoryNote(r), 'stopped 06:05');
+    });
+
+    test('a deadline crossing midnight carries its date', () {
+      final late = DateTime(2026, 7, 22, 23, 49);
+      final r = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
         at: late,
+        kind: HistoryKind.stillChecking,
         watchedUntil: late.add(const Duration(minutes: 30)),
-        outcome: CheckOutcome.skippedWindy);
-    expect(
-        nivaatStillWatchingNote(snapshot,
-            now: late.add(const Duration(hours: 1)), hasFinal: true),
-        'watched until 23 Jul 00:19',
-        reason: 'same rule as fmtCheckTime — bare 00:19 would look earlier than 23:49');
+        outcome: CheckOutcome.skippedWindy,
+      );
+      expect(nivaatHistoryNote(r), 'watching until 23 Jul 00:19',
+          reason: 'a bare 00:19 would look earlier than the 23:49 alarm');
+    });
   });
 
   test('nivaatEditAbandonsInFlight: limit/retry/add-weekday continue; time/court/drop abandon',
@@ -1187,17 +970,23 @@ void main() {
         isTrue);
   });
 
+  // The user-visible half of mid-window edits — the card and the rows they
+  // produce — is asserted as whole strings in morning_story_test.dart. What
+  // stays here is the machinery underneath: which occurrence survives, and
+  // whether the cascade keeps flying.
   group('mid-window edits keep or abandon the occurrence', () {
-    test('raising the wind limit mid-window keeps retries flying', () async {
-      // Windy at ≤4 → raise to ≤6 → wind 5 now rings late under the new limit.
+    Future<void> windyThroughT() async {
       api.sample = wind(9.0, 10.0);
       await engine.store.saveCourts([court]);
       await engine.store.saveAlarms([alarm]);
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(minutes: 1)));
       await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      expect(notifier.extended, hasLength(1));
+    }
 
+    test('raising the wind limit keeps today flying, and it rings late',
+        () async {
+      await windyThroughT();
       final looser = alarm.copyWith(courtSpeedLimitKmh: 6);
       await engine.store.saveAlarms([looser]);
       await engine.retainInFlightEdits(alarm, looser,
@@ -1205,256 +994,88 @@ void main() {
       api.sample = wind(5.0, 5.0);
       await engine.evaluateAlarm(looser, [court],
           now: alarmAt.add(const Duration(minutes: 5)));
+
       expect(
           ring.scheduled.containsKey(lateRing) ||
               ring.log.any((e) => e.id == lateRing),
           isTrue,
-          reason: 'same morning rings late under the raised limit');
+          reason: 'the same morning rings under the raised limit');
       expect(
           (await engine.store.loadHistory())
-              .where((h) => h.watchStoppedAt != null),
-          isEmpty,
-          reason: 'continue path — not a user stop');
+              .any((h) => h.kind == HistoryKind.cancelled),
+          isFalse,
+          reason: 'continue path — nobody cancelled anything');
     });
 
-    test('upsertAlarm raising the limit mid-window still late-rings', () async {
-      // End-to-end through the controller dispatch — hard-wiring always-
-      // abandon must fail this. Pins [now] for the clock; awaits
-      // [lastEvaluation] so production's fire-and-forget interleaving still runs.
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      final controller = NivaatController(engine: engine);
-      await controller.init();
-      expect(
-          await controller.upsertAlarm(alarm,
-              now: alarmAt.subtract(const Duration(minutes: 1))),
-          isTrue);
-      await controller.lastEvaluation;
-      await engine.evaluateAlarm(
-          controller.alarms.single, controller.courts,
-          now: alarmAt);
-      expect(notifier.extended, hasLength(1));
-
-      api.sample = wind(5.0, 5.0);
-      final t = alarmAt.add(const Duration(minutes: 5));
-      expect(
-          await controller.upsertAlarm(
-              alarm.copyWith(courtSpeedLimitKmh: 6),
-              now: t),
-          isTrue);
-      await controller.lastEvaluation;
-      expect(
-          ring.scheduled.containsKey(lateRing) ||
-              ring.log.any((e) => e.id == lateRing),
-          isTrue,
-          reason: 'controller continue path — not abandonOccurrence');
-      expect(
-          (await engine.store.loadHistory())
-              .where((h) => h.watchStoppedAt != null),
-          isEmpty);
-    });
-
-    test('widening Keep checking mid-window moves the deadline only', () async {
-      api.sample = wind(9.0, 10.0);
-      final short = alarm.copyWith(retryMinutesAfter: 1);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([short]);
-      await engine.evaluateAlarm(short, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(short, [court], now: alarmAt);
-      expect((await engine.store.loadHistory()).single.watchedUntil,
-          alarmAt.add(const Duration(minutes: 1)));
-      final firstBody = nivaatExtendedCheckBody(
-        notifier.extended.single.$1,
-        notifier.extended.single.$3,
-      );
-
-      final longer = short.copyWith(retryMinutesAfter: 30);
-      final newCap = alarmAt.add(const Duration(minutes: 30));
-      await engine.store.saveAlarms([longer]);
-      await engine.retainInFlightEdits(short, longer,
-          now: alarmAt.add(const Duration(seconds: 30)));
-      expect((await engine.store.loadHistory()).single.watchedUntil, newCap);
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'deadline updates in place — no cancel/re-post');
-      expect(notifier.extended, hasLength(2));
-      expect(notifier.extended.last.$4, isTrue, reason: 'quiet update');
-      final refreshed = nivaatExtendedCheckBody(
-        notifier.extended.last.$1,
-        notifier.extended.last.$3,
-      );
-      expect(refreshed, endsWith('watching until 06:30'));
-      // Wind / limits stay the first heads-up's — only the deadline moved.
-      expect(
-        refreshed.replaceFirst(' · watching until 06:30', ''),
-        firstBody.replaceFirst(' · watching until 06:01', ''),
-      );
-    });
-
-    test('raising limit + widening Keep checking keeps first-heads-up numbers',
-        () async {
-      // The natural edit while staring at "Still checking, too windy": loosen
-      // the limit AND extend the window. N2 must not read "Too windy · (≤20)".
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      expect(notifier.extended, hasLength(1));
-
-      final edited = alarm.copyWith(
-        courtSpeedLimitKmh: 20,
-        retryMinutesAfter: 60,
-      );
-      final newCap = alarmAt.add(const Duration(minutes: 60));
-      await engine.store.saveAlarms([edited]);
-      await engine.retainInFlightEdits(alarm, edited,
-          now: alarmAt.add(const Duration(minutes: 5)));
-
-      expect(notifier.extended, hasLength(2));
-      final body = nivaatExtendedCheckBody(
-        notifier.extended.last.$1,
-        notifier.extended.last.$3,
-      );
-      expect(body, contains('≤4'),
-          reason: 'limits from the decision, not the Save');
-      expect(body, isNot(contains('≤20')));
-      expect(body, endsWith('watching until 07:00'));
-      expect(
-        (await engine.store.loadHistory())
-            .singleWhere((h) => h.watchedUntil != null)
-            .courtSpeedLimitKmh,
-        4,
-        reason: 'history snapshot keeps decision-time limits too',
-      );
-      expect(
-        (await engine.store.loadHistory())
-            .singleWhere((h) => h.watchedUntil != null)
-            .watchedUntil,
-        newCap,
-      );
-    });
-
-    test('shrinking Keep checking past now finalises and keeps both cards',
-        () async {
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-
-      final tiny = alarm.copyWith(retryMinutesAfter: 1);
-      final t = alarmAt.add(const Duration(minutes: 2));
-      final newCap = alarmAt.add(const Duration(minutes: 1));
-      await engine.store.saveAlarms([tiny]);
-      await engine.retainInFlightEdits(alarm, tiny, now: t);
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'old promise updates to the new cap — not pulled');
-      expect(
-        (await engine.store.loadHistory()).single.watchedUntil,
-        newCap,
-      );
-      expect(notifier.extended, hasLength(2));
-      expect(
-        nivaatExtendedCheckBody(
-          notifier.extended.last.$1,
-          notifier.extended.last.$3,
-        ),
-        endsWith('watching until 06:01'),
-      );
-
-      await engine.evaluateAlarm(tiny, [court], now: t);
-
-      final history = await engine.store.loadHistory();
-      expect(
-          history.any((h) =>
-              h.watchedUntil == null &&
-              h.at == alarmAt &&
-              h.outcome != CheckOutcome.rang),
-          isTrue,
-          reason: 'cap already past → final skip for today, not stopped at');
-      expect(history.where((h) => h.watchStoppedAt != null), isEmpty);
-      expect(notifier.shown, isNotEmpty, reason: 'final skip card posted');
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'both cards stay — N2 deadline updated, N3 beside it');
-    });
-
-    test('changing the alarm time mid-window abandons with stopped at',
-        () async {
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-
-      final moved = alarm.copyWith(hour: 7);
-      final t = alarmAt.add(const Duration(minutes: 5));
-      await engine.store.saveAlarms([moved]);
-      await engine.abandonOccurrence(alarm, now: t);
-      await engine.evaluateAlarm(moved, [court], now: t);
-
-      expect(notifier.cancelledHeadsUp, contains(alarm.id));
-      final snap = (await engine.store.loadHistory())
-          .firstWhere((h) => h.watchedUntil != null);
-      expect(snap.watchStoppedAt, t);
-      expect(snap.at, alarmAt, reason: 'snapshot stays the abandoned morning');
-    });
-
-    test('adding a weekday mid-window keeps today flying', () async {
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+    test('adding a weekday keeps today flying', () async {
+      await windyThroughT();
       final otherDay = alarmAt.weekday % 7 + 1;
-      final added =
-          alarm.copyWith(weekdays: {...alarm.weekdays, otherDay});
+      final added = alarm.copyWith(weekdays: {...alarm.weekdays, otherDay});
+      final t = alarmAt.add(const Duration(minutes: 5));
       expect(
           nivaatEditAbandonsInFlight(alarm, added,
-              state: await engine.store.loadCheckState(7),
-              now: alarmAt.add(const Duration(minutes: 5))),
+              state: await engine.store.loadCheckState(7), now: t),
           isFalse);
       await engine.store.saveAlarms([added]);
-      await engine.retainInFlightEdits(alarm, added,
-          now: alarmAt.add(const Duration(minutes: 5)));
-      await engine.evaluateAlarm(added, [court],
-          now: alarmAt.add(const Duration(minutes: 5)));
-      expect((await engine.store.loadCheckState(7))!.alarmAt, alarmAt);
-      expect(notifier.cancelledHeadsUp, isEmpty);
+      await engine.retainInFlightEdits(alarm, added, now: t);
+      await engine.evaluateAlarm(added, [court], now: t);
+
+      expect((await engine.store.loadCheckState(7))!.alarmAt, alarmAt,
+          reason: 'still the same morning');
     });
 
-    test('dropping the in-flight weekday abandons with stopped at', () async {
-      api.sample = wind(9.0, 10.0);
-      await engine.store.saveCourts([court]);
-      await engine.store.saveAlarms([alarm]);
-      await engine.evaluateAlarm(alarm, [court],
-          now: alarmAt.subtract(const Duration(minutes: 1)));
-      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
-      final withoutToday = alarm.copyWith(
-          weekdays: {...alarm.weekdays}..remove(alarmAt.weekday));
+    test('dropping the in-flight weekday abandons it', () async {
+      await windyThroughT();
+      final withoutToday = alarm
+          .copyWith(weekdays: {...alarm.weekdays}..remove(alarmAt.weekday));
       final t = alarmAt.add(const Duration(minutes: 5));
       expect(
           nivaatEditAbandonsInFlight(alarm, withoutToday,
               state: await engine.store.loadCheckState(7), now: t),
           isTrue);
-      await engine.store.saveAlarms([withoutToday]);
-      await engine.abandonOccurrence(alarm, now: t);
-      expect(notifier.cancelledHeadsUp, contains(alarm.id));
-      expect(
-          (await engine.store.loadHistory())
-              .singleWhere((h) => h.watchedUntil != null)
-              .watchStoppedAt,
-          t);
     });
 
-    test('widening Keep checking after the old cap does not resurrect',
+    test('shrinking Keep checking past now finalises on SAVE, not later',
         () async {
-      // Defence in depth: a real Save always resyncs first (which finalises
-      // the dead window), so this branch is rarely hit end-to-end. Keep N2.
+      // Where it finalises is the whole point (2026-07-31). This asserted only
+      // that an outcome existed *after* an evaluate, so it stayed green while
+      // the retain was pushing an alerting `watching until 06:01` card at
+      // 06:02 first — a promise already broken, and an immutable row with it.
+      // Split in two now: the retain closes the morning, the evaluate only
+      // rolls tomorrow on. (`morning_story_test` 14d locks how it reads.)
+      await windyThroughT();
+      final tiny = alarm.copyWith(retryMinutesAfter: 1);
+      final t = alarmAt.add(const Duration(minutes: 2));
+      await engine.store.saveAlarms([tiny]);
+      await engine.retainInFlightEdits(alarm, tiny, now: t);
+
+      var history = await engine.store.loadHistory();
+      expect(history.first.kind, HistoryKind.outcome,
+          reason: 'the newest row is the ending, written by the retain itself');
+      expect(history.first.outcome, isNot(CheckOutcome.rang));
+      expect(history.any((h) => h.kind == HistoryKind.cancelled), isFalse,
+          reason: 'the window ran out — nobody cancelled it');
+      expect(notifier.card!.status, kNivaatSkipped);
+      expect(
+          history.where((h) => h.kind == HistoryKind.stillChecking).map((h) =>
+              h.watchedUntil),
+          everyElement(predicate<DateTime?>((u) => u != null && t.isBefore(u))),
+          reason: 'no row may promise a deadline that had already passed');
+      expect(await engine.store.loadCheckState(7), isNull,
+          reason: 'the occurrence is closed and its state cleared');
+
+      // Only now does the evaluate have anything to do: book tomorrow.
+      await engine.evaluateAlarm(tiny, [court], now: t);
+      history = await engine.store.loadHistory();
+      expect(history.first.kind, HistoryKind.outcome,
+          reason: 'nothing further was appended');
+      expect((await engine.store.loadCheckState(7))?.alarmAt,
+          alarmAt.add(const Duration(days: 1)),
+          reason: 'today is closed; the roll-on has booked tomorrow');
+    });
+
+    test('widening after the old cap died does not resurrect that morning',
+        () async {
       api.sample = wind(9.0, 10.0);
       final short = alarm.copyWith(retryMinutesAfter: 1);
       await engine.store.saveCourts([court]);
@@ -1462,85 +1083,63 @@ void main() {
       await engine.evaluateAlarm(short, [court],
           now: alarmAt.subtract(const Duration(minutes: 1)));
       await engine.evaluateAlarm(short, [court], now: alarmAt);
-      // Past T+1 without evaluating the cap — state still today.
+      // Past T+1 and past its minute, without ever evaluating the cap.
       final longer = short.copyWith(retryMinutesAfter: 30);
       final t = alarmAt.add(const Duration(minutes: 2));
       await engine.store.saveAlarms([longer]);
       await engine.retainInFlightEdits(short, longer, now: t);
+
       final history = await engine.store.loadHistory();
       expect(
           history
-              .firstWhere((h) => h.watchedUntil != null)
+              .where((h) => h.kind == HistoryKind.stillChecking)
+              .single
               .watchedUntil,
           alarmAt.add(const Duration(minutes: 1)),
-          reason: 'must not rewrite a dead 1m window into +30m');
+          reason: 'the dead window keeps the promise it actually made');
       expect(
-          history.any((h) => h.watchedUntil == null && h.at == alarmAt),
+          history.any((h) => h.kind == HistoryKind.outcome && h.at == alarmAt),
           isTrue,
-          reason: 'finalises immediately instead of reviving under +30m');
+          reason: 'finalised instead of reviving under +30m');
       expect(await engine.store.loadCheckState(7), isNull,
-          reason: 'dead window cleared; evaluate must not reopen it');
-      expect(notifier.cancelledHeadsUp, isEmpty,
-          reason: 'both cards stay after the defence final');
-      expect(notifier.shown, isNotEmpty);
-    });
-
-    test('toggle-off later does not rewrite an ancient failed snapshot',
-        () async {
-      final oldAt = alarmAt.subtract(const Duration(days: 7));
-      await engine.store.upsertHistory(HistoryRecord(
-        alarmId: alarm.id,
-        courtId: court.id,
-        at: oldAt,
-        watchedUntil: oldAt.add(const Duration(minutes: 30)),
-        outcome: CheckOutcome.skippedWindy,
-      ));
-      // No final for that week — shows `· failed`. Toggle off today.
-      await engine.store.saveAlarms([alarm.copyWith(enabled: false)]);
-      await engine.abandonOccurrence(alarm,
-          now: alarmAt.add(const Duration(hours: 1)));
-      expect(
-          (await engine.store.loadHistory()).single.watchStoppedAt,
-          isNull,
-          reason: 'ancient failed rows stay failed, not stopped at today');
+          reason: 'a dead window must not reopen on the next evaluate');
     });
   });
 
-  test('nivaatHistoryHasFinal keys on alarmId + at', () {
-    final snap = HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: alarmAt,
-        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
-        outcome: CheckOutcome.skippedWindy);
-    final finalRow = HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: alarmAt,
-        outcome: CheckOutcome.rang,
-        volume: 1);
-    expect(nivaatHistoryHasFinal([snap], snap), isFalse);
-    expect(nivaatHistoryHasFinal([snap, finalRow], snap), isTrue);
-    // Bulk keys include finals; hasFinal guards them out — not equivalent
-    // when the probe is itself a final row.
-    expect(nivaatHistoryHasFinal([snap, finalRow], finalRow), isFalse);
-    expect(
-        nivaatFinalizedWatchKeys([snap, finalRow])
-            .contains(
-                '${finalRow.alarmId}@${finalRow.at.millisecondsSinceEpoch}'),
-        isTrue);
-    expect(
-        nivaatHistoryHasFinal([
-          snap,
-          HistoryRecord(
-              alarmId: 7,
-              courtId: 'c1',
-              at: alarmAt.add(const Duration(days: 1)),
-              outcome: CheckOutcome.rang,
-              volume: 1),
-        ], snap),
-        isFalse,
-        reason: 'a final for another morning does not close this snapshot');
+  test('nivaatLatestRowPerOccurrence takes the highest pushSeq', () {
+    HistoryRecord row(int seq, HistoryKind kind, {DateTime? at}) =>
+        HistoryRecord(
+          alarmId: 7,
+          courtId: 'c1',
+          at: at ?? alarmAt,
+          kind: kind,
+          pushSeq: seq,
+          outcome: CheckOutcome.skippedWindy,
+        );
+    final tomorrow = alarmAt.add(const Duration(days: 1));
+    final latest = nivaatLatestRowPerOccurrence([
+      row(2, HistoryKind.outcome),
+      row(1, HistoryKind.stillChecking),
+      row(1, HistoryKind.stillChecking, at: tomorrow),
+    ]);
+
+    expect(latest, hasLength(2), reason: 'two mornings, not four rows');
+    expect(latest['7@${alarmAt.millisecondsSinceEpoch}']!.kind,
+        HistoryKind.outcome,
+        reason: 'list order must not decide it — the push number does');
+    expect(latest['7@${tomorrow.millisecondsSinceEpoch}']!.kind,
+        HistoryKind.stillChecking);
+
+    // Rows written before push numbers existed ALL carry 0, so the number
+    // can't break the tie — list order has to, and callers pass newest-first.
+    // Resolving a tie the other way reads a finished old morning as an open
+    // window, and home would promise checking that stopped days ago.
+    final legacy = nivaatLatestRowPerOccurrence([
+      row(0, HistoryKind.outcome),
+      row(0, HistoryKind.stillChecking),
+    ]);
+    expect(legacy.values.single.kind, HistoryKind.outcome,
+        reason: 'newest-first: the outcome row was written last');
   });
 
   test('an off-step volume snaps to the nearest file, ties going louder', () {
@@ -1594,6 +1193,37 @@ void main() {
     expect(windVolumeSteps.map(nivaatSoundForVolume).toSet(), named);
   });
 
+  test('a failed history write leaves no card behind it', () async {
+    // `_pushCard` writes the row first and only then notifies, so the shade
+    // can never hold a card the log cannot explain. The reverse order is the
+    // one the user cannot recover from: a notification blaming the wind for a
+    // morning that left no record.
+    final failing = NivaatEngine(
+      store: FailingHistoryStore(),
+      scheduler: ring,
+      api: api,
+      checks: checks,
+      notifier: notifier,
+    );
+    api.sample = wind(12.0, 14.0); // court 7.2 > 4 → windy → would post the card
+
+    // A pre-T rung first, so the occurrence is in flight at T — without it
+    // `nextOccurrence` rolls straight to tomorrow and no card is due at all.
+    // It writes no history, so the failing store sails through it.
+    await failing.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 5)));
+    expect(notifier.pushes, isEmpty, reason: 'nothing is posted before T');
+
+    await expectLater(
+      failing.evaluateAlarm(alarm, [court], now: alarmAt),
+      throwsA(isA<Exception>()),
+      reason: 'the row write is deliberately NOT swallowed — the whole '
+          'evaluate unwinds instead',
+    );
+    expect(notifier.pushes, isEmpty,
+        reason: 'nothing was shown, because nothing was recorded');
+  });
+
   group('nivaatHistoryLine', () {
     final at = DateTime(2026, 7, 22, 6);
     HistoryRecord row(CheckOutcome outcome, {double? volume}) => HistoryRecord(
@@ -1610,6 +1240,26 @@ void main() {
     test('quotes the volume it rang at, alongside the numbers', () {
       expect(nivaatHistoryLine(row(CheckOutcome.rang, volume: 0.85)),
           'Rang (vol. 85%) · wind 3 (≤4) · gusts 16 (≤15) km/h');
+    });
+
+    test('a cancelled row is bare, whatever the wind was doing', () {
+      // The kind wins over the reason here — the first branch of the builder,
+      // and the only one that ignores its numbers. The record still CARRIES
+      // the last known wind (so the data stays true); the line just doesn't
+      // speak for it, because you ended the morning, not the weather.
+      final cancelled = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: at,
+        kind: HistoryKind.cancelled,
+        checkingEndedAt: at.add(const Duration(minutes: 5)),
+        outcome: CheckOutcome.skippedGusty,
+        courtSpeedKmh: 3,
+        rawGustKmh: 16,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+      );
+      expect(nivaatHistoryLine(cancelled), 'Cancelled');
     });
 
     test('a rang row without a volume drops the number, never the sheet', () {
@@ -1656,7 +1306,7 @@ void main() {
   CheckState flying(DateTime at, {int id = 7}) => CheckState(
         alarmId: id,
         alarmAt: at,
-        extendedCheckShown: true,
+        cardShown: true,
         skipCourtSpeedKmh: 5.4,
         skipRawGustKmh: 10,
       );
@@ -1749,16 +1399,27 @@ void main() {
     final state = CheckState(alarmId: 7, alarmAt: alarmAt);
     final cap = alarm.retryCapAt(alarmAt);
     expect(nivaatOccurrenceInFlight(alarm, state, cap), isTrue);
+    // The window runs to the end of the cap's MINUTE. Any reading taken in
+    // that minute still displays as 06:30, so it is honest to count it; the
+    // first instant that would display 06:31 is where it stops. Five seconds
+    // of slack used to be the rule, and a wake 10s late was enough to make the
+    // engine close the books on the previous reading — `last checked 06:29`
+    // on a 30-minute window, `06:00` on a 1-minute one (device, 2026-07-26).
     expect(
       nivaatOccurrenceInFlight(
-          alarm, state, cap.add(const Duration(seconds: 3))),
+          alarm, state, cap.add(const Duration(seconds: 40))),
       isTrue,
-      reason: 'a cap wake landing a few seconds late is still this occurrence',
+      reason: '06:30:40 still reads as 06:30',
     );
     expect(
       nivaatOccurrenceInFlight(
-          alarm, state, cap.add(const Duration(seconds: 6))),
+          alarm, state, cap.add(const Duration(seconds: 59, milliseconds: 999))),
+      isTrue,
+    );
+    expect(
+      nivaatOccurrenceInFlight(alarm, state, cap.add(const Duration(minutes: 1))),
       isFalse,
+      reason: 'this one would record 06:31 — later than the card promised',
     );
     // A state whose weekday is no longer selected isn't in flight — and home
     // has to agree, or it would count down to an occurrence the engine has
@@ -1785,6 +1446,8 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final alarms = [alarm];
@@ -1819,12 +1482,15 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final rang = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        pushSeq: 2,
         outcome: CheckOutcome.rang,
         volume: 0.9);
     expect(
@@ -1837,12 +1503,45 @@ void main() {
     );
   });
 
+  test('nivaatHomeWatchingLine: clears the moment you cancel the morning', () {
+    // Toggling the alarm off mid-window appends a `Cancelled` row. The cue has
+    // to go with it — the outcome case above shares this code path, but this
+    // is the one you reach by hand, and it is the one that would read as the
+    // app ignoring you.
+    final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
+        watchedUntil: alarmAt.add(const Duration(minutes: 30)),
+        outcome: CheckOutcome.skippedWindy);
+    final cancelled = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: alarmAt,
+        kind: HistoryKind.cancelled,
+        pushSeq: 2,
+        checkingEndedAt: alarmAt.add(const Duration(minutes: 5)),
+        outcome: CheckOutcome.skippedWindy);
+    expect(
+      nivaatHomeWatchingLine([cancelled, snapshot],
+          alarms: [alarm],
+          checkStates: [flying(alarmAt)],
+          now: alarmAt.add(const Duration(minutes: 10))),
+      isNull,
+      reason: 'the newest row is no longer a promise',
+    );
+  });
+
   test('nivaatHomeWatchingLine: a final for a *different* occurrence stays quiet about this one',
       () {
     final snapshot = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final otherFinal = HistoryRecord(
@@ -1866,6 +1565,8 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final now = alarmAt.add(const Duration(minutes: 10));
@@ -1894,6 +1595,8 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final now = alarmAt.add(const Duration(minutes: 12));
@@ -1919,6 +1622,8 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: late,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: late.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     expect(
@@ -1936,6 +1641,8 @@ void main() {
         alarmId: 1,
         courtId: 'c1',
         at: alarmAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 30)),
         outcome: CheckOutcome.skippedWindy);
     final laterAt = alarmAt.add(const Duration(minutes: 15));
@@ -1943,6 +1650,8 @@ void main() {
         alarmId: 2,
         courtId: 'c1',
         at: laterAt,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
         watchedUntil: alarmAt.add(const Duration(minutes: 45)),
         outcome: CheckOutcome.skippedWindy);
     const a1 = NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1');

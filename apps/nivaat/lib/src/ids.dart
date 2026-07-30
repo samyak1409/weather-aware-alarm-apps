@@ -9,8 +9,12 @@
 ///     10000 + alarmId   ring armed for the occurrence's own time
 ///     20000 + alarmId   LATE ring, armed after T inside the per-alarm retry window
 ///     30000 + alarmId   wind check (Android AlarmManager request code)
-///     40000 + alarmId   "still checking" notification
-///     50000 + alarmId   "skipped" notification
+///     40000 + alarmId   the morning's card
+///
+/// One card per morning (2026-07-26): it posts at T as "Still checking" and
+/// is rewritten in place to "Skipped" / "Cancelled" as the morning resolves,
+/// so the old 50000 "skipped" block is gone. Nothing sat above it, so nothing
+/// needed renumbering.
 ///
 /// **A block's width must exceed the largest index it can ever hold** (see
 /// CLAUDE.md). The index here is an alarm id from `nextAlarmId()`, which
@@ -35,8 +39,7 @@ class NivaatIds {
   static const int ringBlock = 10000;
   static const int lateRingBlock = 20000;
   static const int checkBlock = 30000;
-  static const int headsUpBlock = 40000;
-  static const int skipBlock = 50000;
+  static const int cardBlock = 40000;
 
   /// The ring armed for an occurrence's own scheduled time — the pre-arm the
   /// ladder commits at T-1h, T-30m, … Re-deciding the same occurrence rewrites
@@ -67,7 +70,8 @@ class NivaatIds {
 
   static int check(int alarmId) => checkBlock + alarmId;
 
-  static int headsUp(int alarmId) => headsUpBlock + alarmId;
-
-  static int skip(int alarmId) => skipBlock + alarmId;
+  /// The morning's one notification. Posted at T and rewritten in place —
+  /// same number throughout, which is what lets a later push replace the
+  /// card rather than stack a second one beside it.
+  static int card(int alarmId) => cardBlock + alarmId;
 }

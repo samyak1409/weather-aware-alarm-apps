@@ -3,6 +3,27 @@ import 'package:flutter/material.dart';
 
 import 'controller.dart';
 
+/// Warns what deleting [name] takes with it: its alarms and its history log
+/// (both are removed). History only exists once an alarm has fired at least
+/// once, so a fresh court names just its alarms (MESSAGES.md N20).
+///
+/// Top-level and pure so it can be asserted as a whole string — the same rule
+/// `nivaatHistoryLine` / `nivaatHistorySub` moved out for, and for the same
+/// reason: this one sat inside the widget and read "**1 alarm use** Society
+/// Court" from the day it landed (2026-07-19, `398f5c0`) until a test finally
+/// rendered the singular — the better part of a fortnight.
+String nivaatDeleteCourtWarning(String name, int alarms, int history) {
+  // "1 alarm uses" / "2 alarms use" — the verb has to agree with the count,
+  // not just the noun.
+  final a = alarms == 1 ? '1 alarm uses' : '$alarms alarms use';
+  final h = '$history history ${history == 1 ? 'entry' : 'entries'}';
+  if (alarms > 0 && history > 0) {
+    return '$a $name and will be deleted too, along with $h. Continue?';
+  }
+  if (alarms > 0) return '$a $name and will be deleted too. Continue?';
+  return '$h for $name will be deleted too. Continue?';
+}
+
 /// Returns true if at least one court exists when the sheet closes.
 ///
 /// [promptAdd]: FAB "add alarm" with zero courts — auto-opens the place
@@ -74,21 +95,6 @@ class _CourtsSheetState extends State<_CourtsSheet> {
     if (mounted) setState(() {});
   }
 
-  /// Warns what deleting [name] takes with it: its alarms and its history log
-  /// (both are removed). History only exists once an alarm has fired at least
-  /// once, so a fresh court names just its alarms.
-  String _deleteWarning(String name, int alarms, int history) {
-    final a = '$alarms alarm${alarms == 1 ? '' : 's'}';
-    final h = '$history history ${history == 1 ? 'entry' : 'entries'}';
-    if (alarms > 0 && history > 0) {
-      return '$a use $name and will be deleted too, along with $h. Continue?';
-    }
-    if (alarms > 0) {
-      return '$a use $name and will be deleted too. Continue?';
-    }
-    return '$h for $name will be deleted too. Continue?';
-  }
-
   Future<void> _deleteCourt(SavedLocation court) async {
     final n = c.alarmsForCourt(court.id);
     final h = c.historyForCourt(court.id);
@@ -98,7 +104,7 @@ class _CourtsSheetState extends State<_CourtsSheet> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text('DELETE COURT', style: text.labelSmall),
-          content: Text(_deleteWarning(court.name, n, h)),
+          content: Text(nivaatDeleteCourtWarning(court.name, n, h)),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -120,10 +126,7 @@ class _CourtsSheetState extends State<_CourtsSheet> {
     // FAB bootstrap: empty → pick a place → continue to the alarm sheet.
     // Don't leave the user on the courts list (that's for Settings).
     final bootstrap = widget.promptAdd && c.courts.isEmpty;
-    final place = await showLocationSearch(context, validate: (lat, lon) {
-      final dup = c.existingCourtNear(lat, lon);
-      return dup == null ? null : 'Same spot as ${dup.name} — already added.';
-    });
+    final place = await showLocationSearch(context, validate: c.courtRefusal);
     if (place == null) {
       if (bootstrap && mounted) Navigator.pop(context);
       return;

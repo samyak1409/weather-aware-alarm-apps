@@ -1,9 +1,9 @@
 import 'package:alarm/alarm.dart';
-import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'ids.dart';
+import 'messages.dart';
 
 /// Bedtime-ritual action shown on the ring screen for bedtime alarms (the
 /// [ArunodayIds] bedtime range, daily rings plus the re-ring): "not sleepy" —
@@ -28,12 +28,6 @@ class BedtimeActions extends StatelessWidget {
     await controller.delayBedtime(d);
   }
 
-  /// A post-midnight bedtime wakes you the same calendar day.
-  static bool _isToday(DateTime t) {
-    final now = DateTime.now();
-    return t.year == now.year && t.month == now.month && t.day == now.day;
-  }
-
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
@@ -43,8 +37,7 @@ class BedtimeActions extends StatelessWidget {
       children: [
         if (nextWake != null) ...[
           Text(
-            'WAKE ${_isToday(nextWake) ? 'TODAY' : 'TOMORROW'} '
-            '${fmtClock(nextWake)}',
+            arunodayRitualWakeLine(nextWake),
             style: text.labelSmall,
           ),
           const SizedBox(height: 16),

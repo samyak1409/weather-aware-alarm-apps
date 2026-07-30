@@ -50,20 +50,31 @@ String nivaatSoundForVolume(double volume) {
 /// without it would take the whole sheet down — permanently, since history is
 /// persisted. That is the worst screen to lose: it is the one that explains a
 /// morning the alarm didn't ring (2026-07-26).
+///
+/// A cancelled row is the exception to all of it: it carries no reason of its
+/// own — you ended the morning, the wind didn't — so it reads bare, and its
+/// numbers live on the still-checking row directly beside it.
 String nivaatHistoryLine(HistoryRecord record) {
+  if (record.kind == HistoryKind.cancelled) return kNivaatCancelled;
   final volume = record.volume;
+  // The status word mirrors the card's title, so a row and the card it was
+  // written for read the same. The reason rides in the parenthetical, exactly
+  // as it already did for `Skipped (gusty)`.
+  final status = record.kind == HistoryKind.stillChecking
+      ? kNivaatStillChecking
+      : 'Skipped';
   final head = switch (record.outcome) {
     // "vol." so the number can't read as a score — the rest of the line is
-    // label-value too (2026-07-22).
+    // label-value too (2026-07-22). Only an outcome row can be a ring.
     CheckOutcome.rang => volume == null
         ? 'Rang'
         : 'Rang (vol. ${(volume * 100).round()}%)',
-    // N6's bare "Skipped" means windy — locked 2026-07-22, don't add "(windy)".
-    CheckOutcome.skippedWindy => 'Skipped',
-    CheckOutcome.skippedGusty => 'Skipped (gusty)',
-    CheckOutcome.skippedNoData => 'Skipped (no data)',
+    // N5's bare "Skipped" means windy — locked 2026-07-22, don't add "(windy)".
+    CheckOutcome.skippedWindy => status,
+    CheckOutcome.skippedGusty => '$status (gusty)',
+    CheckOutcome.skippedNoData => '$status (no data)',
   };
-  // N8 quotes no numbers at all: a no-data row means nothing was measured, so
+  // N7 quotes no numbers at all: a no-data row means nothing was measured, so
   // any readings on one would contradict its own label. A row that simply lost
   // its readings degrades to the same empty summary — and either way the " · "
   // that joins it has to go too, or the line ends in a dangling separator.
@@ -73,69 +84,67 @@ String nivaatHistoryLine(HistoryRecord record) {
   return summary.isEmpty ? head : '$head · $summary';
 }
 
-/// Whether [history] already has a final row for the same occurrence as
-/// [snapshot] (`alarmId + at`, `watchedUntil == null`).
+/// The trailing note on a history row's sub, or null when it has none
+/// (MESSAGES.md N10).
 ///
-/// Early-exit scan — for the history sheet's per-row call. Bulk engine
-/// scans use [nivaatFinalizedWatchKeys] once instead.
-bool nivaatHistoryHasFinal(
-  Iterable<HistoryRecord> history,
-  HistoryRecord snapshot,
-) {
-  if (snapshot.watchedUntil == null) return false;
-  final key = _watchKey(snapshot.alarmId, snapshot.at);
-  for (final h in history) {
-    if (h.watchedUntil == null && _watchKey(h.alarmId, h.at) == key) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Keys of occurrences that already have a final row (`watchedUntil == null`).
+/// Rows are immutable, so this is pure formatting of what was already
+/// recorded — nothing here depends on "now", and nothing ages:
 ///
-/// Not equivalent to [nivaatHistoryHasFinal]: that returns false when the
-/// probe itself is a final (its null-guard). This set still contains that
-/// key. Callers must only look up **snapshot** rows (`watchedUntil != null`)
-/// — every current bulk site does. Built once for O(n) engine scans
-/// (soonest-open, heads-up promise, stamp-stopped). Not for per-row UI.
-Set<String> nivaatFinalizedWatchKeys(Iterable<HistoryRecord> history) => {
-      for (final h in history)
-        if (h.watchedUntil == null) _watchKey(h.alarmId, h.at),
+/// * **still-checking** → ` · watching until 06:30`. Present tense forever,
+///   because that is what the card said at that moment. How far the morning
+///   actually got is the next row's business.
+/// * **outcome** → ` · watched until 06:30`, but only when checking reached
+///   past the last reading. Almost always they are the same instant and this
+///   is empty; when they differ, the final attempt failed to reach the
+///   network, and this is the one thing separating "we gave up at 06:29" from
+///   "we tried at 06:30 and got nothing".
+/// * **cancelled** → ` · stopped 06:05`.
+///
+/// Times use [fmtCheckTime] against the alarm, so a window whose cap crosses
+/// midnight reads `watching until 23 Jul 00:19`, never a bare `00:19`.
+String? nivaatHistoryNote(HistoryRecord record) => switch (record.kind) {
+      HistoryKind.stillChecking => record.watchedUntil == null
+          ? null
+          : nivaatWatchingUntilPhrase(record.watchedUntil!, record.at),
+      HistoryKind.cancelled => record.checkingEndedAt == null
+          ? null
+          : nivaatStoppedPhrase(record.checkingEndedAt!, record.at),
+      HistoryKind.outcome => nivaatOutlastedLastReading(record)
+          ? nivaatWatchedUntilPhrase(record.checkingEndedAt!, record.at)
+          : null,
     };
 
-/// The note for a heads-up snapshot row (`watchedUntil` set). Null for finals.
+/// A history row's second line: where and when, how fresh the reading was,
+/// and whatever [nivaatHistoryNote] has to add (MESSAGES.md N4–N7, N10).
 ///
-/// - Live: `watching until 06:30`
-/// - Final landed: `watched until 06:30`
-/// - User killed the watch early: `watching until 06:30 · stopped at 06:05`
-///   (keeps the planned cap — what the window was set for)
-/// - Past cap, no final, not user-stopped: `watching until 06:30 · failed`
+/// Lives here rather than inside the sheet because a string built inside a
+/// widget is an untested string — the same reason [nivaatHistoryLine] moved
+/// out. It bit immediately: the sheet was still writing `checked` after the
+/// whole app moved to `last checked`, and only a test that rebuilt this line
+/// by hand was passing (2026-07-26).
 ///
-/// Pass [hasFinal] from the full log ([nivaatHistoryHasFinal]) — required,
-/// because without it a completed morning past the cap wrongly reads
-/// `· failed`.
+/// A cancelled row reads bare — `Society Court · 18 Jul · 06:00 · stopped
+/// 06:05`, with no freshness clause (Samyak, 2026-07-26). Its line already
+/// drops the reason and the numbers, and the still-checking row it always sits
+/// beside carries both: a cancelled row can only exist where one was written.
+/// The CARD keeps the full evidence because it has no neighbour to lean on —
+/// that asymmetry is the decision, not an oversight.
 ///
-/// The deadline uses [fmtCheckTime] against the alarm (`at`) — same rule as
-/// the check time — so a late-night alarm whose retry cap crosses midnight
-/// reads `watched until 23 Jul 00:19`, never a bare `00:19` (2026-07-23).
-String? nivaatStillWatchingNote(
-  HistoryRecord record, {
-  DateTime? now,
-  required bool hasFinal,
-}) {
-  final until = record.watchedUntil;
-  if (until == null) return null;
-  final when = fmtCheckTime(until, record.at);
-  final stopped = record.watchStoppedAt;
-  if (stopped != null) {
-    return 'watching until $when · stopped at '
-        '${fmtCheckTime(stopped, record.at)}';
-  }
-  if (hasFinal) return 'watched until $when';
-  final t = now ?? DateTime.now();
-  if (t.isBefore(until)) return 'watching until $when';
-  return 'watching until $when · failed';
+/// [courtName] is the caller's lookup, so a row whose court is gone can
+/// degrade to one word instead of blanking the sheet. Orphan rows are pruned
+/// on load, so that fallback is defence, not an expected path.
+String nivaatHistorySub(HistoryRecord record, String? courtName) {
+  final note = nivaatHistoryNote(record);
+  final checked = record.kind == HistoryKind.cancelled
+      ? ''
+      : nivaatCheckedNote(
+          record.whenChecked,
+          record.at,
+          tried: record.outcome == CheckOutcome.skippedNoData,
+        );
+  return '${courtName ?? 'court removed'} · '
+      '${fmtShortDate(record.at)} · ${fmtClock(record.at)}$checked'
+      '${note == null ? '' : ' · $note'}';
 }
 
 /// Does saving [next] over [previous] kill an in-flight occurrence?
@@ -161,15 +170,39 @@ bool nivaatEditAbandonsInFlight(
   return false;
 }
 
-/// Snapshot still inside its retry window whose occurrence is **still being
-/// checked** — used by the home cue and its dismiss timer (MESSAGES.md N21).
+/// The newest row of each occurrence, keyed `alarmId@at`.
 ///
-/// Cleared when: the cap passes; a **final** row exists for the same
-/// `alarmId + at` (late ring / cap skip); that alarm is gone / disabled;
-/// the snapshot was user-stopped (`watchStoppedAt`); or live [CheckState] no
-/// longer targets that occurrence (toggle-off abandons it; toggle-on re-arms
-/// *tomorrow* — without this, the cue would lie until the cap). With several
-/// open windows, returns the **soonest** cap.
+/// Rows are immutable and a morning writes several, so "what is this morning
+/// doing now?" is always a question about its LAST row — the highest
+/// [HistoryRecord.pushSeq] (2026-07-26).
+///
+/// A tie keeps the row seen FIRST, and callers pass history newest-first (the
+/// order [NivaatStore.loadHistory] returns), so the newer row wins. Two live
+/// rows can't tie — `upsertHistory` converges same-numbered writes onto one —
+/// but every row written before push numbers existed carries 0, so a finished
+/// morning from an older build would otherwise resolve to its still-checking
+/// row and read as an open window.
+Map<String, HistoryRecord> nivaatLatestRowPerOccurrence(
+  Iterable<HistoryRecord> history,
+) {
+  final latest = <String, HistoryRecord>{};
+  for (final h in history) {
+    final key = _watchKey(h.alarmId, h.at);
+    final seen = latest[key];
+    if (seen == null || h.pushSeq > seen.pushSeq) latest[key] = h;
+  }
+  return latest;
+}
+
+/// The open retry window whose cap comes soonest — the home cue and its
+/// dismiss timer (MESSAGES.md N11). Null when nothing is being checked.
+///
+/// A window is open when the occurrence's **newest** row is still-checking
+/// (an outcome or cancelled row means the morning is done), its cap is still
+/// ahead, the alarm is present and enabled, and live [CheckState] still
+/// targets that occurrence. That last clause is what stops a toggle-off then
+/// toggle-on from reviving today's dead retries — toggling on re-arms
+/// *tomorrow*, so the cue would otherwise lie until the cap.
 HistoryRecord? nivaatSoonestOpenWatch(
   Iterable<HistoryRecord> history, {
   required Iterable<NivaatAlarm> alarms,
@@ -177,21 +210,18 @@ HistoryRecord? nivaatSoonestOpenWatch(
   DateTime? now,
 }) {
   final t = now ?? DateTime.now();
-  // Materialize once — a lazy `history.where(...)` must not re-run per row.
-  final rows = List<HistoryRecord>.of(history);
-  final finalized = nivaatFinalizedWatchKeys(rows);
   final liveIds = {for (final a in alarms) if (a.enabled) a.id};
   final inFlight = {
     for (final s in checkStates) _watchKey(s.alarmId, s.alarmAt)
   };
   HistoryRecord? soonest;
-  for (final h in rows) {
+  for (final entry in nivaatLatestRowPerOccurrence(history).entries) {
+    final h = entry.value;
+    if (h.kind != HistoryKind.stillChecking) continue;
     final until = h.watchedUntil;
     if (until == null || !t.isBefore(until)) continue;
-    if (h.watchStoppedAt != null) continue;
     if (!liveIds.contains(h.alarmId)) continue;
-    if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
-    if (!inFlight.contains(_watchKey(h.alarmId, h.at))) continue;
+    if (!inFlight.contains(entry.key)) continue;
     final best = soonest?.watchedUntil;
     if (best == null || until.isBefore(best)) soonest = h;
   }
@@ -201,7 +231,7 @@ HistoryRecord? nivaatSoonestOpenWatch(
 String _watchKey(int alarmId, DateTime at) =>
     '$alarmId@${at.millisecondsSinceEpoch}';
 
-/// Home alarm-list sub (MESSAGES.md N12). Non-default retry windows surface
+/// Home alarm-list sub (MESSAGES.md N15). Non-default retry windows surface
 /// as `· +1m` / `· +60m` so a short test window is visible without opening
 /// the editor; the default 30 stays silent (the common case).
 String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation? court) {
@@ -214,7 +244,7 @@ String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation? court) {
   return '$base · +${alarm.retryMinutesAfter}m';
 }
 
-/// "in 1h 00m" until [t], minute-truncated (MESSAGES.md N12). Past a day it
+/// "in 1h 00m" until [t], minute-truncated (MESSAGES.md N15). Past a day it
 /// switches to "in 5d 04h" — [fmtDuration] alone would say "in 120h 00m", and
 /// a multi-day gap is routine here: a weekend-only alarm is five days out on
 /// a Monday. (Arunoday's `IN 7H 22M` never needed this — its wake is daily.)
@@ -247,12 +277,38 @@ Duration nivaatUntilNextMinute([DateTime? now]) {
   return next.difference(n);
 }
 
-/// Slack around a scheduled instant, both ends of an occurrence's life: a wake
-/// booked for T — or for the retry cap — routinely lands a second or three off.
-/// So a check arriving just early still counts as "at T", and one arriving just
-/// late still belongs to the occurrence it was booked for, instead of rolling
-/// to tomorrow and reusing the T reading (2026-07-26, 1-min window on device).
-const Duration kNivaatWakeGrace = Duration(seconds: 5);
+/// How early a wake may arrive and still count as "the alarm time has come".
+///
+/// **Zero, on purpose** (Samyak, 2026-07-26). Android AlarmManager and iOS
+/// BGTasks both fire at or after the requested instant, never before, so there
+/// is nothing to forgive — and a number with no reason behind it is worse than
+/// none. If a backwards clock correction ever does land a check a hair early,
+/// it simply books another for T and decides there: one extra wake, never a
+/// missed alarm. It cannot be widened to absorb LATE wakes either, because the
+/// same value decides when a skip may finalise — at 45s a check meant for
+/// 05:59 would count as 06:00 and post "still checking" before the alarm was
+/// even due.
+const Duration kNivaatWakeGrace = Duration.zero;
+
+/// The last moment a late wake still belongs to the occurrence whose cap it
+/// was booked for, rather than rolling on to tomorrow.
+///
+/// **The whole of the cap's minute** (Samyak, 2026-07-26) — not a chosen number
+/// of seconds. History prints HH:MM, so any reading taken before 06:31 shows as
+/// `06:30` and is honest; one at 06:31:00 would print `06:31`, later than the
+/// deadline the card promised. The display draws the line, which is why there
+/// is no constant here to justify.
+///
+/// This matters because the cap check is the window's LAST check. Before this,
+/// five seconds of slack meant a wake landing 10s late was treated as a new
+/// morning: the engine closed the books using the previous reading and never
+/// checked again, so a 06:00 alarm with a 30-minute window recorded
+/// `last checked 06:29`, and a 1-minute window recorded `06:00` (device, 2026-07-26).
+DateTime nivaatOccurrenceEndsAfter(NivaatAlarm alarm, DateTime alarmAt) {
+  final cap = alarm.retryCapAt(alarmAt);
+  return DateTime(cap.year, cap.month, cap.day, cap.hour, cap.minute)
+      .add(const Duration(minutes: 1));
+}
 
 /// Is [state] still the occurrence the engine is working on at [t]?
 ///
@@ -265,7 +321,7 @@ bool nivaatOccurrenceInFlight(
   CheckState state,
   DateTime t,
 ) =>
-    !t.isAfter(alarm.retryCapAt(state.alarmAt).add(kNivaatWakeGrace)) &&
+    t.isBefore(nivaatOccurrenceEndsAfter(alarm, state.alarmAt)) &&
     alarm.weekdays.contains(state.alarmAt.weekday);
 
 /// Next moment this alarm may ring — the in-flight **pre-T** occurrence if any,
@@ -364,18 +420,10 @@ class NivaatEngine {
   final CheckScheduler checks;
   final SkipNotifier? notifier;
 
-  Future<void> _notifySkip(HistoryRecord record, String courtName) async {
-    try {
-      await notifier?.showSkip(record, courtName);
-    } on Exception {
-      // A notification failure must never break the cascade.
-    }
-  }
-
-  /// Take down both of this alarm's cards — it is no longer a live thing.
-  /// A heads-up left behind keeps promising "watching until 06:30" for an
-  /// alarm that no longer exists.
-  Future<void> _cancelCards(int alarmId) async {
+  /// Take this alarm's card down. Only for a card that can never be corrected
+  /// into truth: the alarm (or its court) is gone, or a late ring has taken
+  /// over as the morning's card.
+  Future<void> _cancelCard(int alarmId) async {
     try {
       await notifier?.cancelForAlarm(alarmId);
     } on Exception {
@@ -383,76 +431,46 @@ class NivaatEngine {
     }
   }
 
-  /// Take down only an open mid-window heads-up — see
-  /// [SkipNotifier.cancelHeadsUp].
-  Future<void> _cancelHeadsUp(int alarmId) async {
-    try {
-      await notifier?.cancelHeadsUp(alarmId);
-    } on Exception {
-      // A notification failure must never break the cascade.
-    }
-  }
-
-  /// Is there still a live "watching until…" promise for [alarmId] at [t]?
+  /// Append one state's history row **and then** push the morning's card,
+  /// both stamped with the same push number. **That order is the safety
+  /// rule** — see below; don't reverse it to read more naturally.
   ///
-  /// Reads **history**, not [CheckState]: abandon clears state before
-  /// [evaluateAlarm], so a CheckState-only test would miss mid-window and
-  /// leave a false promise in the shade. An open snapshot (future
-  /// `watchedUntil`, not user-stopped, no final for same `alarmId+at`) is
-  /// the durable signal that N2 is still promising, not remembering.
-  Future<bool> _headsUpStillPromising(int alarmId, DateTime t) async {
-    final history = await store.loadHistory();
-    final finalized = nivaatFinalizedWatchKeys(history);
-    for (final h in history) {
-      if (h.alarmId != alarmId) continue;
-      final until = h.watchedUntil;
-      if (until == null || !t.isBefore(until)) continue;
-      if (h.watchStoppedAt != null) continue;
-      if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
-      return true;
-    }
-    return false;
-  }
-
-  /// Stamp `watchStoppedAt` on the snapshot the user just killed — the live
-  /// window (`watchedUntil` still ahead) and/or the occurrence in [stored].
-  /// Never rewrites an ancient `· failed` row when they toggle off next week.
-  Future<void> _stampWatchStopped(
-    int alarmId,
-    DateTime t, {
-    CheckState? stored,
-  }) async {
-    final history = await store.loadHistory();
-    final finalized = nivaatFinalizedWatchKeys(history);
-    for (final h in history) {
-      if (h.alarmId != alarmId) continue;
-      final until = h.watchedUntil;
-      if (until == null || h.watchStoppedAt != null) continue;
-      if (finalized.contains(_watchKey(h.alarmId, h.at))) continue;
-      final liveWindow = t.isBefore(until);
-      final thisOccurrence = stored != null && stored.alarmAt == h.at;
-      if (!liveWindow && !thisOccurrence) continue;
-      await store.upsertHistory(h.copyWith(watchStoppedAt: t));
-    }
-  }
-
-  /// Move only `watchedUntil` on the open snapshot for [alarmId]/[alarmAt].
-  /// Returns the updated row (so the quiet N2 refresh can reuse it without a
-  /// second history load), or null if no snapshot was found.
-  Future<HistoryRecord?> _rewriteSnapshotCap(
-    int alarmId,
-    DateTime alarmAt,
-    DateTime newUntil,
+  /// These two are deliberately one call. Every card the user sees has a row
+  /// behind it and vice versa, so neither can be added without the other, and
+  /// the row cannot drift from what the card said — it is built from the same
+  /// [HistoryRecord].
+  ///
+  /// The row is appended, never edited: a morning that changes its mind
+  /// (Keep checking widened, then narrowed) leaves one row per push and the
+  /// reader follows the sequence. [CheckState.pushSeq] is what keeps that
+  /// safe against a foreground/background double-write — see [HistoryRecord].
+  ///
+  /// [show] receives the notifier only when there is one, so no call site has
+  /// to null-check it — and a `!` here would throw a TypeError, which is an
+  /// Error and would sail straight past the Exception guard below.
+  ///
+  /// Returns [state] with the counter advanced; the caller must save it.
+  Future<CheckState> _pushCard(
+    CheckState state,
+    HistoryRecord Function(int pushSeq) build,
+    Future<void> Function(SkipNotifier n, HistoryRecord record)? show,
   ) async {
-    final history = await store.loadHistory();
-    for (final h in history) {
-      if (h.alarmId != alarmId || h.at != alarmAt) continue;
-      if (h.watchedUntil == null) continue;
-      final updated = h.copyWith(watchedUntil: newUntil);
-      await store.upsertHistory(updated);
-      return updated;
+    final next = state.copyWith(pushSeq: state.pushSeq + 1);
+    final record = build(next.pushSeq);
+    // Row first. If the write throws, the whole evaluate unwinds and nothing
+    // was shown — better than a card in the shade with no record behind it,
+    // which is the one direction the user can't recover from. The notify then
+    // fails soft: history stays complete even when the shade doesn't.
+    await store.upsertHistory(record);
+    final n = notifier;
+    if (show != null && n != null) {
+      try {
+        await show(n, record);
+      } on Exception {
+        // A notification failure must never break the cascade.
+      }
     }
-    return null;
+    return next;
   }
 
   /// Clear EVERY armed ring for this alarm — both the pre-arm and late-ring
@@ -512,42 +530,76 @@ class NivaatEngine {
   }) =>
       _enqueue(alarm.id, () => _evaluate(alarm, courts, now: now));
 
-  /// User killed the in-flight occurrence (toggle-off, abandon edit, …).
-  /// Finalise a fired-but-unlogged ring, stamp open snapshots `stopped at`,
-  /// drop the heads-up promise, clear cascade state. Pass the PRE-edit alarm
-  /// when an edit abandoned: the fired ring belongs to its old thresholds.
-  Future<void> abandonOccurrence(NivaatAlarm alarm, {DateTime? now}) =>
+  /// You ended the in-flight occurrence — toggled the alarm off, or edited its
+  /// time / court / weekday so today's window no longer applies.
+  ///
+  /// Finalises a fired-but-unlogged ring first (that ring really woke you, and
+  /// clearing state without recording it was how an edited alarm's ring
+  /// vanished from history for good — 2026-07-19 device testing), then rewrites
+  /// the morning's card to `Cancelled` and appends the matching row. Pass the
+  /// PRE-edit alarm when an edit abandoned: the fired ring, and the reason
+  /// behind the card, belong to its old court and thresholds.
+  ///
+  /// Nothing is written when the morning never posted a card — cancelling
+  /// before T ends a window that never started, and leaves no trace to explain.
+  Future<void> abandonOccurrence(
+    NivaatAlarm alarm, {
+    DateTime? now,
+    bool keepCard = false,
+  }) =>
       _enqueue(alarm.id, () async {
         final t = now ?? DateTime.now();
-        final stored = await store.loadCheckState(alarm.id);
-        if (stored != null &&
-            stored.ringScheduled &&
-            t.isAfter(stored.alarmAt)) {
-          await store.upsertHistory(_rangRecord(alarm, stored));
+        final state = await store.loadCheckState(alarm.id);
+        // The advanced counter _pushCard hands back is dropped on purpose here:
+        // this occurrence is ending, and its state is cleared below, so there
+        // is nothing left to number.
+        if (state != null && state.ringScheduled && t.isAfter(state.alarmAt)) {
+          await _pushCard(
+            state,
+            (seq) => _rangRecord(alarm, state, pushSeq: seq),
+            null,
+          );
+        } else if (state != null && state.cardShown) {
+          final court = keepCard ? await _courtFor(alarm) : null;
+          await _pushCard(
+            state,
+            (seq) => _skipRecord(
+              alarm,
+              state.alarmAt,
+              state,
+              kind: HistoryKind.cancelled,
+              checkingEndedAt: t,
+              pushSeq: seq,
+            ),
+            // Deleting the alarm takes the card down instead — a card for
+            // something that no longer exists is an orphan no rewrite fixes.
+            court == null ? null : (n, r) => n.showCancelled(r, court.name),
+          );
         }
-        // Cancel N2 only while it is still a live promise — after a final
-        // skip/late ring both cards are history (same rule as quiet-branch).
-        // Order: decide [dropHeadsUp] BEFORE [_stampWatchStopped] — the stamp
-        // makes [_headsUpStillPromising] false.
-        final dropHeadsUp = await _headsUpStillPromising(alarm.id, t);
-        await _stampWatchStopped(alarm.id, t, stored: stored);
-        if (dropHeadsUp) await _cancelHeadsUp(alarm.id);
+        // Unconditional, and not just for the branch above: a delete must also
+        // clear a card left over from an EARLIER morning, which has no state
+        // here to notice it by.
+        if (!keepCard) await _cancelCard(alarm.id);
         await _cancelAllRings(alarm.id);
         await checks.cancelCheck(alarm.id);
         await store.clearCheckState(alarm.id);
       });
 
   /// Keep-checking / add-only weekdays / limit: keep the same occurrence
-  /// flying. Limit-only returns early (state stays; the follow-up evaluate
-  /// re-decides under the new thresholds). A new retry cap rewrites only
-  /// `watchedUntil` on the existing snapshot — wind numbers and limits stay
-  /// whatever the first heads-up said — and quietly refreshes N2's deadline
-  /// in place (no cancel). Shrink past "now" still leaves finalisation to
-  /// the next [evaluateAlarm] (window over — not `stopped at`), and **keeps
-  /// N2** so the final skip posts beside it. Widening after the *old* cap
-  /// has already passed must not resurrect a dead window — defence in depth
-  /// finalises that stale state here (a real edit always resyncs first, which
-  /// usually clears it before Save).
+  /// flying under the new settings.
+  ///
+  /// Limit-only returns early — state stays put and the follow-up
+  /// [evaluateAlarm] re-decides under the new thresholds, which is what makes
+  /// "raise the limit at 06:05 and it still rings this morning" work. A new
+  /// retry cap re-posts the card with the new deadline and appends a row for
+  /// it; the wind numbers come from the STORED reading, never rebuilt from the
+  /// edited alarm — that mixed two moments into "Too windy · wind 5 (≤20)".
+  ///
+  /// **Either window being over ends the morning HERE**, on Save, with a
+  /// `Skipped` card and no further promise — see the guard below for both
+  /// cases and why the boundary is the cap's minute. The follow-up
+  /// [evaluateAlarm] then has nothing left to close and only rolls tomorrow
+  /// on. Neither case is a cancellation: nobody stopped this, it ran out.
   Future<void> retainInFlightEdits(
     NivaatAlarm previous,
     NivaatAlarm next, {
@@ -555,54 +607,81 @@ class NivaatEngine {
   }) =>
       _enqueue(next.id, () async {
         final t = now ?? DateTime.now();
-        final state = await store.loadCheckState(next.id);
+        var state = await store.loadCheckState(next.id);
         if (state == null) return;
         if (previous.retryMinutesAfter == next.retryMinutesAfter) return;
-        SavedLocation? court;
-        for (final c in await store.loadCourts()) {
-          if (c.id == next.courtId) court = c;
-        }
-        // Old window already over → finalise now. Evaluate under the NEW
-        // longer cap would see inFlight again and resurrect a dead morning.
-        // Leave N2 standing — both cards stay after a final.
-        if (!nivaatOccurrenceInFlight(previous, state, t)) {
-          await _finaliseAbandonedWindow(previous, state, court, t);
+        final court = await _courtFor(next);
+        // Two ways the morning is already over, and both end it here rather
+        // than pushing another promise:
+        //
+        // * the OLD window had already run out — widening after death must
+        //   not resurrect it;
+        // * the NEW window is already behind us — shrinking 30→1 at T+2 used
+        //   to post an alerting card reading `watching until 06:01` at 06:02,
+        //   and append the matching row, which is immutable and therefore
+        //   stayed in the log for good. A promise the morning has already
+        //   broken is the exact failure the one-card model exists to prevent
+        //   (device review, 2026-07-31).
+        //
+        // Judged by [nivaatOccurrenceInFlight], not a raw compare against the
+        // new cap, so the boundary matches what the card prints: still inside
+        // the cap's own minute is still honest.
+        if (!nivaatOccurrenceInFlight(previous, state, t) ||
+            !nivaatOccurrenceInFlight(next, state, t)) {
+          await _finaliseDeadWindow(previous, state, court, t);
           return;
         }
+        if (!state.cardShown) return;
         final newCap = next.retryCapAt(state.alarmAt);
-        final updated =
-            await _rewriteSnapshotCap(next.id, state.alarmAt, newCap);
-        // Deadline only — never rebuild N2 from [next] (that would put new
-        // limits next to the old wind reading: "Too windy · wind 5 (≤20)").
-        if (updated != null && state.extendedCheckShown && court != null) {
-          await _notifyExtendedCheck(
-            updated,
-            court.name,
-            newCap,
-            quietUpdate: true,
-          );
-        }
+        final open = state;
+        state = await _pushCard(
+          open,
+          (seq) => _skipRecord(
+            previous,
+            open.alarmAt,
+            open,
+            kind: HistoryKind.stillChecking,
+            watchedUntil: newCap,
+            pushSeq: seq,
+          ),
+          court == null
+              ? null
+              : (n, r) => n.showStillChecking(r, court.name, newCap),
+        );
+        await store.saveCheckState(state);
       });
 
-  /// Cap already passed (or Keep checking widened after death): write the
-  /// final skip/rang for [state] and clear it. Not a user `stopped at`.
-  Future<void> _finaliseAbandonedWindow(
+  /// The cap already passed (or Keep checking widened after the window died):
+  /// close [state] out and clear it. Not a cancellation — nobody stopped this,
+  /// it simply ran out.
+  Future<void> _finaliseDeadWindow(
     NivaatAlarm alarm,
     CheckState state,
     SavedLocation? court,
     DateTime t,
   ) async {
     if (state.ringScheduled) {
-      await store.upsertHistory(_rangRecord(alarm, state));
-    } else if (court != null) {
-      final record = _skipRecord(alarm, state.alarmAt, state);
-      await store.upsertHistory(record);
-      await _notifySkip(record, court.name);
+      await _pushCard(
+        state,
+        (seq) => _rangRecord(alarm, state, pushSeq: seq),
+        null,
+      );
     } else {
-      await store.upsertHistory(_skipRecord(alarm, state.alarmAt, state));
+      await _pushCard(
+        state,
+        (seq) => _skipRecord(alarm, state.alarmAt, state, pushSeq: seq),
+        court == null ? null : (n, r) => n.showSkipped(r, court.name),
+      );
     }
     await checks.cancelCheck(alarm.id);
     await store.clearCheckState(alarm.id);
+  }
+
+  Future<SavedLocation?> _courtFor(NivaatAlarm alarm) async {
+    for (final c in await store.loadCourts()) {
+      if (c.id == alarm.courtId) return c;
+    }
+    return null;
   }
 
   Future<void> _evaluate(
@@ -622,38 +701,36 @@ class NivaatEngine {
     if (next == null || court == null) {
       await _cancelAllRings(alarm.id);
       await checks.cancelCheck(alarm.id);
-      // Which cards survive depends on WHY this alarm went quiet. A delete
-      // (gone from the store) or a missing court orphans both. A toggle-off
-      // drops the heads-up only while it is still a live promise — mid-window,
-      // no final yet — because "watching until 06:30" would then be a lie.
-      // Once the window closed (cap skip or late ring), both cards are history
-      // of a morning that really was checked; leave them (2026-07-26).
-      // Decision uses history ([_headsUpStillPromising]), not [stored]: the
-      // controller abandons CheckState before this evaluate runs.
-      // Court-gone is checked first: it needs no store read to decide.
-      // Alarm-delete stamps `stopped at` (history stays); court-gone wipes the
-      // court log afterward so a stamp would be pointless.
-      if (court == null) {
-        await _cancelCards(alarm.id);
-      } else if (!(await store.loadAlarms()).any((a) => a.id == alarm.id)) {
-        await _stampWatchStopped(alarm.id, t, stored: stored);
-        await _cancelCards(alarm.id);
-      } else if (await _headsUpStillPromising(alarm.id, t)) {
-        await _stampWatchStopped(alarm.id, t, stored: stored);
-        await _cancelHeadsUp(alarm.id);
-      }
-      // A committed ring that already fired must reach history even while its
-      // alarm is being disabled/deleted — clearing first silently dropped it
-      // ("rang but never showed up in history", 2026-07-19 device testing).
+      // This alarm has gone quiet — switched off, deleted, or its court
+      // removed. Only the last two take the card down: those leave a card for
+      // something that no longer exists, which no rewrite can make true. A
+      // switched-off alarm is different — [abandonOccurrence] has just
+      // rewritten its card to `Cancelled`, and cancelling here would erase the
+      // explanation a moment after writing it. Court-gone is tested first
+      // because it needs no store read to decide.
       //
-      // Only when the COURT survives, though: that bug was about the alarm
-      // going away (`next == null`), and a row whose court is gone is an
-      // orphan no screen can render (2026-07-22).
+      // Nothing is written here either, for the same reason: the toggle or the
+      // abandoning edit already appended its row and cleared the state, so
+      // this pass normally finds an empty locker. The exception below is a
+      // committed ring that already fired and must reach history even as its
+      // alarm is disabled or deleted — clearing state first silently dropped
+      // it ("rang but never showed up in history", 2026-07-19 device testing).
+      // Only when the COURT survives, though: a row whose court is gone is an
+      // orphan no screen can render, and `removeCourt` sweeps that court's
+      // whole log straight afterwards (2026-07-22).
+      if (court == null ||
+          !(await store.loadAlarms()).any((a) => a.id == alarm.id)) {
+        await _cancelCard(alarm.id);
+      }
       if (court != null &&
           stored != null &&
           stored.ringScheduled &&
           t.isAfter(stored.alarmAt)) {
-        await store.upsertHistory(_rangRecord(alarm, stored));
+        await _pushCard(
+          stored,
+          (seq) => _rangRecord(alarm, stored, pushSeq: seq),
+          null,
+        );
       }
       await store.clearCheckState(alarm.id);
       return;
@@ -681,7 +758,11 @@ class NivaatEngine {
       if (stored != null &&
           stored.ringScheduled &&
           !t.isBefore(stored.alarmAt)) {
-        await store.upsertHistory(_rangRecord(alarm, stored));
+        await _pushCard(
+          stored,
+          (seq) => _rangRecord(alarm, stored, pushSeq: seq),
+          null,
+        );
         await store.clearCheckState(alarm.id);
       }
       // Keep the cascade alive without touching the scheduler (cancelling or
@@ -713,11 +794,19 @@ class NivaatEngine {
         stored.alarmAt != next &&
         t.isAfter(stored.alarmAt)) {
       if (stored.ringScheduled) {
-        await store.upsertHistory(_rangRecord(alarm, stored));
+        await _pushCard(
+          stored,
+          (seq) => _rangRecord(alarm, stored, pushSeq: seq),
+          null,
+        );
       } else {
-        final record = _skipRecord(alarm, stored.alarmAt, stored);
-        await store.upsertHistory(record);
-        await _notifySkip(record, court.name);
+        final closed = stored;
+        final courtName = court.name;
+        await _pushCard(
+          closed,
+          (seq) => _skipRecord(alarm, closed.alarmAt, closed, pushSeq: seq),
+          (n, r) => n.showSkipped(r, courtName),
+        );
       }
       await store.clearCheckState(alarm.id);
     }
@@ -732,7 +821,12 @@ class NivaatEngine {
     // newer wind. Without this, an app-open after the ring — the normal iOS
     // path, where no exact T-0 check runs — could log a ring as "skipped".
     if (state.ringScheduled && t.isAfter(next)) {
-      await store.upsertHistory(_rangRecord(alarm, state));
+      final fired = state;
+      await _pushCard(
+        fired,
+        (seq) => _rangRecord(alarm, fired, pushSeq: seq),
+        null,
+      );
       await store.clearCheckState(alarm.id);
       return _rollOn(alarm, courts, t, next);
     }
@@ -784,7 +878,7 @@ class NivaatEngine {
             decision.thresholds.courtSpeedLimitKmh,
             decision.sample.rawGustKmh,
             decision.thresholds.rawGustLimit,
-          )}${nivaatCheckedNote(t, next)}',
+          )}${nivaatCheckedNote(t, next, ring: true)}',
           volume: decision.volume,
         );
         state = state.copyWith(
@@ -819,61 +913,85 @@ class NivaatEngine {
       next,
       retryCapMinutes: alarm.retryMinutesAfter,
     );
-    // The grace covers scheduler jitter only; it must stay smaller than the gap
-    // between creating an alarm and its T, or a skip would finalise early.
+    // [kNivaatWakeGrace] is zero — a wake cannot arrive early, so there is
+    // nothing to forgive at this end. It stays a named constant because the
+    // temptation to widen it for LATE wakes is exactly the mistake: that job
+    // belongs to [nivaatOccurrenceEndsAfter], which is a different question.
     final atOrPastAlarm = !t.isBefore(next.subtract(kNivaatWakeGrace));
 
-    // At/after T and ringing → final; we never retry a ring. A leftover "still
-    // checking" heads-up is left in place — the ring itself is the update.
+    // At/after T and ringing → final; we never retry a ring. The morning's
+    // card comes DOWN: the ring is that morning's notification now, and a
+    // "still checking" card beside a sounding alarm is just noise.
     if (atOrPastAlarm && decision != null && decision.shouldRing) {
-      await store.upsertHistory(HistoryRecord(
-        alarmId: alarm.id,
-        courtId: alarm.courtId,
-        at: next,
-        // The check behind this ring is the one that just ran now (`t`) — on
-        // time at T, or a later retry-until-calm check. Recorded so history
-        // can show "checked 06:07" when that differs from the 06:00 alarm.
-        // A late ring APPENDS this row; the heads-up snapshot row stays too
-        // (append-only log — both moments really happened).
-        checkedAt: t,
-        outcome: CheckOutcome.rang,
-        courtSpeedKmh: decision.sample.courtSpeedKmh,
-        rawGustKmh: decision.sample.rawGustKmh,
-        courtSpeedLimitKmh: decision.thresholds.courtSpeedLimitKmh,
-        rawGustLimitKmh: decision.thresholds.rawGustLimit,
-        volume: decision.volume,
-      ));
+      final ringing = state;
+      final ringDecision = decision;
+      await _pushCard(
+        ringing,
+        (seq) => HistoryRecord(
+          alarmId: alarm.id,
+          courtId: alarm.courtId,
+          at: next,
+          pushSeq: seq,
+          // The check behind this ring is the one that just ran now (`t`) — on
+          // time at T, or a later retry-until-calm check. Recorded so history
+          // can show "checked 06:07" when that differs from the 06:00 alarm.
+          // A late ring APPENDS this row; the still-checking row stays too
+          // (append-only log — both moments really happened).
+          checkedAt: t,
+          checkingEndedAt: t,
+          outcome: CheckOutcome.rang,
+          courtSpeedKmh: ringDecision.sample.courtSpeedKmh,
+          rawGustKmh: ringDecision.sample.rawGustKmh,
+          courtSpeedLimitKmh: ringDecision.thresholds.courtSpeedLimitKmh,
+          rawGustLimitKmh: ringDecision.thresholds.rawGustLimit,
+          volume: ringDecision.volume,
+        ),
+        null,
+      );
+      if (ringing.cardShown) await _cancelCard(alarm.id);
       await store.clearCheckState(alarm.id);
       return _rollOn(alarm, courts, t, next);
     }
 
     // At/after T but NOT ringing (windy/gusty/no-data): the skip is provisional.
     // Keep re-checking every minute until the alarm's retry cap, ringing late
-    // if the wind drops. Only at the cap do we finalise the skip and fire its
-    // card — using the last KNOWN reason (state), so a network blip exactly at
-    // the cap still reports "windy" rather than "couldn't check".
+    // if the wind drops. Only at the cap do we finalise the skip and rewrite
+    // the card — using the last KNOWN reason (state), so a network blip exactly
+    // at the cap still reports "windy" rather than "couldn't check".
     if (atOrPastAlarm && nextCheck == null) {
-      final record = _skipRecord(alarm, next, state);
-      await store.upsertHistory(record);
+      final closing = state;
+      final courtName = court.name;
+      await _pushCard(
+        closing,
+        (seq) => _skipRecord(alarm, next, closing, pushSeq: seq),
+        (n, r) => n.showSkipped(r, courtName),
+      );
       await store.clearCheckState(alarm.id);
-      await _notifySkip(record, court.name);
       return _rollOn(alarm, courts, t, next);
     }
 
     // Before T (ladder), or a provisional post-T skip → keep the cascade going.
-    // On the first at/after-T skip, post the "still checking" heads-up (once)
-    // AND its permanent history row: the at-T moment is in the app from the
-    // moment it happens (user decision 2026-07-19), as its own entry — the
-    // final outcome (cap skip / late ring) will be a separate later row, so
-    // dismissing the heads-up notification never hides what happened
-    // (append-only log, 2026-07-20). Retries touch neither: this row is the
-    // snapshot of what the heads-up said — deadline = this alarm's retry cap.
-    if (atOrPastAlarm && !state.extendedCheckShown) {
+    // On the first at/after-T skip, post the morning's card AND its permanent
+    // history row: the at-T moment is in the app from the moment it happens
+    // (user decision 2026-07-19), as its own entry — the outcome will be a
+    // separate later row, so dismissing the card never hides what happened.
+    if (atOrPastAlarm && !state.cardShown) {
       final until = alarm.retryCapAt(next);
-      final snapshot = _skipRecord(alarm, next, state, watchedUntil: until);
-      await _notifyExtendedCheck(snapshot, court.name, until);
-      await store.upsertHistory(snapshot);
-      state = state.copyWith(extendedCheckShown: true);
+      final opening = state;
+      final courtName = court.name;
+      state = await _pushCard(
+        opening,
+        (seq) => _skipRecord(
+          alarm,
+          next,
+          opening,
+          kind: HistoryKind.stillChecking,
+          watchedUntil: until,
+          pushSeq: seq,
+        ),
+        (n, r) => n.showStillChecking(r, courtName, until),
+      );
+      state = state.copyWith(cardShown: true);
     }
     await store.saveCheckState(state);
     if (nextCheck != null) await checks.scheduleCheck(alarm.id, nextCheck);
@@ -882,12 +1000,20 @@ class NivaatEngine {
   /// The "rang" row for a committed ring, built from its persisted [state] —
   /// used everywhere a ring is finalised after the fact (audible ring, past
   /// ring on app open, stale occurrence, alarm being edited/disabled).
-  HistoryRecord _rangRecord(NivaatAlarm alarm, CheckState state) =>
+  HistoryRecord _rangRecord(
+    NivaatAlarm alarm,
+    CheckState state, {
+    required int pushSeq,
+  }) =>
       HistoryRecord(
         alarmId: alarm.id,
         courtId: alarm.courtId,
         at: state.alarmAt,
+        pushSeq: pushSeq,
         checkedAt: state.lastCheckAt,
+        // A ring ends the morning's checking, and it ended on the reading that
+        // approved it — so these agree and the row prints no reach note.
+        checkingEndedAt: state.lastCheckAt,
         outcome: CheckOutcome.rang,
         courtSpeedKmh: state.ringCourtSpeedKmh,
         rawGustKmh: state.ringRawGustKmh,
@@ -914,25 +1040,39 @@ class NivaatEngine {
     return _evaluate(alarm, courts, now: t);
   }
 
-  /// The skip record for [alarm]'s occurrence [at], from the last known skip
+  /// A row for [alarm]'s occurrence [at], built from the last known skip
   /// reading in [state] (windy/gusty with numbers), or "no data" if no check
   /// ever read a skip-worthy wind. `checkedAt` is [state.lastCheckAt] for a
   /// windy/gusty skip (the reading behind it) but [state.lastAttemptAt] for a
   /// no-data skip (its last try — there was no successful reading).
-  /// [watchedUntil] marks the heads-up snapshot row (see HistoryRecord).
+  ///
+  /// Serves all three kinds. [watchedUntil] is the promise on a still-checking
+  /// row; [checkingEndedAt] defaults to the last attempt, which is what makes
+  /// an outcome row able to say "we tried at 06:30" when the last reading it
+  /// can quote is 06:29 — a cancelled row passes the moment you stopped it.
   HistoryRecord _skipRecord(
     NivaatAlarm alarm,
     DateTime at,
     CheckState state, {
+    HistoryKind kind = HistoryKind.outcome,
     DateTime? watchedUntil,
+    DateTime? checkingEndedAt,
+    required int pushSeq,
   }) {
+    // A still-checking row promises a deadline; it hasn't ended yet.
+    final endedAt = kind == HistoryKind.stillChecking
+        ? null
+        : checkingEndedAt ?? state.lastAttemptAt;
     if (state.skipCourtSpeedKmh == null) {
       return HistoryRecord(
         alarmId: alarm.id,
         courtId: alarm.courtId,
         at: at,
+        kind: kind,
+        pushSeq: pushSeq,
         checkedAt: state.lastAttemptAt,
         watchedUntil: watchedUntil,
+        checkingEndedAt: endedAt,
         outcome: CheckOutcome.skippedNoData,
         courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
         rawGustLimitKmh: alarm.thresholds.rawGustLimit,
@@ -942,8 +1082,11 @@ class NivaatEngine {
       alarmId: alarm.id,
       courtId: alarm.courtId,
       at: at,
+      kind: kind,
+      pushSeq: pushSeq,
       checkedAt: state.lastCheckAt,
       watchedUntil: watchedUntil,
+      checkingEndedAt: endedAt,
       outcome: state.skipGusty
           ? CheckOutcome.skippedGusty
           : CheckOutcome.skippedWindy,
@@ -954,31 +1097,14 @@ class NivaatEngine {
     );
   }
 
-  Future<void> _notifyExtendedCheck(
-    HistoryRecord record,
-    String courtName,
-    DateTime until, {
-    bool quietUpdate = false,
-  }) async {
-    try {
-      await notifier?.showExtendedCheck(
-        record,
-        courtName,
-        until,
-        quietUpdate: quietUpdate,
-      );
-    } on Exception {
-      // A notification failure must never break the cascade.
-    }
-  }
-
   /// The occurrence this evaluation is about. An in-flight occurrence
   /// (persisted state, still within the alarm's post-T retry window) wins over
   /// [NivaatAlarm.nextOccurrence], which would otherwise jump to next
   /// week/day the moment T passes.
   ///
   /// "Still in flight" is [nivaatOccurrenceInFlight] — the same rule the home
-  /// countdown reads, including its [kNivaatWakeGrace] past the cap.
+  /// countdown reads, so it runs to the end of the cap's MINUTE
+  /// ([nivaatOccurrenceEndsAfter]), not to the cap instant.
   DateTime? _resolveOccurrence(
     NivaatAlarm alarm,
     CheckState? state,

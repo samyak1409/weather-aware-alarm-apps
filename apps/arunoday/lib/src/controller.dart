@@ -2,6 +2,7 @@ import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 
 import 'ids.dart';
+import 'messages.dart';
 import 'sound_selection.dart' as sound;
 
 /// App state + alarm orchestration for Arunoday.
@@ -37,6 +38,18 @@ class ArunodayController extends ChangeNotifier {
   bool loaded = false;
 
   SavedLocation? get activeLocation => settings.activeLocation;
+
+  /// A16's place-picker refusals, or null to accept. **One copy** (2026-07-31):
+  /// home and settings both add locations, and each carried its own inline
+  /// pair of these strings — two places to keep in step, which is one more
+  /// than none, and neither was reachable by a test where it sat.
+  String? placeRefusal(double lat, double lon) {
+    if (!Solar.hasDailyDawnAllYear(DateTime.now().year, lat, lon)) {
+      return kArunodayNoDawnHere;
+    }
+    final dup = existingLocationSameDawn(lat, lon);
+    return dup == null ? null : arunodaySameDawn(dup.name);
+  }
 
   /// An already-saved location that produces the **same alarm** as (lat, lon),
   /// else null. Two locations are functional duplicates when their civil dawn
@@ -306,12 +319,8 @@ class ArunodayController extends ChangeNotifier {
           final shift = dawn == null ? 0 : wake.difference(dawn).inMinutes;
           wanted[ArunodayIds.wake(day)] = (
             at: wake,
-            title: 'Arunoday · Dawn',
-            body: shift == 0
-                ? 'First light at ${loc.name}. Good morning.'
-                // No space before the offset — "Dawn+0:20" is ONE value, the
-                // way A7's "DAWN+0:20" and A13's "Auto+0:30" already read.
-                : 'Dawn${fmtOffset(shift)} at ${loc.name}. Good morning.',
+            title: kArunodayWakeTitle,
+            body: arunodayWakeBody(loc.name, shift),
           );
         }
       }
@@ -335,8 +344,8 @@ class ArunodayController extends ChangeNotifier {
         if (at.isAfter(now) && at != reRing) {
           wanted[ArunodayIds.bedtime(day)] = (
             at: at,
-            title: 'Arunoday · Bedtime',
-            body: 'Wind down — dawn comes early.',
+            title: kArunodayBedtimeTitle,
+            body: kArunodayBedtimeBody,
           );
         }
       }
@@ -346,8 +355,8 @@ class ArunodayController extends ChangeNotifier {
     if (reRing != null) {
       wanted[ArunodayIds.bedtimeAgain] = (
         at: delayed!,
-        title: 'Arunoday · Bedtime',
-        body: 'Second call — dawn does not snooze.',
+        title: kArunodayBedtimeTitle,
+        body: kArunodayBedtimeAgainBody,
       );
     }
 

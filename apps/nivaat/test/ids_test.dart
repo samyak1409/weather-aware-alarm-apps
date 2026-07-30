@@ -18,8 +18,7 @@ void main() {
         claim(r, 'ring($a)');
       }
       claim(NivaatIds.check(a), 'check($a)');
-      claim(NivaatIds.headsUp(a), 'headsUp($a)');
-      claim(NivaatIds.skip(a), 'skip($a)');
+      claim(NivaatIds.card(a), 'card($a)');
     }
   });
 

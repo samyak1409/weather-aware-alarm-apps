@@ -12,21 +12,17 @@ class SilentNotifier extends SkipNotifier {
   Future<void> ensureInitialized() async {}
 
   @override
-  Future<void> showSkip(HistoryRecord record, String courtName) async {}
+  Future<void> showStillChecking(
+      HistoryRecord record, String courtName, DateTime until) async {}
 
   @override
-  Future<void> showExtendedCheck(
-    HistoryRecord record,
-    String courtName,
-    DateTime until, {
-    bool quietUpdate = false,
-  }) async {}
+  Future<void> showSkipped(HistoryRecord record, String courtName) async {}
+
+  @override
+  Future<void> showCancelled(HistoryRecord record, String courtName) async {}
 
   @override
   Future<void> cancelForAlarm(int alarmId) async {}
-
-  @override
-  Future<void> cancelHeadsUp(int alarmId) async {}
 }
 
 class SilentRing implements AlarmScheduler {

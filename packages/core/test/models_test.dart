@@ -195,9 +195,10 @@ void main() {
         alarmId: 7,
         courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
+        kind: HistoryKind.outcome,
+        pushSeq: 3,
         checkedAt: DateTime(2026, 7, 12, 22, 0),
-        watchedUntil: DateTime(2026, 7, 13, 6, 30),
-        watchStoppedAt: DateTime(2026, 7, 13, 6, 5),
+        checkingEndedAt: DateTime(2026, 7, 13, 6, 30),
         outcome: CheckOutcome.skippedGusty,
         courtSpeedKmh: 3.0,
         rawGustKmh: 15.6,
@@ -207,22 +208,90 @@ void main() {
       );
       final back = HistoryRecord.fromJson(r.toJson());
       expect(back.courtId, 'c1');
+      expect(back.kind, HistoryKind.outcome);
+      expect(back.pushSeq, 3);
       expect(back.checkedAt, DateTime(2026, 7, 12, 22, 0));
-      expect(back.watchedUntil, DateTime(2026, 7, 13, 6, 30));
-      expect(back.watchStoppedAt, DateTime(2026, 7, 13, 6, 5));
+      expect(back.checkingEndedAt, DateTime(2026, 7, 13, 6, 30));
       expect(back.outcome, CheckOutcome.skippedGusty);
       expect(back.courtSpeedKmh, 3.0);
       expect(back.rawGustKmh, 15.6);
       expect(back.courtSpeedLimitKmh, 4);
       expect(back.rawGustLimitKmh, closeTo(14.667, 0.001));
       expect(back.volume, isNull);
-      // Rows saved before the field existed load as final rows (null).
-      final old = HistoryRecord.fromJson(r.toJson()..remove('watchedUntil'));
-      expect(old.watchedUntil, isNull);
+    });
+
+    test('a still-checking row round-trips its promise', () {
+      final r = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 7, 13, 6, 0),
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
+        watchedUntil: DateTime(2026, 7, 13, 6, 30),
+        outcome: CheckOutcome.skippedWindy,
+      );
+      final back = HistoryRecord.fromJson(r.toJson());
+      expect(back.kind, HistoryKind.stillChecking);
+      expect(back.watchedUntil, DateTime(2026, 7, 13, 6, 30));
+    });
+
+    test('rows written before kinds existed are read the old way', () {
+      // A deadline meant "heads-up snapshot", anything else meant "final".
+      final snapshot = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 7, 13, 6, 0),
+        kind: HistoryKind.stillChecking,
+        watchedUntil: DateTime(2026, 7, 13, 6, 30),
+        outcome: CheckOutcome.skippedWindy,
+      ).toJson()
+        ..remove('kind')
+        ..remove('pushSeq');
+      expect(HistoryRecord.fromJson(snapshot).kind, HistoryKind.stillChecking);
+      expect(HistoryRecord.fromJson(snapshot).pushSeq, 0);
+
+      final finalRow = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 7, 13, 6, 0),
+        outcome: CheckOutcome.rang,
+        volume: 1,
+      ).toJson()
+        ..remove('kind');
+      expect(HistoryRecord.fromJson(finalRow).kind, HistoryKind.outcome);
+    });
+
+    test('a deadline can only sit on a still-checking row', () {
       expect(
-          HistoryRecord.fromJson(r.toJson()..remove('watchStoppedAt'))
-              .watchStoppedAt,
-          isNull);
+        () => HistoryRecord(
+          alarmId: 7,
+          courtId: 'c1',
+          at: DateTime(2026, 7, 13, 6, 0),
+          watchedUntil: DateTime(2026, 7, 13, 6, 30),
+          outcome: CheckOutcome.skippedWindy,
+        ),
+        throwsA(isA<AssertionError>()),
+        reason: 'kind defaults to outcome, so this pairing is a silent '
+            'contradiction — it bit four fixtures the day it landed',
+      );
+    });
+
+    test('a still-checking row cannot claim it already ended', () {
+      // The other half of the pair above, and the same reasoning from the
+      // other side: a row that is still promising a deadline has not stopped
+      // checking, so carrying an end time is a contradiction, not extra data.
+      expect(
+        () => HistoryRecord(
+          alarmId: 7,
+          courtId: 'c1',
+          at: DateTime(2026, 7, 13, 6, 0),
+          kind: HistoryKind.stillChecking,
+          watchedUntil: DateTime(2026, 7, 13, 6, 30),
+          checkingEndedAt: DateTime(2026, 7, 13, 6, 12),
+          outcome: CheckOutcome.skippedWindy,
+        ),
+        throwsA(isA<AssertionError>()),
+      );
     });
 
     test('whenChecked is the recorded check time, else falls back to at', () {
@@ -292,7 +361,7 @@ void main() {
       ringCourtSpeedKmh: 3.0,
       ringRawGustKmh: 12.0,
       ringVolume: 0.875,
-      extendedCheckShown: true,
+      cardShown: true,
       skipCourtSpeedKmh: 5.4,
       skipRawGustKmh: 22.0,
       skipGusty: true,
@@ -305,7 +374,7 @@ void main() {
     expect(back.ringScheduled, isTrue);
     expect(back.ringCourtSpeedKmh, 3.0);
     expect(back.ringVolume, closeTo(0.875, 0.001));
-    expect(back.extendedCheckShown, isTrue);
+    expect(back.cardShown, isTrue);
     expect(back.skipCourtSpeedKmh, 5.4);
     expect(back.skipGusty, isTrue);
     expect(back.lastCheckAt, DateTime(2026, 7, 12, 22, 0));
@@ -315,7 +384,7 @@ void main() {
         {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'});
     expect(bare.ringScheduled, isFalse);
     expect(bare.ringCourtSpeedKmh, isNull);
-    expect(bare.extendedCheckShown, isFalse);
+    expect(bare.cardShown, isFalse);
     expect(bare.skipCourtSpeedKmh, isNull);
     expect(bare.lastCheckAt, isNull);
   });

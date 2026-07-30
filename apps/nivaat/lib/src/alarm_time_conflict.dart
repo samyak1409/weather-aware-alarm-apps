@@ -1,7 +1,7 @@
 import 'package:core/core.dart';
 
 /// Refuse message when [candidate] shares HH:MM with another alarm
-/// (MESSAGES N20). Court and weekdays do not matter — two rings at the
+/// (MESSAGES N18). Court and weekdays do not matter — two rings at the
 /// same clock minute are unreliable on both OSes, and multi-court at the
 /// same minute is better done as ±1 min. Editing the same id is fine.
 String? nivaatAlarmTimeConflict(

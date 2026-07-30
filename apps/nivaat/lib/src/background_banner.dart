@@ -5,6 +5,20 @@ import 'package:flutter/material.dart';
 
 import 'battery_optimization.dart';
 
+/// N16's two variants. Both name the same failure — the wind check not
+/// running — in the terms of whatever throttles it on that OS. Constants so
+/// `screen_message_test` can assert BOTH; only one is reachable per device,
+/// and the other is precisely the string that rots unread (MESSAGES.md N16).
+const String kNivaatBackgroundThrottledAndroid =
+    "Battery optimisation can delay or skip Nivaat's background wind checks "
+    '— it could miss a wind change and ring on a windy morning, or stay '
+    'silent on a calm one.';
+
+/// See [kNivaatBackgroundThrottledAndroid].
+const String kNivaatBackgroundThrottledIos =
+    'Background App Refresh is off — Nivaat can only check the wind while '
+    'the app is open.';
+
 /// Shown while the OS is set to throttle the background wind checks — battery
 /// optimisation not exempted (Android) or Background App Refresh off (iOS).
 /// The startup dialog asks only once; denying it must not be the end of the
@@ -73,11 +87,8 @@ class _BackgroundChecksBannerState extends State<BackgroundChecksBanner>
     if (!_denied) return const SizedBox.shrink();
     return NudgeBanner(
       message: Platform.isAndroid
-          ? 'Battery optimisation can delay or skip Nivaat\'s background '
-              'wind checks — it could miss a wind change and ring on a windy '
-              'morning, or stay silent on a calm one.'
-          : 'Background App Refresh is off — Nivaat can only check the wind '
-              'while the app is open.',
+          ? kNivaatBackgroundThrottledAndroid
+          : kNivaatBackgroundThrottledIos,
       actionLabel:
           Platform.isAndroid ? 'Allow background use' : 'Open Settings',
       onAction: requestBackgroundWork,

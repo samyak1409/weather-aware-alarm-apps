@@ -32,12 +32,13 @@ class CheckState {
     this.ringCourtSpeedKmh,
     this.ringRawGustKmh,
     this.ringVolume,
-    this.extendedCheckShown = false,
+    this.cardShown = false,
     this.skipCourtSpeedKmh,
     this.skipRawGustKmh,
     this.skipGusty = false,
     this.lastCheckAt,
     this.lastAttemptAt,
+    this.pushSeq = 0,
   });
 
   final int alarmId;
@@ -66,9 +67,18 @@ class CheckState {
   final double? ringRawGustKmh;
   final double? ringVolume;
 
-  /// True once the "extended check" heads-up card has been posted for this
-  /// occurrence (at T), so the minute-by-minute retries don't re-post it.
-  final bool extendedCheckShown;
+  /// True once the morning's card has been posted for this occurrence (at T),
+  /// so the minute-by-minute retries don't re-post it — and so the paths that
+  /// END the morning know whether there is anything to explain: a cancellation
+  /// writes its row only where a card was shown, and a late ring only pulls a
+  /// card down if one is up.
+  ///
+  /// Renamed from `extendedCheckShown` with the one-card model (2026-07-26) —
+  /// the "extended check" card it was named for no longer exists. Cascade state
+  /// is per-occurrence scratch, cleared at the end of every morning, so the
+  /// changed JSON key needs no migration: the worst an upgrade mid-window can
+  /// do is post one card, and its row, a second time.
+  final bool cardShown;
 
   /// The last KNOWN skip reading — kept across no-data retries so the final
   /// card reports the real reason even if the cap check itself has no data.
@@ -78,17 +88,26 @@ class CheckState {
   final double? skipRawGustKmh;
   final bool skipGusty;
 
+  /// How many cards this occurrence has pushed. Bumped once per push and
+  /// stamped onto the history row it writes, so two isolates racing on the
+  /// SAME push read the same number and their rows converge, while two
+  /// separate pushes get different numbers and both survive. Lives here
+  /// rather than in history because it is per-occurrence state, and history
+  /// rows are immutable — see [HistoryRecord].
+  final int pushSeq;
+
   CheckState copyWith({
     bool? ringScheduled,
     double? ringCourtSpeedKmh,
     double? ringRawGustKmh,
     double? ringVolume,
-    bool? extendedCheckShown,
+    bool? cardShown,
     double? skipCourtSpeedKmh,
     double? skipRawGustKmh,
     bool? skipGusty,
     DateTime? lastCheckAt,
     DateTime? lastAttemptAt,
+    int? pushSeq,
   }) =>
       CheckState(
         alarmId: alarmId,
@@ -97,12 +116,13 @@ class CheckState {
         ringCourtSpeedKmh: ringCourtSpeedKmh ?? this.ringCourtSpeedKmh,
         ringRawGustKmh: ringRawGustKmh ?? this.ringRawGustKmh,
         ringVolume: ringVolume ?? this.ringVolume,
-        extendedCheckShown: extendedCheckShown ?? this.extendedCheckShown,
+        cardShown: cardShown ?? this.cardShown,
         skipCourtSpeedKmh: skipCourtSpeedKmh ?? this.skipCourtSpeedKmh,
         skipRawGustKmh: skipRawGustKmh ?? this.skipRawGustKmh,
         skipGusty: skipGusty ?? this.skipGusty,
         lastCheckAt: lastCheckAt ?? this.lastCheckAt,
         lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
+        pushSeq: pushSeq ?? this.pushSeq,
       );
 
   Map<String, dynamic> toJson() => {
@@ -112,12 +132,13 @@ class CheckState {
         'ringCourtSpeedKmh': ringCourtSpeedKmh,
         'ringRawGustKmh': ringRawGustKmh,
         'ringVolume': ringVolume,
-        'extendedCheckShown': extendedCheckShown,
+        'cardShown': cardShown,
         'skipCourtSpeedKmh': skipCourtSpeedKmh,
         'skipRawGustKmh': skipRawGustKmh,
         'skipGusty': skipGusty,
         'lastCheckAt': lastCheckAt?.toIso8601String(),
         'lastAttemptAt': lastAttemptAt?.toIso8601String(),
+        'pushSeq': pushSeq,
       };
 
   factory CheckState.fromJson(Map<String, dynamic> j) => CheckState(
@@ -127,7 +148,7 @@ class CheckState {
         ringCourtSpeedKmh: (j['ringCourtSpeedKmh'] as num?)?.toDouble(),
         ringRawGustKmh: (j['ringRawGustKmh'] as num?)?.toDouble(),
         ringVolume: (j['ringVolume'] as num?)?.toDouble(),
-        extendedCheckShown: j['extendedCheckShown'] as bool? ?? false,
+        cardShown: j['cardShown'] as bool? ?? false,
         skipCourtSpeedKmh: (j['skipCourtSpeedKmh'] as num?)?.toDouble(),
         skipRawGustKmh: (j['skipRawGustKmh'] as num?)?.toDouble(),
         skipGusty: j['skipGusty'] as bool? ?? false,
@@ -139,6 +160,7 @@ class CheckState {
           final String s => DateTime.parse(s),
           _ => null,
         },
+        pushSeq: j['pushSeq'] as int? ?? 0,
       );
 }
 
@@ -148,7 +170,6 @@ class NivaatStore {
   static const _historyKey = 'nivaat.history';
   static const _statePrefix = 'nivaat.checkstate.';
   static const _soundKey = 'nivaat.sound';
-  static const _historyLimit = 60;
 
   /// Re-reads the on-disk prefs into THIS isolate's cache. SharedPreferences
   /// caches per isolate, so history/check-state written by a background wind
@@ -196,39 +217,48 @@ class NivaatStore {
     return _decodeList(prefs.getString(_historyKey), HistoryRecord.fromJson);
   }
 
-  /// Prepends [record]; keeps the newest [_historyLimit] entries.
-  Future<void> addHistory(HistoryRecord record) async {
-    final all = await loadHistory();
-    final trimmed = [record, ...all].take(_historyLimit);
-    await _saveList(_historyKey, trimmed.map((r) => r.toJson()));
-  }
-
-  /// Inserts [record], REPLACING any existing row for the same EVENT — same
-  /// occurrence (alarmId + at) and same kind (heads-up snapshot vs final,
-  /// told apart by `watchedUntil`). History is append-only **for events**
-  /// (user decision 2026-07-20): the "still checking" row written at T and
-  /// the final outcome row (cap skip, or a late ring) are separate entries
-  /// that both stay. The replace half converges a foreground/background
-  /// double-write of the same event onto one row, and also applies the two
-  /// explicit **snapshot annotations** (2026-07-26): move `watchedUntil`
-  /// when Keep checking changes mid-window, or stamp `watchStoppedAt` when
-  /// the user kills an open watch — never rewrite wind numbers / limits.
-  /// New events prepend (newest first). Keeps the newest [_historyLimit]
-  /// entries.
+  /// Inserts [record], REPLACING any existing row for the same PUSH — same
+  /// occurrence (`alarmId + at`) and same `pushSeq`.
+  ///
+  /// History is append-only (user decision 2026-07-20, tightened 2026-07-26):
+  /// every card push writes one row and **nothing is ever rewritten**. The
+  /// replace half exists solely so a foreground/background double-write of
+  /// the *same* push converges onto one row instead of duplicating it — both
+  /// isolates read the same `CheckState.pushSeq`, so they collide by design.
+  /// Two genuinely different pushes carry different numbers and both survive,
+  /// which is why the key can't be the row's content: widening Keep checking
+  /// 30→60→30 leaves two byte-identical rows that must both stay.
+  ///
+  /// New rows prepend (newest first).
+  ///
+  /// **The log is unbounded (2026-07-31, Samyak).** It used to keep only the
+  /// newest 60 rows, which contradicted SPEC's "history is immediate,
+  /// *permanent*, and append-only" — and 60 is not the long log it sounds
+  /// like: one morning writes a row per card push, so two alarms retiring
+  /// their promise-then-outcome pair spend it in a fortnight. The only thing
+  /// that ever explains a morning the alarm didn't ring was being deleted on a
+  /// schedule nobody chose. Deleting a court still wipes that court's rows
+  /// ([removeHistoryForCourt]) — an explicit act, not a silent ceiling.
+  ///
+  /// Cost, accepted: the whole log is one JSON string, decoded and re-encoded
+  /// on every write, so a write is O(rows). A fully-populated row measures
+  /// **330 bytes**, and a two-alarm day writes about four, so a year lands
+  /// near half a megabyte — fine for the prefs store, and the writes run in a
+  /// background isolate. It is still the reason a future version that wants
+  /// years of history wants a real database rather than a bigger blob.
   Future<void> upsertHistory(HistoryRecord record) async {
     final all = await loadHistory();
     final i = all.indexWhere((r) =>
         r.alarmId == record.alarmId &&
         r.at == record.at &&
-        (r.watchedUntil != null) == (record.watchedUntil != null));
+        r.pushSeq == record.pushSeq);
     final rows = [...all];
     if (i >= 0) {
       rows[i] = record;
     } else {
       rows.insert(0, record);
     }
-    await _saveList(
-        _historyKey, rows.take(_historyLimit).map((r) => r.toJson()));
+    await _saveList(_historyKey, rows.map((r) => r.toJson()));
   }
 
   /// Drops every history row for [courtId] — used when a court is deleted, so

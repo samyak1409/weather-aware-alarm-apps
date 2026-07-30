@@ -396,7 +396,7 @@ void main() {
 
     await c.update(c.settings.copyWith(wakeOffsetMinutes: 20));
     // "Dawn+0:20", never "Dawn +0:20" — word and offset are one value, as in
-    // A7's "DAWN+0:20" and A13's "Auto+0:30" (2026-07-22).
+    // A6's "DAWN+0:20" and A7's "AUTO+0:30" (2026-07-22).
     expect(wakeBodies(), isNotEmpty);
     expect(wakeBodies(), everyElement('Dawn+0:20 at Tonk. Good morning.'));
     expect(wakeTitles(), everyElement('Arunoday · Dawn'));

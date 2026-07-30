@@ -278,15 +278,32 @@ class _NamePlaceDialogState extends State<_NamePlaceDialog> {
       TextEditingController(text: 'My location');
 
   @override
+  void initState() {
+    super.initState();
+    // Rebuild on every keystroke so Save can follow the field (see [_valid]).
+    _controller.addListener(_onChanged);
+  }
+
+  @override
   void dispose() {
+    _controller.removeListener(_onChanged);
     _controller.dispose();
     super.dispose();
   }
 
+  void _onChanged() => setState(() {});
+
+  /// Clearing the field disables Save rather than silently restoring the
+  /// default (2026-07-31, Samyak). `My location` is a suggestion you can
+  /// accept, not a name that reappears once you've deliberately deleted it —
+  /// and a dead Save button says "this needs a name" where a re-substituted
+  /// default just looked like the app ignored you.
+  bool get _valid => _controller.text.trim().isNotEmpty;
+
   void _save() {
+    if (!_valid) return;
     FocusScope.of(context).unfocus();
-    final name = _controller.text.trim();
-    Navigator.pop(context, name.isEmpty ? 'My location' : name);
+    Navigator.pop(context, _controller.text.trim());
   }
 
   @override
@@ -306,7 +323,7 @@ class _NamePlaceDialogState extends State<_NamePlaceDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: _save,
+          onPressed: _valid ? _save : null,
           child: const Text('Save'),
         ),
       ],

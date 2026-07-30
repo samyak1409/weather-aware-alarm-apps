@@ -1,5 +1,5 @@
 // Live wake↔bedtime collision cues for Arunoday's offset dialogs
-// (MESSAGES A18). Minute-of-day precision; bedtime may still equal a
+// (MESSAGES A16). Minute-of-day precision; bedtime may still equal a
 // pending AGAIN (that win is handled in the controller, not here).
 
 String? arunodayBedtimeConflictsWithWake({

@@ -12,10 +12,37 @@ void showHistorySheet(BuildContext context, NivaatController c) {
   );
 }
 
-class _HistorySheet extends StatelessWidget {
+class _HistorySheet extends StatefulWidget {
   const _HistorySheet({required this.c});
 
   final NivaatController c;
+
+  @override
+  State<_HistorySheet> createState() => _HistorySheetState();
+}
+
+/// Listens to the controller, like the courts and settings sheets do. Without
+/// it a background check that lands a row while this sheet is open showed up
+/// only after closing and reopening — home and the settings row count were
+/// already live, so the open log was the one stale surface (2026-07-26).
+class _HistorySheetState extends State<_HistorySheet> {
+  NivaatController get c => widget.c;
+
+  @override
+  void initState() {
+    super.initState();
+    c.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    c.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,36 +78,29 @@ class _HistorySheet extends StatelessWidget {
                     separatorBuilder: (_, _) => const Divider(),
                     itemBuilder: (context, i) {
                       final h = c.history[i];
-                      final icon = switch (h.outcome) {
-                        CheckOutcome.rang =>
-                          Icons.notifications_active_outlined,
-                        CheckOutcome.skippedWindy ||
-                        CheckOutcome.skippedGusty =>
-                          Icons.air,
-                        CheckOutcome.skippedNoData =>
-                          Icons.cloud_off_outlined,
-                      };
-                      final line = nivaatHistoryLine(h);
-                      // A young skip row may still flip to "rang" (retry window)
-                      // — say so, with the same promise the heads-up card made.
-                      final watching = nivaatStillWatchingNote(
-                        h,
-                        hasFinal: nivaatHistoryHasFinal(c.history, h),
-                      );
+                      // A cancelled row keeps the last known wind reason in
+                      // its data but shows none of it, so it needs its own
+                      // icon too — the wind isn't what ended that morning.
+                      final icon = h.kind == HistoryKind.cancelled
+                          ? Icons.cancel_outlined
+                          : switch (h.outcome) {
+                              CheckOutcome.rang =>
+                                Icons.notifications_active_outlined,
+                              CheckOutcome.skippedWindy ||
+                              CheckOutcome.skippedGusty =>
+                                Icons.air,
+                              CheckOutcome.skippedNoData =>
+                                Icons.cloud_off_outlined,
+                            };
+                      // Both lines are built outside this widget, so they can
+                      // be asserted as whole strings — see nivaatHistorySub.
                       return ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(icon, size: 20),
-                        title: Text(line, style: text.titleMedium),
+                        title: Text(nivaatHistoryLine(h),
+                            style: text.titleMedium),
                         subtitle: Text(
-                          // Orphan rows are pruned on load, so this fallback
-                          // shouldn't fire — kept (and worded like N12) rather
-                          // than asserted, so a stray row degrades to one word
-                          // instead of blanking the sheet.
-                          '${c.courtById(h.courtId)?.name ?? 'court removed'} · '
-                          '${fmtShortDate(h.at)} · ${fmtClock(h.at)} · '
-                          '${h.outcome == CheckOutcome.skippedNoData ? 'last tried' : 'checked'} '
-                          '${fmtCheckTime(h.whenChecked, h.at)}'
-                          '${watching == null ? '' : ' · $watching'}',
+                          nivaatHistorySub(h, c.courtById(h.courtId)?.name),
                           style: text.bodyMedium,
                         ),
                       );
