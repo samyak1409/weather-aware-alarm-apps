@@ -263,6 +263,7 @@ class _SettingsPageState extends State<_SettingsPage> {
             const HeavyTypeSwitch(),
             const AppIconPicker(
               accent: AppPalette.dawn,
+              appName: 'Arunoday',
               choices: [
                 AppIconChoice(
                     id: '1', label: 'Horizon', asset: 'assets/icons/1.png'),

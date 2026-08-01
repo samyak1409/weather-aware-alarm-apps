@@ -144,7 +144,8 @@ class SkipNotifier {
     if (_initialized) return;
     await _plugin.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        // Monochrome silhouette; the launcher icon alpha-masks to a blob.
+        android: AndroidInitializationSettings('@drawable/$kNotificationIconRes'),
         // Don't request here (init runs in background isolates too); the
         // foreground app calls requestPermissionIfNeeded() explicitly.
         iOS: DarwinInitializationSettings(

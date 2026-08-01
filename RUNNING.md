@@ -111,4 +111,4 @@ Add `-r` to replace an existing install (same signing key). Copied APKs for GitH
 adb shell pm enable com.samyak.arunoday/com.samyak.arunoday.MainActivity   # or …nivaat…
 ```
 
-or switch back to the first icon in the app's Settings. Expected cosmetics, not bugs: iOS shows a system alert on every icon change; Android launchers may blink or move the home-screen shortcut.
+or switch back to the first icon in the app's Settings. Expected, not bugs: iOS shows a system alert and stays open; Android warns first (X7), then **closes the app** (`finishAndRemoveTask` — disabling the launcher component the task was started from always tears it down), and launchers may blink or move the home-screen shortcut.

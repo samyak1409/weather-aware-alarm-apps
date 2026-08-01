@@ -1,0 +1,27 @@
+<!--
+  Status-bar icon: shuttlecock, cork plus a SOLID skirt (the "Shuttle" mark),
+  tilted 26 degrees to match tools/make_icons.py's TILT. Android alpha-masks
+  small icons, so this is a monochrome shape on transparent ground and NOT
+  @mipmap/ic_launcher — see CLAUDE.md. The two apps must never share a
+  silhouette; telling them apart at a glance is the point of having them.
+
+  Both choices were made by rendering at 18px (tools/preview_notif_icons.py).
+  Stroked feathers went wispy and read as a trident, hence solid mass. And 26
+  is ~5 degrees past this cone's own 20.8 flare, so the trailing edge sits past
+  vertical and it reads more wedge than shuttlecock — the accepted price of
+  matching the launcher (Samyak, 2026-08-01; 12 was the largest lean that still
+  stood up, if this ever wants revisiting). Coordinates are baked rather than
+  wrapped in a <group android:rotation>, so what ships is what was previewed.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.19,18.47 m-3.6,0 a3.6,3.6 0 1 0 7.2,0 a3.6,3.6 0 1 0 -7.2,0 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.9,14.95 L7.11,1.75 L20.41,8.23 L10.75,17.32 z" />
+</vector>

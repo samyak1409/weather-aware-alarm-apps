@@ -1,0 +1,47 @@
+<!--
+  Status-bar icon: sunrise, the "Horizon" launcher mark redrawn as a
+  silhouette. Android alpha-masks small icons, so this is a monochrome shape
+  on transparent ground and NOT @mipmap/ic_launcher — see CLAUDE.md.
+
+  The composition is the launcher's, ZOOMED 1.3x so the horizon runs off both
+  edges (2026-08-02). Sun-on-a-line is inherently wide and short: at 1x it
+  filled 92% of the width but only 35% of the height and read as a small mark
+  in a big box, while Nivaat's upright shuttle fills 85%. Uniform scaling was
+  capped — the bar already spanned 92% of the width — so the line is drawn
+  past the viewport instead (x -2.5 to 26.5, clipped). A horizon that leaves
+  the frame is what a horizon does, and it buys a 30% bigger sun: fills 100%
+  x 46% now.
+
+  Ratios are unchanged from the launcher-matched version: sun r9.9 against a
+  visible line of 24, so the line still clears the sun by 2.1 a side. Do not
+  zoom further — at 1.45x that overshoot drops under 1 and the line stops
+  reading as a horizon, becoming the sun's baseline.
+
+  Two floors, both device-caught, neither negotiable:
+
+  * Line thickness. The launcher's is 1.46% of canvas; reproduced faithfully
+    (~1px on a 3x screen) it was INVISIBLE in the status bar. 0.7 units is the
+    proven floor at 1x; this is 1.15.
+  * The gap. The launcher's sun sits ON its line. At this size an attached
+    line reads as the dome's base — only the stubs either side show — so the
+    horizon disappears as surely as if it were too thin.
+
+  Earlier failures worth not repeating: dome 86% of the bar's width with a bar
+  30% of its height read as a burger; shrinking the dome to fix it (r5.8) made
+  the mark look small, since the dome carries the weight.
+
+  tools/preview_notif_icons.py draws it at 18px, but even 18px was optimistic
+  here — the status bar is the only real judge.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,6.1 a9.9,9.9 0 0 1 9.9,9.9 h-19.8 a9.9,9.9 0 0 1 9.9,-9.9 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M-2.5,16.8 h29 v1.15 h-29 z" />
+</vector>

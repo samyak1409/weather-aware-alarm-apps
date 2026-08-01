@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ic_notification is named only by a Dart string (core's kNotificationIconRes)
+  and resolved at runtime, so the resource shrinker cannot see the reference:
+  it deleted the drawable from the first release APK ("is not reachable"), and
+  debug builds don't shrink so `flutter run` looked perfect. Why it matters and
+  how to re-check a build: CLAUDE.md's notification-icon note.
+  (No double hyphens in here — R8 parses this file as XML and dies on them.)
+-->
+<resources
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

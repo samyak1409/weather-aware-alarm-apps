@@ -105,6 +105,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               const HeavyTypeSwitch(),
               const AppIconPicker(
                 accent: AppPalette.wind,
+                appName: 'Nivaat',
                 choices: [
                   AppIconChoice(
                       id: '1', label: 'Shuttle', asset: 'assets/icons/1.png'),

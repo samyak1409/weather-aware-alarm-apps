@@ -43,6 +43,15 @@ class MainActivity : FlutterActivity() {
         return "1"
     }
 
+    // STATE_DEFAULT means "as the manifest declared" — MainActivity ships
+    // enabled, both aliases disabled — so the id decides how to read it.
+    private fun isIconOn(id: String, component: ComponentName): Boolean =
+        when (packageManager.getComponentEnabledSetting(component)) {
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED -> false
+            else -> id == "1"
+        }
+
     private fun setIcon(id: String): Boolean {
         val components = iconComponents()
         val target = components[id] ?: return false
@@ -56,6 +65,10 @@ class MainActivity : FlutterActivity() {
         )
         for ((otherId, component) in components) {
             if (otherId == id) continue
+            // Only one entry is ever on; skipping the no-ops saves binder
+            // round-trips the user waits through. Still a loop, so a corrupt
+            // two-on state would still resolve.
+            if (!isIconOn(otherId, component)) continue
             pm.setComponentEnabledSetting(
                 component,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
@@ -119,7 +132,13 @@ class MainActivity : FlutterActivity() {
                     "get" -> result.success(currentIcon())
                     "set" -> {
                         try {
-                            result.success(setIcon(call.argument<String>("id") ?: ""))
+                            val switched = setIcon(call.argument<String>("id") ?: "")
+                            result.success(switched)
+                            // Close ourselves rather than wait: Android tears
+                            // the task down anyway once the component we were
+                            // launched from is disabled, but the beat it takes
+                            // reads as a freeze (2026-08-01). Sync with Arunoday.
+                            if (switched) finishAndRemoveTask()
                         } catch (e: Exception) {
                             result.success(false)
                         }

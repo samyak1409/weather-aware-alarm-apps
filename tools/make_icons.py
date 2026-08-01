@@ -226,7 +226,18 @@ def a3_dawn_dot():
 
 # ---- Nivaat: the windless shuttlecock --------------------------------------
 
-TILT = 26  # shuttle tilt, degrees clockwise from upright
+# Shuttle tilt, degrees clockwise from upright. Picked by eye, but there IS a
+# reference point worth knowing before changing it: the skirt flares ~20° from
+# its own axis (20.6° line-art, atan((152-46)/282); 20.1° filled, over 290), and
+# tilting past that swings the skirt's TRAILING edge past vertical — the cone
+# stops reading as standing and starts reading as a wedge lying over. 26 is 5.4°
+# past, which big line art carries comfortably; 30 would be 9.4° past and pushes
+# it. **The status-bar silhouette bakes this same angle** (Samyak, 2026-08-01),
+# so CHANGE ONE AND CHANGE THE OTHER — nothing checks it, since the drawable
+# stores baked coordinates rather than an angle, and the mismatch is cosmetic
+# (launcher and status bar leaning differently). See the note in
+# apps/nivaat/android/app/src/main/res/drawable/ic_notification.xml.
+TILT = 26
 
 
 def _shuttle_strokes(c, cx, cy, scale, color, alpha=1.0):

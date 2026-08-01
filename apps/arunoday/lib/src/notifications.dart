@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:core/core.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,7 +13,8 @@ Future<FlutterLocalNotificationsPlugin> _initializedPlugin() async {
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(
     settings: const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      // Monochrome silhouette; the launcher icon alpha-masks to a blob.
+      android: AndroidInitializationSettings('@drawable/$kNotificationIconRes'),
     ),
   );
   return plugin;

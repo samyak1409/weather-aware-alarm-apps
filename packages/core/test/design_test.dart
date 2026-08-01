@@ -1,4 +1,5 @@
 import 'package:core/core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -183,69 +184,146 @@ void main() {
       expect(await setAppIcon('2'), isFalse);
     });
 
+    // The assets don't exist in the test bundle; the picker's errorBuilder
+    // swallows that (by design).
+    const choices = [
+      AppIconChoice(id: '1', label: 'One', asset: 'assets/icons/1.png'),
+      AppIconChoice(id: '2', label: 'Two', asset: 'assets/icons/2.png'),
+      AppIconChoice(id: '3', label: 'Three', asset: 'assets/icons/3.png'),
+    ];
+
+    Future<void> pumpPicker(WidgetTester tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildOledTheme(AppPalette.dawn),
+        home: const Scaffold(
+          body: AppIconPicker(
+            accent: AppPalette.dawn,
+            appName: 'Arunoday',
+            choices: choices,
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    /// Runs [body] with the platform pinned. Reset inside the body, not in a
+    /// tearDown: the binding asserts every foundation debug var is back to
+    /// null BEFORE tearDowns run.
+    Future<void> onPlatform(
+        TargetPlatform platform, Future<void> Function() body) async {
+      debugDefaultTargetPlatformOverride = platform;
+      try {
+        await body();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    }
+
+    /// The accent ring marks the selected thumbnail.
+    Color ringColor(WidgetTester tester, int index) {
+      final box = tester.widget<Container>(
+        find.ancestor(
+          of: find.ancestor(
+              of: find.byType(Image).at(index), matching: find.byType(ClipRRect)),
+          matching: find.byType(Container),
+        ),
+      );
+      return (box.decoration! as BoxDecoration).border!.top.color;
+    }
+
     testWidgets('picker reads the native choice and switches on tap',
         (tester) async {
-      nativeIcon = '2';
-      const choices = [
-        // The assets don't exist in the test bundle; the picker's
-        // errorBuilder swallows that (by design).
-        AppIconChoice(id: '1', label: 'One', asset: 'assets/icons/1.png'),
-        AppIconChoice(id: '2', label: 'Two', asset: 'assets/icons/2.png'),
-        AppIconChoice(id: '3', label: 'Three', asset: 'assets/icons/3.png'),
-      ];
-      await tester.pumpWidget(MaterialApp(
-        theme: buildOledTheme(AppPalette.dawn),
-        home: const Scaffold(
-          body: AppIconPicker(accent: AppPalette.dawn, choices: choices),
-        ),
-      ));
-      await tester.pumpAndSettle();
+      // Pinned, not relying on flutter_test's Android default holding.
+      await onPlatform(TargetPlatform.android, () async {
+        nativeIcon = '2';
+        await pumpPicker(tester);
 
-      await tester.tap(find.text('Three'));
-      await tester.pumpAndSettle();
-      expect(nativeIcon, '3');
-      expect(
-        calls.map((c) => c.method),
-        containsAllInOrder(['get', 'set']),
-      );
+        await tester.tap(find.text('Three'));
+        await tester.pumpAndSettle();
+        // Android warns first — OK acknowledges, it isn't a choice (2026-08-01).
+        await tester.tap(find.text('OK'));
+        await tester.pumpAndSettle();
+        expect(nativeIcon, '3');
+        expect(
+          calls.map((c) => c.method),
+          containsAllInOrder(['get', 'set']),
+        );
 
-      // Tapping the already-selected icon must not hit the platform again.
-      final setsSoFar = calls.where((c) => c.method == 'set').length;
-      await tester.tap(find.text('Three'));
-      await tester.pumpAndSettle();
-      expect(calls.where((c) => c.method == 'set').length, setsSoFar);
-    });
-
-    testWidgets('selection is optimistic but reverts when the OS refuses',
-        (tester) async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (call) async {
-        return call.method == 'get' ? '1' : false; // every set fails
+        // Tapping the already-selected icon must not hit the platform again —
+        // nor put a dialog up about a switch that isn't happening.
+        final setsSoFar = calls.where((c) => c.method == 'set').length;
+        await tester.tap(find.text('Three'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(calls.where((c) => c.method == 'set').length, setsSoFar);
       });
-      const choices = [
-        AppIconChoice(id: '1', label: 'One', asset: 'assets/icons/1.png'),
-        AppIconChoice(id: '2', label: 'Two', asset: 'assets/icons/2.png'),
-      ];
-      await tester.pumpWidget(MaterialApp(
-        theme: buildOledTheme(AppPalette.dawn),
-        home: const Scaffold(
-          body: AppIconPicker(accent: AppPalette.dawn, choices: choices),
-        ),
-      ));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Two'));
-      await tester.pumpAndSettle();
-      // Back on "One": the failed switch didn't leave a lying ring behind.
-      Container ring(String label) => tester.widget<Container>(
-            find.ancestor(
-                of: find.ancestor(
-                    of: find.byType(Image).at(label == 'One' ? 0 : 1),
-                    matching: find.byType(ClipRRect)),
-                matching: find.byType(Container)),
-          );
-      final one = (ring('One').decoration! as BoxDecoration).border!.top.color;
-      expect(one, AppPalette.dawn);
     });
+
+    testWidgets('Android warns before the switch; dismissing changes nothing',
+        (tester) async {
+      await onPlatform(TargetPlatform.android, () async {
+        await pumpPicker(tester);
+
+        await tester.tap(find.text('Three'));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsOneWidget);
+        // Nothing has been asked of the platform yet — the dialog comes first.
+        expect(calls.where((c) => c.method == 'set'), isEmpty);
+        // One button, on purpose: there is no decision to offer.
+        expect(find.widgetWithText(TextButton, 'OK'), findsOneWidget);
+        expect(find.byType(TextButton), findsOneWidget);
+        // Padding is pinned, not inherited: M3's defaults leave the single
+        // button marooned in empty space on a two-line notice.
+        final box = tester.widget<AlertDialog>(find.byType(AlertDialog));
+        expect(box.contentPadding, const EdgeInsets.fromLTRB(24, 12, 24, 8));
+        expect(box.actionsPadding, const EdgeInsets.fromLTRB(24, 0, 16, 12));
+
+        // Tap the barrier — the only way out now that Cancel is gone, so it
+        // has to be a real one.
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(calls.where((c) => c.method == 'set'), isEmpty);
+        expect(nativeIcon, '1');
+        // And the ring never moved off the icon that's still installed.
+        expect(ringColor(tester, 0), AppPalette.dawn);
+      });
+    });
+
+    testWidgets('iOS switches straight away — the OS runs its own alert',
+        (tester) async {
+      await onPlatform(TargetPlatform.iOS, () async {
+        await pumpPicker(tester);
+
+        await tester.tap(find.text('Three'));
+        await tester.pumpAndSettle();
+        // No dialog of ours: iOS stays open and confirms it itself, so a
+        // second one would be pure friction.
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(nativeIcon, '3');
+      });
+    });
+
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      testWidgets('ring reverts when the OS refuses (${platform.name})',
+          (tester) async {
+        await onPlatform(platform, () async {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(channel, (call) async {
+            return call.method == 'get' ? '1' : false; // every set fails
+          });
+          await pumpPicker(tester);
+
+          await tester.tap(find.text('Two'));
+          await tester.pumpAndSettle();
+          if (platform == TargetPlatform.android) {
+            await tester.tap(find.text('OK'));
+            await tester.pumpAndSettle();
+          }
+          // Back on "One": the failed switch didn't leave a lying ring behind.
+          expect(ringColor(tester, 0), AppPalette.dawn);
+        });
+      });
+    }
   });
 }

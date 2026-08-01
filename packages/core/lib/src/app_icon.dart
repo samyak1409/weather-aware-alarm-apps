@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,9 +24,12 @@ Future<String> currentAppIcon() async {
   }
 }
 
-/// Switch the launcher icon; false when the platform refused. On iOS the
-/// system confirms with its own alert; on Android some launchers take a
-/// moment (and may move a home-screen shortcut) — documented behavior.
+/// Switch the launcher icon; false when the platform refused.
+///
+/// The platforms end differently and neither is a failure: iOS keeps running
+/// and shows its own "You have changed the icon" alert, Android **closes the
+/// app** (see [appIconRestartWarning]) and launchers may take a moment to
+/// redraw. On Android, warn first via [AppIconPicker].
 Future<bool> setAppIcon(String id) async {
   try {
     return await appIconChannel
@@ -37,6 +41,20 @@ Future<bool> setAppIcon(String id) async {
     return false;
   }
 }
+
+/// Android-only body of the notice shown before a switch (MESSAGES.md X7).
+///
+/// **Why Android can't stay open:** a switch disables the launcher component
+/// the running task was started from, and Android tears that task down —
+/// `DONT_KILL_APP` spares the process, not the activity. Unpreventable while
+/// `MainActivity` keeps the launcher intent-filter, which it must (moving it
+/// onto an alias breaks `flutter run`). Unannounced the close reads as a
+/// crash (2026-08-01, device-caught).
+///
+/// **One line, and it stays one line** — an acknowledgement, not a question.
+/// Naming Android as the actor is the whole job.
+String appIconRestartWarning(String appName) =>
+    'Android will close $appName to apply the new icon.';
 
 /// One selectable launcher icon in [AppIconPicker].
 class AppIconChoice {
@@ -62,10 +80,15 @@ class AppIconPicker extends StatefulWidget {
     super.key,
     required this.choices,
     required this.accent,
+    required this.appName,
   });
 
   final List<AppIconChoice> choices;
   final Color accent;
+
+  /// `Arunoday` / `Nivaat` — named in the Android confirm dialog
+  /// ([appIconRestartWarning]).
+  final String appName;
 
   @override
   State<AppIconPicker> createState() => _AppIconPickerState();
@@ -84,6 +107,11 @@ class _AppIconPickerState extends State<AppIconPicker> {
 
   Future<void> _pick(AppIconChoice choice) async {
     if (choice.id == _selected) return;
+    // Android dies on the switch, so say so first. iOS must NOT get this —
+    // the OS runs its own alert, so ours would be pure friction.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      if (!await _warnAndroidClose() || !mounted) return;
+    }
     // Select optimistically: iOS runs setAlternateIconName's completion only
     // after the user dismisses its "You have changed the icon" alert, and the
     // ring shouldn't lag behind the tap that whole time (device-caught
@@ -93,6 +121,34 @@ class _AppIconPickerState extends State<AppIconPicker> {
     if (!await setAppIcon(choice.id)) {
       if (mounted) setState(() => _selected = previous);
     }
+  }
+
+  /// Information plus one button, not a question (2026-08-01, Samyak —
+  /// tapping a thumbnail already said what you want). Barrier or back still
+  /// returns false, leaving icon and ring untouched.
+  Future<bool> _warnAndroidClose() async {
+    final text = Theme.of(context).textTheme;
+    final ok = await showDialog<bool>(
+      context: context,
+      // Explicit though it is the default: with Cancel gone this is the ONLY
+      // way out, so locking it down would strand the user. A test taps it.
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        title: Text('CHANGE APP ICON', style: text.labelSmall),
+        content: Text(appIconRestartWarning(widget.appName)),
+        // M3's 24 under the message plus 24 under the button left the single
+        // word marooned in an empty box (2026-08-01, device-caught).
+        contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 16, 12),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   @override

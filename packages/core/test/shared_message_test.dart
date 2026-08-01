@@ -1,5 +1,6 @@
 import 'package:alarm/alarm.dart';
 import 'package:core/core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -227,6 +228,7 @@ void main() {
         home: Scaffold(
           body: AppIconPicker(
             accent: AppPalette.wind,
+            appName: 'Nivaat',
             choices: [
               AppIconChoice(
                   id: '1', label: 'Shuttle', asset: 'assets/icons/1.png'),
@@ -242,6 +244,50 @@ void main() {
       expect(find.text('App icon'), findsOneWidget);
       for (final label in ['Shuttle', 'Calm', 'Crest']) {
         expect(find.text(label), findsOneWidget);
+      }
+    });
+
+    test('Android close warning blames Android and names the app', () {
+      expect(appIconRestartWarning('Nivaat'),
+          'Android will close Nivaat to apply the new icon.');
+      expect(appIconRestartWarning('Arunoday'),
+          'Android will close Arunoday to apply the new icon.');
+      // One sentence, deliberately: see the builder's doc. A regression here
+      // is someone re-explaining Android in a dialog nobody wants to read.
+      expect(appIconRestartWarning('Nivaat').split('.').length - 1, 1);
+    });
+
+    testWidgets('…and it really is what the picker puts on screen',
+        (tester) async {
+      // Rendered rather than asserted on the builder alone: this dialog is
+      // the only warning the user gets before the app vanishes, so the test
+      // has to prove the picker reaches it. Pin Android explicitly — the dialog
+      // is Android-only, and the iOS path must stay a no-dialog.
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      try {
+        await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(
+            body: AppIconPicker(
+              accent: AppPalette.dawn,
+              appName: 'Arunoday',
+              choices: [
+                AppIconChoice(
+                    id: '1', label: 'Horizon', asset: 'assets/icons/1.png'),
+                AppIconChoice(
+                    id: '2', label: 'Rays', asset: 'assets/icons/2.png'),
+              ],
+            ),
+          ),
+        ));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rays'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('CHANGE APP ICON'), findsOneWidget);
+        expect(find.text(appIconRestartWarning('Arunoday')), findsOneWidget);
+        expect(find.text('OK'), findsOneWidget);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
       }
     });
   });

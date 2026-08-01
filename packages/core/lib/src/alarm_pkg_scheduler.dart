@@ -2,6 +2,16 @@ import 'package:alarm/alarm.dart';
 
 import 'scheduler.dart';
 
+/// The Android status-bar notification icon, by resource name (CLAUDE.md).
+///
+/// Names a monochrome drawable, never the launcher art — Android alpha-masks
+/// small icons. Compiled into core, so **both apps must ship
+/// `res/drawable/<this>.xml` plus the `keep.xml` that survives the resource
+/// shrinker**; each app's `notification_icon_test` checks both off disk,
+/// because a miss is silent on the ring path (falls back to the launcher
+/// blob) and a loud `invalid_icon` on the flutter_local_notifications one.
+const String kNotificationIconRes = 'ic_notification';
+
 /// [AlarmScheduler] backed by the `alarm` pub package — **Android only**. On
 /// iOS `createAlarmScheduler` always picks `AlarmKitScheduler` and there is no
 /// `alarm`-package fallback (a denied AlarmKit no-ops + nudges to Settings),
@@ -93,6 +103,8 @@ class AlarmPkgScheduler implements AlarmScheduler {
           title: title,
           body: body,
           stopButton: 'Stop',
+          // Android-only in the plugin; iOS ignores it and uses the app icon.
+          icon: kNotificationIconRes,
         ),
       ),
     );
