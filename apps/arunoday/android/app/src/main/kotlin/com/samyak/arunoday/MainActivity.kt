@@ -19,6 +19,9 @@ class MainActivity : FlutterActivity() {
     // launcher component stays enabled; DONT_KILL_APP keeps us alive.
     private val appIconChannel = "core/app_icon"
 
+    // Shared with Nivaat's MainActivity — serves core's app_window.dart.
+    private val appWindowChannel = "core/app_window"
+
     private fun iconComponents(): Map<String, ComponentName> = mapOf(
         "1" to ComponentName(this, MainActivity::class.java),
         "2" to ComponentName(this, "$packageName.IconTwo"),
@@ -111,6 +114,20 @@ class MainActivity : FlutterActivity() {
                             result.success(false)
                         }
                     }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, appWindowChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // A ring the user never asked for is over, so put us
+                    // back behind whatever we interrupted - usually the lock
+                    // screen, which otherwise shows the app the moment it is
+                    // unlocked. Hide, don't finish: the task survives, so
+                    // reopening stays warm, and nonRoot = true so it
+                    // works even when we are not the task's root activity.
+                    // Sync with Nivaat.
+                    "moveTaskToBack" -> result.success(moveTaskToBack(true))
                     else -> result.notImplemented()
                 }
             }

@@ -4,8 +4,40 @@ import 'package:alarm/alarm.dart';
 import 'package:alarm/utils/alarm_set.dart';
 import 'package:flutter/material.dart';
 
+import 'app_window.dart';
 import 'format.dart';
 import 'theme.dart';
+
+/// How long after coming to the foreground the app still counts as "the alarm
+/// put us here" rather than "the user was already here".
+///
+/// The window exists because Dart cannot ask directly: the intent the plugin
+/// launches is `getLaunchIntentForPackage`, byte-identical to tapping the icon,
+/// and the activity resume races the ring event with no fixed order. So the
+/// answer is timed rather than known, and this is the width of the doubt.
+///
+/// **One second (Samyak, 2026-08-02), down from five.** Erring long hides an
+/// app the user had just opened themselves — the more annoying mistake; erring
+/// short only leaves the app on screen, as it always used to. Keep it short and
+/// fix the cause: with the extra proposed upstream (CLAUDE.md's *Upstream we
+/// are waiting on*) `MainActivity` could simply tell Dart, and this constant
+/// would be deleted rather than tuned.
+const Duration kRingForegroundGrace = Duration(seconds: 1);
+
+/// Did the ALARM put this app on screen, or was the user already in it?
+///
+/// Decides whether stopping the ring also hides the app ([sendAppToBackground]).
+/// A null [sinceForeground] means the app was never seen resumed — same answer,
+/// nobody chose to be here. Where it cannot know it says "the alarm did it",
+/// but reaches that default through a narrow [kRingForegroundGrace]: the
+/// fallback and the width of the doubt are separate decisions.
+bool alarmOpenedTheApp({
+  required AppLifecycleState? lifecycle,
+  required Duration? sinceForeground,
+}) =>
+    lifecycle != AppLifecycleState.resumed ||
+    sinceForeground == null ||
+    sinceForeground < kRingForegroundGrace;
 
 /// Wraps the app and overlays a full-screen stop UI whenever an alarm from
 /// the `alarm` package is ringing (i.e. the app is open during ring).
@@ -37,13 +69,26 @@ class RingGate extends StatefulWidget {
   State<RingGate> createState() => _RingGateState();
 }
 
-class _RingGateState extends State<RingGate> {
+class _RingGateState extends State<RingGate> with WidgetsBindingObserver {
   StreamSubscription<AlarmSet>? _sub;
   Set<int> _lastIds = const {};
+
+  /// When the app last became visible, or null while it isn't. Read only at
+  /// the moment a ring starts — see [alarmOpenedTheApp].
+  DateTime? _foregroundSince;
+
+  /// Whether the ring now sounding is what brought the app on screen, decided
+  /// once when it starts. Deciding later would be too late: by the time it
+  /// stops, the ring screen itself has made us resumed either way.
+  bool _alarmOpenedUs = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      _foregroundSince = DateTime.now();
+    }
     // Alarm.ringing replays its current value on subscribe: a quiet mount
     // (empty set == _lastIds) fires nothing, while mounting DURING a ring —
     // opening the app from the ring notification — fires immediately, which
@@ -52,14 +97,44 @@ class _RingGateState extends State<RingGate> {
       final ids = set.alarms.map((a) => a.id).toSet();
       final changed =
           ids.length != _lastIds.length || !ids.containsAll(_lastIds);
+      final wasRinging = _lastIds.isNotEmpty;
       _lastIds = ids;
+      if (ids.isNotEmpty && !wasRinging) {
+        final since = _foregroundSince;
+        _alarmOpenedUs = alarmOpenedTheApp(
+          lifecycle: WidgetsBinding.instance.lifecycleState,
+          sinceForeground:
+              since == null ? null : DateTime.now().difference(since),
+        );
+      }
+      // Hidden BEFORE the resync callback, deliberately. Every way a ring can
+      // end lands here — STOP below, the notification's Stop button, and the
+      // swipe the plugin treats as Stop — and getting off the user's screen is
+      // the part that must not depend on anything else succeeding. Both apps
+      // pass an `async` resync today, which can only reject a future, but
+      // `onRingingChanged` is a plain VoidCallback and a future caller could
+      // fill it with something that throws where we'd never see it.
+      if (ids.isEmpty && wasRinging && _alarmOpenedUs) {
+        _alarmOpenedUs = false;
+        unawaited(sendAppToBackground());
+      }
       if (changed) widget.onRingingChanged?.call();
     });
+  }
+
+  /// Stamped on the way in, cleared on the way out. How long we have been
+  /// visible is the only thing separating "the user opened this" from "the
+  /// full-screen intent did".
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foregroundSince =
+        state == AppLifecycleState.resumed ? DateTime.now() : null;
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 

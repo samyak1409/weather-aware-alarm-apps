@@ -4,6 +4,7 @@ export 'src/alarm_permission_banner.dart';
 export 'src/alarm_pkg_scheduler.dart';
 export 'src/alarmkit_scheduler.dart';
 export 'src/app_icon.dart';
+export 'src/app_window.dart';
 export 'src/appearance.dart';
 export 'src/crafted_by.dart';
 export 'src/flashing_scrollbar.dart';

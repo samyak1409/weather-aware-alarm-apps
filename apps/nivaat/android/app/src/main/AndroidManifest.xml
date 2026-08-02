@@ -22,6 +22,14 @@
         android:label="Nivaat"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- NO showWhenLocked / turnScreenOn, deliberately (2026-08-02).
+             Added that morning for a cold-start ring, removed hours later: the
+             attribute applies to ANY launch while the lockscreen is up, so
+             tapping a notification there opened the whole app with no PIN
+             (device-confirmed). The `alarm` plugin already sets both itself
+             while a ring sounds and clears them after, which is the scoping we
+             wanted, so nothing was lost. Do not re-add; ring_manifest_test
+             keeps them out and CLAUDE.md has the rest. Sync with Arunoday. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
