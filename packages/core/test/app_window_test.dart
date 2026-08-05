@@ -1,7 +1,6 @@
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The full-screen intent opens the app to show the ring screen, so stopping
@@ -25,43 +24,76 @@ void main() {
     }
   }
 
-  test('only a settled foreground counts as the user opening the app', () {
-    // Everything else reads as the alarm's doing, including `resumed` — the
-    // intent resumes the activity and the ring event reaches Dart at about the
-    // same time, in no fixed order, so being resumed proves nothing this early.
-    final cases = <(String, AppLifecycleState?, Duration?, bool)>[
-      ('paused', AppLifecycleState.paused, null, true),
-      ('inactive', AppLifecycleState.inactive, null, true),
-      ('hidden', AppLifecycleState.hidden, null, true),
-      ('detached', AppLifecycleState.detached, null, true),
-      ('resumed, never seen begin', AppLifecycleState.resumed, null, true),
-      ('a hair inside the grace', AppLifecycleState.resumed,
-          kRingForegroundGrace - const Duration(milliseconds: 1), true),
-      // A floor, not a window that reopens: at the grace it is already theirs.
-      ('exactly at the grace', AppLifecycleState.resumed,
-          kRingForegroundGrace, false),
-      ('a hair past it', AppLifecycleState.resumed,
-          kRingForegroundGrace + const Duration(milliseconds: 1), false),
-      ('long settled', AppLifecycleState.resumed,
-          const Duration(minutes: 10), false),
-    ];
+  group('who opened the app', () {
+    const channel = MethodChannel('core/alarm_launch');
+    final calls = <MethodCall>[];
+    int? pending;
 
-    for (final (name, lifecycle, since, alarmDidIt) in cases) {
-      expect(
-        alarmOpenedTheApp(lifecycle: lifecycle, sinceForeground: since),
-        alarmDidIt,
-        reason: '$name should read as ${alarmDidIt ? "the alarm" : "the user"}',
-      );
+    void handleWith(Future<Object?>? Function(MethodCall)? handler) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, handler);
     }
-  });
 
-  test('the grace stays short on purpose', () {
-    // Samyak's call (2026-08-02, down from 5s): the window is a guess either
-    // way, and hiding an app someone had just opened themselves is the worse
-    // half of it. Pinned so an "it sometimes stays open" report gets fixed at
-    // the cause — the missing launch-intent extra, tracked upstream — rather
-    // than by quietly widening this back out.
-    expect(kRingForegroundGrace, const Duration(seconds: 1));
+    setUp(() {
+      calls.clear();
+      pending = null;
+      handleWith((call) async {
+        calls.add(call);
+        final id = pending;
+        pending = null; // consumed, exactly as MainActivity does
+        return id;
+      });
+    });
+
+    tearDown(() => handleWith(null));
+
+    test('an alarm launch is reported once, then gone', () async {
+      // This replaced `kRingForegroundGrace` + `alarmOpenedTheApp` on
+      // 2026-08-05. The old pair guessed from how recently the app had
+      // resumed, because the plugin opened the launcher intent and Dart had
+      // nothing else to go on; declaring the plugin's RING action (alarm
+      // 5.7.0+) makes it a fact the OS hands over. Consuming is the whole
+      // contract — a second ring must not inherit the first one's answer.
+      await onPlatform(TargetPlatform.android, () async {
+        pending = 42;
+        expect(await consumeAlarmLaunch(), 42);
+        expect(await consumeAlarmLaunch(), isNull);
+        expect(calls.map((c) => c.method), ['consumeAlarmLaunch', 'consumeAlarmLaunch']);
+      });
+    });
+
+    test('the user opening the app reports nothing', () async {
+      await onPlatform(TargetPlatform.android, () async {
+        expect(await consumeAlarmLaunch(), isNull);
+      });
+    });
+
+    test('iOS never touches the channel — no ring ever opens the app',
+        () async {
+      // AlarmKit alerts are system-rendered and open nothing, so there is no
+      // launch to attribute. Same reason sendAppToBackground is Android-only.
+      await onPlatform(TargetPlatform.iOS, () async {
+        pending = 42;
+        expect(await consumeAlarmLaunch(), isNull);
+        expect(calls, isEmpty);
+      });
+    });
+
+    test('a host that forgot the channel, or refuses, reads as the user',
+        () async {
+      // Failing closed matters: a null leaves the app on screen, which is
+      // what it always used to do. Guessing "the alarm" would hide an app the
+      // user had opened themselves.
+      for (final handler in <Future<Object?>? Function(MethodCall)?>[
+        null,
+        (call) async => throw PlatformException(code: 'boom'),
+      ]) {
+        handleWith(handler);
+        await onPlatform(TargetPlatform.android, () async {
+          expect(await consumeAlarmLaunch(), isNull);
+        });
+      }
+    });
   });
 
   group('sending the app to the back', () {

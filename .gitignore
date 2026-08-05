@@ -29,6 +29,7 @@ android-signing/
 .DS_Store
 *.log
 rough.md
+temp
 
 # DevTools per-developer state (auto-generated on DevTools open)
 devtools_options.yaml

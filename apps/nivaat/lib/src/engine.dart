@@ -473,18 +473,21 @@ class NivaatEngine {
     return next;
   }
 
-  /// Clear EVERY armed ring for this alarm — both the pre-arm and late-ring
-  /// lockers, since the role we aren't looking at right now may still hold one.
+  /// Clear EVERY armed ring for this alarm — the pre-arm, the late-ring and
+  /// the next-occurrence lockers, since the role we aren't looking at right
+  /// now may still hold one.
   Future<void> _cancelAllRings(int alarmId) async {
     for (final id in NivaatIds.allRings(alarmId)) {
       await scheduler.cancel(id);
     }
   }
 
-  /// Is any of this alarm's occurrences sounding? Rule 1 has to ask about both
-  /// lockers: a late ring from the occurrence that just closed can still be
-  /// audible after `next` has rolled on to tomorrow, and missing it would let
-  /// the cascade cancel a ring that is physically going off.
+  /// Is any of this alarm's occurrences sounding? Rule 1 has to ask about
+  /// every locker: a late ring from the occurrence that just closed can still
+  /// be audible after `next` has rolled on to tomorrow, and a next-occurrence
+  /// pre-arm can sound in its own right when no ladder rung ever ran to hand
+  /// it over. Missing either would let the cascade cancel a ring that is
+  /// physically going off.
   Future<bool> _isRingingAny(int alarmId) async {
     for (final id in NivaatIds.allRings(alarmId)) {
       if (await scheduler.isRinging(id)) return true;
@@ -498,9 +501,83 @@ class NivaatEngine {
   Future<void> evaluateAll({DateTime? now}) async {
     final alarms = await store.loadAlarms();
     final courts = await store.loadCourts();
+    // Sweep BEFORE the loop, not after: `evaluateAlarm` can throw (a wind
+    // fetch, a plugin hiccup) and a sweep behind it would be skipped by
+    // exactly the passes that most need one. Nothing this pass goes on to arm
+    // can be swept anyway — every alarm it touches is in `alarms`.
+    await _sweepOrphanRings(alarms);
     for (final alarm in alarms) {
       await evaluateAlarm(alarm, courts, now: now);
     }
+  }
+
+  /// Cancel every armed ring whose alarm has left the store.
+  ///
+  /// The recovery half of the delete race. [_stillLive] stops this isolate
+  /// from creating an orphan, but it cannot undo one that already exists —
+  /// armed by a build without that guard, or by a background isolate whose
+  /// snapshot went stale inside the gap any check-then-act leaves open (there
+  /// is no cross-isolate lock; SharedPreferences offers none). And an orphan
+  /// is **permanent** without this: [evaluateAll] only ever visits alarms that
+  /// are in the store, so a deleted id is never looked at again and its ring
+  /// keeps firing on schedule for good.
+  ///
+  /// `scheduledIds()` over-reporting — on Android it is the plugin's own
+  /// bookkeeping, not the OS's — is harmless *here and only here*: a sweep
+  /// decides what to CANCEL, and cancelling something already gone is a no-op.
+  /// Never read that call as proof a ring IS armed.
+  Future<void> _sweepOrphanRings(List<NivaatAlarm> alarms) async {
+    final live = {for (final a in alarms) a.id};
+    final Set<int> armed;
+    try {
+      armed = await scheduler.scheduledIds();
+    } on Exception catch (e) {
+      // The safety net must never be the thing that stops the cascade.
+      debugPrint('nivaat orphan ring sweep skipped (non-fatal): $e');
+      return;
+    }
+    for (final id in armed) {
+      final alarmId = NivaatIds.alarmIdOfRing(id);
+      if (alarmId == null || live.contains(alarmId)) continue;
+      try {
+        await scheduler.cancel(id);
+      } on Exception catch (e) {
+        // Per id, not per sweep: one throwing cancel escaping here would abort
+        // the whole pass before any alarm was evaluated — the safety net
+        // taking down what it protects. The orphan waits for the next sweep.
+        debugPrint('nivaat orphan ring $id could not be cancelled: $e');
+      }
+    }
+  }
+
+  /// Is [alarm] — and the court it rings for — still in the store?
+  ///
+  /// [evaluateAll] snapshots the alarm and court lists once, then spends
+  /// seconds per alarm on a wind fetch, all while the home screen is already
+  /// up (`init` renders before it awaits `resync`). A delete landing in that
+  /// window leaves the loop holding a stale, still-`enabled` copy, and arming
+  /// its ring is unrecoverable from inside the cascade — see
+  /// [_sweepOrphanRings] for why, and for the net that catches what this
+  /// misses.
+  ///
+  /// The court is checked too, because `removeCourt` is the same hole by the
+  /// other door: it drops those alarms from the store as well, and the stale
+  /// snapshot still lists the court, so `_evaluate`'s court-gone branch does
+  /// not fire. Read from the STORE's copy of the alarm, never the snapshot's —
+  /// an edit may have moved it to a different court in the meantime.
+  Future<bool> _stillLive(NivaatAlarm alarm) async {
+    // Read from disk, not from this isolate's cache. SharedPreferences caches
+    // per isolate, so a background check would otherwise never see a delete
+    // the UI made while it was fetching — the exact split #23 is about, and
+    // the case where an orphan ring is hardest to notice. This narrows the
+    // window to the gap below rather than closing it; nothing here is a CAS,
+    // which is why [_sweepOrphanRings] exists.
+    await store.refresh();
+    for (final a in await store.loadAlarms()) {
+      if (a.id != alarm.id) continue;
+      return (await store.loadCourts()).any((c) => c.id == a.courtId);
+    }
+    return false;
   }
 
   /// One state-touching job per alarm at a time. Two overlapping runs of the
@@ -684,10 +761,18 @@ class NivaatEngine {
     return null;
   }
 
+  /// [rolledOn] marks the nested pass [_rollOn] makes to open the NEXT
+  /// occurrence, and it changes exactly one thing: where a pre-arm is written.
+  /// That pass runs at the instant the occurrence it just closed was due to
+  /// ring, so `NivaatIds.ring(alarm.id)` may still be holding a live alarm
+  /// that is milliseconds from sounding. A roll-on therefore never writes to
+  /// (and so never evicts) that locker — it uses `NivaatIds.nextRing`, which
+  /// the occurrence's own first ladder rung takes over from.
   Future<void> _evaluate(
     NivaatAlarm alarm,
     List<SavedLocation> courts, {
     DateTime? now,
+    bool rolledOn = false,
   }) async {
     final t = now ?? DateTime.now();
 
@@ -777,7 +862,16 @@ class NivaatEngine {
           upcoming,
           retryCapMinutes: alarm.retryMinutesAfter,
         );
-        if (firstRung != null) await checks.scheduleCheck(alarm.id, firstRung);
+        if (firstRung != null &&
+            !await checks.scheduleCheck(alarm.id, firstRung)) {
+          // Same rule as the bottom of this method (REVIEW #22): on Android
+          // nothing else re-books the cascade, so a refusal here means the
+          // NEXT occurrence has no wakeup — and this is the one path that
+          // reaches it while a ring is audible, i.e. during a mid-ring resync.
+          debugPrint('nivaat could not book the first rung for alarm '
+              '${alarm.id} at $firstRung — its next occurrence waits for an '
+              'app open');
+        }
       }
       return;
     }
@@ -846,6 +940,24 @@ class NivaatEngine {
       decision = null; // fail-silent per locked spec; cascade keeps retrying
     }
 
+    // The point of no return: everything above only READ, everything below
+    // arms rings, posts the card and books wakeups. Here rather than on entry
+    // because an evaluation already past an entry check would schedule anyway
+    // — see [_stillLive].
+    if (!await _stillLive(alarm)) return;
+
+    // Where a pre-arm from THIS pass goes. A roll-on must leave
+    // `NivaatIds.ring` alone entirely — see [_evaluate]'s `rolledOn` and
+    // [NivaatIds.nextRing].
+    final preArmId =
+        rolledOn ? NivaatIds.nextRing(alarm.id) : NivaatIds.ring(alarm.id);
+
+    // The reading behind a ring this pass REALLY put on the platform, or
+    // null. Distinct from `decision.shouldRing`, which is only what the wind
+    // said — scheduling can still refuse, and everything downstream that
+    // treats the morning as settled has to follow the ring, not the verdict.
+    WindDecision? armedWith;
+
     if (decision != null) {
       if (decision.shouldRing) {
         // Not sounding here (Rule 1 returned above), so re-scheduling is safe.
@@ -855,7 +967,15 @@ class NivaatEngine {
         // the NEXT one, and that pre-arm would otherwise evict this ring
         // seconds before it sounds. `!next.isAfter(t)` is precisely the
         // condition under which `_rollOn` can reach a further occurrence.
-        final isLate = !next.isAfter(t);
+        //
+        // A roll-on is excluded because it is always opening a LATER
+        // occurrence, so "late" would be a contradiction — and taking this
+        // branch would cancel `NivaatIds.ring`, the one thing it must not
+        // touch. (Reachable only if an occurrence lands exactly on `t` while a
+        // different one has just closed: the app waking on the dot of the
+        // second alarm of the morning. It pre-arms `nextRing` for `t + 10s`
+        // instead, which sounds on time and stays visible to Rule 1.)
+        final isLate = !rolledOn && !next.isAfter(t);
         final ringAt =
             next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
         if (isLate) {
@@ -863,11 +983,16 @@ class NivaatEngine {
           // is superseded by this later, better-informed one — drop it, or the
           // alarm sounds twice a few seconds apart.
           await scheduler.cancel(NivaatIds.ring(alarm.id));
+        } else if (!rolledOn) {
+          // Take over from a roll-on's pre-arm, in case one is holding this
+          // occurrence. Cancel BEFORE arming: two live alarms for one instant
+          // ring twice, while the gap this leaves is closed on the next line
+          // and re-armed by every remaining ladder rung. A cancel on an empty
+          // locker is a harmless no-op on both platforms.
+          await scheduler.cancel(NivaatIds.nextRing(alarm.id));
         }
-        await scheduler.scheduleRing(
-          id: isLate
-              ? NivaatIds.lateRing(alarm.id)
-              : NivaatIds.ring(alarm.id),
+        final armed = await scheduler.scheduleRing(
+          id: isLate ? NivaatIds.lateRing(alarm.id) : preArmId,
           at: ringAt,
           title: nivaatNotificationTitle(court.name, next, kNivaatRing),
           // The numbers that won, and when they were read — `t` is the same
@@ -881,23 +1006,58 @@ class NivaatEngine {
           )}${nivaatCheckedNote(t, next, ring: true)}',
           volume: decision.volume,
         );
-        state = state.copyWith(
-          ringScheduled: true,
-          ringCourtSpeedKmh: decision.sample.courtSpeedKmh,
-          ringRawGustKmh: decision.sample.rawGustKmh,
-          ringVolume: decision.volume,
-          lastCheckAt: t,
-        );
+        // Only a ring that is REALLY armed may be recorded as one. A silent
+        // failure here used to flow straight into `ringScheduled: true`, and
+        // the next pass then read "committed, and its time has passed" as
+        // proof it had sounded — history said `Rang` for a morning nothing was
+        // ever scheduled for (REVIEW #2). Not armed leaves the occurrence
+        // undecided instead, so the remaining ladder rungs try again.
+        if (armed) {
+          armedWith = decision;
+          state = state.copyWith(
+            ringScheduled: true,
+            ringCourtSpeedKmh: decision.sample.courtSpeedKmh,
+            ringRawGustKmh: decision.sample.rawGustKmh,
+            ringVolume: decision.volume,
+            lastCheckAt: t,
+          );
+        } else {
+          // `ringScheduled: false`, NOT "leave whatever was there". A failure
+          // here does not merely fail to arm — it has already destroyed
+          // anything this id was holding: `Alarm.set` stops the same id before
+          // scheduling, AlarmKit cancels then schedules, and the late branch
+          // above cancelled the pre-arm outright. Carrying an earlier rung's
+          // `true` forward is REVIEW #2 exactly: the next pass reads
+          // "committed, and its time has passed" and writes `Rang` for a
+          // morning with nothing armed on the device.
+          //
+          // Clearing is also the safe direction in the rarer case where the
+          // failure came BEFORE anything was destroyed (a settings validation
+          // throw): the remaining rungs simply re-decide, and if the old ring
+          // does sound after all, Rule 1 sees it audible and records it
+          // properly. A false "not armed" costs a retry; a false "armed"
+          // costs the truth.
+          debugPrint('nivaat could not arm the ring for alarm ${alarm.id} at '
+              '$ringAt — leaving the occurrence open for the next rung');
+          state = state.copyWith(ringScheduled: false, lastCheckAt: t);
+        }
       } else {
         // Not sounding here either, so cancelling the provisional ring is safe.
-        // ONLY the pre-arm locker: the late-ring locker can hold a ring for
-        // the occurrence that just closed — `_rollOn` lands here moments after
+        // Pre-arm lockers ONLY: the late-ring locker can hold a ring for the
+        // occurrence that just closed — `_rollOn` lands here moments after
         // arming it — and clearing that would re-create the very bug the split
         // exists to fix. (This occurrence can't own a late ring itself: one
         // would have finalised it as "rang" and cleared the state.)
+        //
+        // Both pre-arm lockers, because either can be holding THIS occurrence:
+        // its own ladder rungs write `ring`, an earlier roll-on wrote
+        // `nextRing`, and a skip has to clear whichever one is live. A roll-on
+        // clears only its own — `preArmId` is `nextRing` there, and `ring`
+        // still belongs to the occurrence that just closed.
         // Remember the reading behind this skip (kept across later no-data
         // retries) so the final card can report the real reason.
-        await scheduler.cancel(NivaatIds.ring(alarm.id));
+        await scheduler.cancel(preArmId);
+        if (!rolledOn) await scheduler.cancel(NivaatIds.nextRing(alarm.id));
         state = state.copyWith(
           ringScheduled: false,
           skipCourtSpeedKmh: decision.sample.courtSpeedKmh,
@@ -922,9 +1082,9 @@ class NivaatEngine {
     // At/after T and ringing → final; we never retry a ring. The morning's
     // card comes DOWN: the ring is that morning's notification now, and a
     // "still checking" card beside a sounding alarm is just noise.
-    if (atOrPastAlarm && decision != null && decision.shouldRing) {
+    if (atOrPastAlarm && armedWith != null) {
       final ringing = state;
-      final ringDecision = decision;
+      final ringDecision = armedWith;
       await _pushCard(
         ringing,
         (seq) => HistoryRecord(
@@ -994,7 +1154,19 @@ class NivaatEngine {
       state = state.copyWith(cardShown: true);
     }
     await store.saveCheckState(state);
-    if (nextCheck != null) await checks.scheduleCheck(alarm.id, nextCheck);
+    if (nextCheck != null) {
+      // On Android nothing else re-books this alarm — checks only reschedule
+      // themselves — so a booking that failed means the cascade stops here
+      // (REVIEW #22). `scheduleCheck` has already tried its coarse fallback
+      // and logged; this is the layer that knows what was lost, so it says so.
+      if (!await checks.scheduleCheck(alarm.id, nextCheck)) {
+        final lost = nivaatOccurrenceInFlight(alarm, state, t)
+            ? 'this morning stays open until the app is next opened'
+            : 'the next occurrence waits for an app open';
+        debugPrint('nivaat cascade for alarm ${alarm.id} has no wakeup booked '
+            'after $t — $lost');
+      }
+    }
   }
 
   /// The "rang" row for a committed ring, built from its persisted [state] —
@@ -1030,6 +1202,10 @@ class NivaatEngine {
   /// Skipped when the "next" occurrence is still [closed] itself (a T-0 check
   /// running inside the pre-T grace), which also guarantees the recursion
   /// terminates: a genuinely future occurrence can't finalise again.
+  ///
+  /// `rolledOn: true` is what keeps the next occurrence's pre-arm off
+  /// [closed]'s own ring locker, which may still be holding a live alarm —
+  /// see [_evaluate] for why that mattered.
   Future<void> _rollOn(
     NivaatAlarm alarm,
     List<SavedLocation> courts,
@@ -1037,7 +1213,7 @@ class NivaatEngine {
     DateTime closed,
   ) {
     if (alarm.nextOccurrence(t) == closed) return Future.value();
-    return _evaluate(alarm, courts, now: t);
+    return _evaluate(alarm, courts, now: t, rolledOn: true);
   }
 
   /// A row for [alarm]'s occurrence [at], built from the last known skip

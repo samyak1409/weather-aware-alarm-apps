@@ -24,8 +24,13 @@ class NivaatController extends ChangeNotifier {
   Map<int, CheckState> checkStates = {};
   bool loaded = false;
 
-  /// Most recent fire-and-forget evaluate kicked off by [upsertAlarm] (or
-  /// null before the first). Tests await this; production never reads it.
+  /// Most recent fire-and-forget cleanup or evaluate kicked off by
+  /// [upsertAlarm] or [deleteAlarm] (or null before the first). Tests await
+  /// this; production never reads it.
+  ///
+  /// [deleteAlarm] publishes its handle here for a reason: without one its
+  /// disarming was untestable, so nothing asserted that deleting an alarm
+  /// takes down the ring it already had (REVIEW #23).
   @visibleForTesting
   Future<void>? lastEvaluation;
 
@@ -262,12 +267,16 @@ class NivaatController extends ChangeNotifier {
         if (e.key != id) e.key: e.value
     };
     notifyListeners();
-    for (final a in removed) {
-      unawaited(() async {
-        await engine.abandonOccurrence(a);
-        await _evaluateInBackground(a.copyWith(enabled: false));
-      }());
-    }
+    // Fire-and-forget in production — a delete must feel instant — but the
+    // handle is kept so a test can await the disarming it triggers.
+    lastEvaluation = Future.wait([
+      for (final a in removed)
+        () async {
+          await engine.abandonOccurrence(a);
+          await _evaluateInBackground(a.copyWith(enabled: false));
+        }(),
+    ]);
+    unawaited(lastEvaluation!);
   }
 
   Future<void> _evaluateInBackground(NivaatAlarm alarm, {DateTime? now}) async {

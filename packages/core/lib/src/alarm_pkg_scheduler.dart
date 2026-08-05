@@ -1,4 +1,6 @@
 import 'package:alarm/alarm.dart';
+import 'package:alarm/utils/alarm_exception.dart';
+import 'package:flutter/foundation.dart';
 
 import 'scheduler.dart';
 
@@ -57,17 +59,81 @@ class AlarmPkgScheduler implements AlarmScheduler {
     _initialized = true;
   }
 
+  /// Arms the ring, and reports whether the plugin took it.
+  ///
+  /// **Read `true` as "accepted", not "armed".** `Alarm.set` returns the
+  /// native result, and on Android that result is `true` even when the
+  /// platform scheduling failed — the plugin drops the failure and replies
+  /// success (upstream issue #420, ours). So this closes the half we own (an
+  /// `AlarmException`, which used to abort the whole cascade pass on its way
+  /// out) and cannot close the other; see REVIEW #2 for why no signal
+  /// available to Dart can.
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
+    required double? volume,
   }) async {
     await ensureInitialized();
-    await Alarm.set(
-      alarmSettings: AlarmSettings(
+    try {
+      return await Alarm.set(
+        alarmSettings: settingsFor(
+          id: id,
+          at: at,
+          title: title,
+          body: body,
+          volume: volume,
+        ),
+      );
+    } on AlarmException catch (e) {
+      // `Alarm.set` already stopped and unsaved the alarm on this path, so
+      // there is nothing to undo — only a claim not to make. Letting it
+      // propagate (the old behaviour) aborted the whole cascade pass on its
+      // way out, which cost the OTHER alarms their evaluation too.
+      debugPrint('scheduleRing($id) rejected by the alarm plugin: $e');
+      return false;
+    }
+  }
+
+  /// The alarm as this scheduler configures it — pure, so every decision baked
+  /// in here is testable off-device (the rest of [scheduleRing] is plugin
+  /// calls), notification settings included.
+  ///
+  /// **`androidStopAlarmOnDismiss` is deliberately left at the plugin's `true`**
+  /// (2026-08-05, after device testing), even though the opt-out is ours
+  /// (issue #413 / PR #414, shipped in 5.8.0). A swipe therefore stops the
+  /// alarm. The fear behind #413 — brushing the shade at 6am and silently
+  /// losing your alarm — turns out not to be reachable: the notification is
+  /// `setOngoing(true)`, and ongoing notifications are **not dismissible while
+  /// the phone is locked** (Android 14 behaviour changes), which is the state a
+  /// phone is in at 6am. What is left is a swipe on an unlocked phone, by
+  /// someone awake and holding it, where "stop" is a fair reading.
+  ///
+  /// Turning it off is worse, and that was measured, not guessed: the swipe
+  /// then does *nothing visible* and the alarm plays on with no Stop control
+  /// anywhere. Restoring the notification cannot be done app-side either —
+  /// `AlarmPlugin.alarmTriggerApi` is null with no engine attached, so with the
+  /// app closed Dart is never told the alarm is ringing at all.
+  ///
+  /// **So `true` here is INTERIM, not a preference.** Asked upstream as issue
+  /// #421, which would make the opt-out *restore* the notification rather than
+  /// ignore the swipe. **When a release contains that, set this to `false`**
+  /// (or to `restore`, if it ships as a third state) and flip
+  /// `scheduler_test` with it: the swipe then costs neither the alarm nor the
+  /// Stop button, which is better than either answer available today. If it is
+  /// rejected, `true` is the permanent answer and this paragraph should say
+  /// that instead. See CLAUDE.md's *Upstream* section.
+  @visibleForTesting
+  AlarmSettings settingsFor({
+    required int id,
+    required DateTime at,
+    required String title,
+    required String body,
+    required double? volume,
+  }) =>
+      AlarmSettings(
         id: id,
         dateTime: at,
         assetAudioPath: ringAsset,
@@ -95,9 +161,19 @@ class AlarmPkgScheduler implements AlarmScheduler {
         // Same-ID replacement is a separate condition and is unaffected, so
         // re-deciding an occurrence still overwrites its own ring as before.
         allowSameSecondScheduling: true,
+        // A null volume leaves the system alarm volume alone — the plugin
+        // documents `volume: null` as "use the current system volume", which
+        // is the only correct answer for an app with no volume opinion of its
+        // own. Arunoday turned the phone up to full and pinned it there, so a
+        // deliberately quiet phone rang at maximum (device-caught 2026-08-05).
+        //
+        // `volumeEnforced` follows the same fact: it means "put it back if the
+        // user turns it down", which is meaningless without a volume to put
+        // back, and hostile besides. It stays on for Nivaat, whose ramp is a
+        // decision the wind made and not one to be overridden mid-ring.
         volumeSettings: VolumeSettings.fixed(
-          volume: volume.clamp(0.0, 1.0),
-          volumeEnforced: true,
+          volume: volume?.clamp(0.0, 1.0),
+          volumeEnforced: volume != null,
         ),
         notificationSettings: NotificationSettings(
           title: title,
@@ -105,10 +181,12 @@ class AlarmPkgScheduler implements AlarmScheduler {
           stopButton: 'Stop',
           // Android-only in the plugin; iOS ignores it and uses the app icon.
           icon: kNotificationIconRes,
+          // Spelled out rather than left to the plugin's default, so the
+          // decision above is visible in the code and a change to that default
+          // cannot flip our behaviour silently.
+          androidStopAlarmOnDismiss: true,
         ),
-      ),
-    );
-  }
+      );
 
   @override
   Future<void> cancel(int id) async {

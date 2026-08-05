@@ -370,13 +370,26 @@ class ArunodayController extends ChangeNotifier {
       }
     }
     for (final e in wanted.entries) {
-      await scheduler.scheduleRing(
+      // Arunoday records nothing about whether an alarm is armed, so unlike
+      // Nivaat it has no claim to withhold — but a failure still means no
+      // alarm, and every resync retries. Logged rather than dropped so a
+      // "my alarm didn't go off" report has something behind it; on iOS a
+      // denial also raises AlarmPermissionBanner, which is the user-facing
+      // half.
+      final armed = await scheduler.scheduleRing(
         id: e.key,
         at: e.value.at,
         title: e.value.title,
         body: e.value.body,
-        volume: 1.0,
+        // Null, not 1.0: the phone's own alarm volume is the setting, and
+        // Arunoday has no reason to have an opinion about it. Passing 1.0 rang
+        // a deliberately-quiet phone at full blast and stopped the user
+        // turning it down (device-caught 2026-08-05).
+        volume: null,
       );
+      if (!armed) {
+        debugPrint('arunoday could not arm alarm ${e.key} for ${e.value.at}');
+      }
     }
   }
 

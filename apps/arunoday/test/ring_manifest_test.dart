@@ -32,4 +32,25 @@ void main() {
     expect(markup(), contains('android.permission.USE_FULL_SCREEN_INTENT'),
         reason: 'without it every ring is a notification, locked or not');
   });
+
+  test('every launcher component declares the alarm RING action', () {
+    // The plugin resolves RING with `queryIntentActivities(intent, 0)`, which
+    // SKIPS disabled components — and picking an alternate app icon disables
+    // MainActivity and enables an alias in its place (core/app_icon). So the
+    // filter has to sit on all three launcher components, or the alarm-launch
+    // signal silently stops working for anyone not on icon 1, and the app
+    // starts staying on screen after a ring it opened.
+    final launchers = RegExp(r'android.intent.category.LAUNCHER')
+        .allMatches(markup())
+        .length;
+    expect(launchers, 3, reason: 'MainActivity + IconTwo + IconThree');
+    expect(
+      RegExp(r'com\.gdelataillade\.alarm\.action\.RING')
+          .allMatches(markup())
+          .length,
+      launchers,
+      reason: 'one RING filter per launcher component, no more and no fewer — '
+          'two enabled at once makes the plugin pick arbitrarily',
+    );
+  });
 }

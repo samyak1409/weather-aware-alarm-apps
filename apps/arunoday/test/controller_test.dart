@@ -18,16 +18,17 @@ class FakeScheduler implements AlarmScheduler {
   Future<void> ensureInitialized() async {}
 
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
+    required double? volume,
   }) async {
     scheduled[id] = at;
     titles[id] = title;
     bodies[id] = body;
+    return true;
   }
 
   @override

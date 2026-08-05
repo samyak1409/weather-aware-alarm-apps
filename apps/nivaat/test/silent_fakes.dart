@@ -30,13 +30,14 @@ class SilentRing implements AlarmScheduler {
   Future<void> ensureInitialized() async {}
 
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
-  }) async {}
+    required double? volume,
+  }) async =>
+      false;
 
   @override
   Future<void> cancel(int id) async {}
@@ -53,7 +54,7 @@ class SilentChecks implements CheckScheduler {
   Future<void> initialize() async {}
 
   @override
-  Future<void> scheduleCheck(int alarmId, DateTime at) async {}
+  Future<bool> scheduleCheck(int alarmId, DateTime at) async => true;
 
   @override
   Future<void> cancelCheck(int alarmId) async {}

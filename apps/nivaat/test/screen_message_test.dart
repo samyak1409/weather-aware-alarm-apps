@@ -90,8 +90,8 @@ void main() {
     expect(find.text(nivaatBackgroundNote), findsOneWidget);
     expect(
         nivaatBackgroundNote,
-        'Keep the phone charged and connected to the internet before your '
-        'alarm — the background wind check needs both.');
+        'Make sure the phone has enough battery and is connected to the '
+        'internet before your alarm — the background wind check needs both.');
     expect(nivaatBackgroundNote, isNot(contains('online')),
         reason: '"online" reads as SIGNED IN to a general user, and this app '
             'has no account to sign in to (2026-07-31)');

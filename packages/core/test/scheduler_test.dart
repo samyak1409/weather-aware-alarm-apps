@@ -46,6 +46,49 @@ void main() {
           AlarmPkgScheduler(soundAssetForVolume: (_) => '/tones/temple.ogg');
       expect(scheduler.ringAsset, '/tones/temple.ogg');
     });
+
+    test('a null volume leaves the phone\'s own alarm volume alone', () {
+      // Arunoday's case, device-caught: it passed 1.0, so the plugin turned
+      // the system alarm volume up to maximum and — with volumeEnforced —
+      // put it back every time the user tried to turn it down. A phone
+      // deliberately set quiet rang at full blast. Null is the plugin's
+      // documented "use the current system volume".
+      final scheduler = AlarmPkgScheduler(soundAssetForVolume: (_) => 'r.wav');
+      final quiet = scheduler.settingsFor(
+          id: 1, at: DateTime(2026), title: 't', body: 'b', volume: null);
+      expect(quiet.volumeSettings.volume, isNull);
+      expect(quiet.volumeSettings.volumeEnforced, isFalse,
+          reason: 'there is no volume to enforce, and pinning the user out of '
+              'their own slider is not ours to do');
+    });
+
+    test('a real volume is still set and held — Nivaat\'s wind ramp', () {
+      // The other half, and why this is a null rather than a removal: Nivaat's
+      // loudness IS a decision the wind made (SPEC.md), so it must survive a
+      // mid-ring nudge at the volume rocker.
+      final scheduler = AlarmPkgScheduler(soundAssetForVolume: (_) => 'r.wav');
+      final ramped = scheduler.settingsFor(
+          id: 1, at: DateTime(2026), title: 't', body: 'b', volume: 0.85);
+      expect(ramped.volumeSettings.volume, 0.85);
+      expect(ramped.volumeSettings.volumeEnforced, isTrue);
+    });
+
+    test('the ring notification keeps the plugin\'s dismiss behaviour', () {
+      // Pinned so turning it off again has to be deliberate — and it IS meant
+      // to be turned off once #421 lands, when this flips to `isFalse` in the
+      // same change. The why is on `settingsFor`'s dartdoc.
+      final scheduler = AlarmPkgScheduler(soundAssetForVolume: (_) => 'r.wav');
+      final settings = scheduler
+          .settingsFor(
+              id: 1, at: DateTime(2026), title: 'Wake', body: 'Dawn', volume: null)
+          .notificationSettings;
+      expect(settings.androidStopAlarmOnDismiss, isTrue);
+      expect(settings.title, 'Wake');
+      expect(settings.body, 'Dawn');
+      expect(settings.stopButton, 'Stop');
+      expect(settings.icon, kNotificationIconRes,
+          reason: 'the monochrome drawable, never the launcher blob');
+    });
   });
 
   group('NoOpAlarmScheduler', () {

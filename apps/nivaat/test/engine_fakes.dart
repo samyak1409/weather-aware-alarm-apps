@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:core/core.dart';
 import 'package:nivaat/src/check_scheduler.dart';
 import 'package:nivaat/src/ids.dart';
@@ -87,7 +89,7 @@ class FakeNotifier extends SkipNotifier {
 }
 
 class FakeRing implements AlarmScheduler {
-  final Map<int, ({DateTime at, double volume, String title, String body})>
+  final Map<int, ({DateTime at, double? volume, String title, String body})>
       scheduled = {};
 
   /// Every scheduleRing call in order — [scheduled] only keeps the latest per
@@ -103,16 +105,29 @@ class FakeRing implements AlarmScheduler {
   @override
   Future<void> ensureInitialized() async {}
 
+  /// Whether a booking succeeds. Flip it to drive the REVIEW #2 path: a
+  /// scheduler that reports failure must leave the occurrence unarmed.
+  bool accepts = true;
+
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
+    required double? volume,
   }) async {
+    if (!accepts) {
+      // DESTRUCTIVE on failure, because the real ones are: `Alarm.set` stops
+      // the same id before it schedules, and `AlarmKitScheduler` cancels then
+      // schedules. A fake that merely declined would leave the previous arm
+      // standing and hide every failed-RE-arm bug behind a green suite.
+      scheduled.remove(id);
+      return false;
+    }
     scheduled[id] = (at: at, volume: volume, title: title, body: body);
     log.add((id: id, at: at));
+    return true;
   }
 
   @override
@@ -137,12 +152,12 @@ class BoomRing extends FakeRing {
   Future<void> cancel(int id) async => _boom();
 
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
+    required double? volume,
   }) async =>
       _boom();
 }
@@ -155,25 +170,124 @@ class ErrorRing extends FakeRing {
   Future<void> cancel(int id) async => _boom();
 
   @override
-  Future<void> scheduleRing({
+  Future<bool> scheduleRing({
     required int id,
     required DateTime at,
     required String title,
     required String body,
-    required double volume,
+    required double? volume,
   }) async =>
       _boom();
+}
+
+/// A scheduler that cannot enumerate what it has armed — the orphan sweep's
+/// soft-fail path. Everything else behaves like [FakeRing], so a pass driven
+/// through this must still complete and still schedule normally.
+class BlindRing extends FakeRing {
+  @override
+  Future<Set<int>> scheduledIds() async => throw Exception('cannot list ids');
+}
+
+/// Lists ids happily but refuses to cancel [refuses] — the sweep's OTHER
+/// failure mode, and the one its own `try` originally left uncovered.
+///
+/// Scoped to specific ids on purpose. A blanket refusal would also break the
+/// ordinary cancels inside `_evaluate`, and those have always been allowed to
+/// abort their own alarm's pass — `resync` catches it, and [BoomRing] is the
+/// test for that. What must NOT happen is the sweep, which runs before the
+/// loop, taking every alarm down with it.
+class UncancellableRing extends FakeRing {
+  UncancellableRing(this.refuses);
+
+  final Set<int> refuses;
+
+  @override
+  Future<void> cancel(int id) async {
+    if (refuses.contains(id)) throw Exception('cannot cancel $id');
+    return super.cancel(id);
+  }
+}
+
+/// Models the per-isolate SharedPreferences cache: [loadAlarms] keeps
+/// answering with the list THIS isolate last saw, until [refresh] pulls in
+/// what another isolate wrote.
+///
+/// Without it a delete made in the UI isolate is simply invisible to a
+/// background check, and no same-isolate test can show that — both sides share
+/// one cache, so the delete is seen whether or not anything refreshed. This is
+/// the only way to prove `_stillLive`'s `store.refresh()` is load-bearing
+/// rather than decorative (REVIEW #23).
+class StaleUntilRefreshedStore extends NivaatStore {
+  StaleUntilRefreshedStore(this.staleView);
+
+  /// What this isolate believes, until someone refreshes.
+  final List<NivaatAlarm> staleView;
+  bool refreshed = false;
+
+  @override
+  Future<void> refresh() async {
+    refreshed = true;
+    return super.refresh();
+  }
+
+  @override
+  Future<List<NivaatAlarm>> loadAlarms() async =>
+      refreshed ? super.loadAlarms() : staleView;
+}
+
+/// A wind API that parks its FIRST fetch on a completer, so a test can land a
+/// delete inside the exact window a real pass spends waiting on the network.
+///
+/// That window is the whole of finding #23: `evaluateAll` snapshots the alarm
+/// list once and then spends seconds per alarm on a fetch, with the home
+/// screen already up — so the user really is deleting alarms while the loop
+/// holds a stale copy of them.
+class GatedApi extends FakeApi {
+  /// Completes once the first fetch is parked — await this before deleting.
+  final Completer<void> parked = Completer<void>();
+
+  /// Complete this to let the parked fetch (and every later one) through.
+  final Completer<void> gate = Completer<void>();
+
+  bool _open = false;
+
+  Future<void> _park() async {
+    if (_open) return;
+    _open = true;
+    if (!parked.isCompleted) parked.complete();
+    await gate.future;
+  }
+
+  @override
+  Future<WindSample> forecastWindAt(double lat, double lon, DateTime at) async {
+    await _park();
+    return super.forecastWindAt(lat, lon, at);
+  }
+
+  @override
+  Future<WindSample> currentWind(double lat, double lon) async {
+    await _park();
+    return super.currentWind(lat, lon);
+  }
 }
 
 class FakeChecks implements CheckScheduler {
   final Map<int, DateTime> booked = {};
 
+  /// Whether a booking succeeds. Flip it to drive REVIEW #22: on Android a
+  /// refused booking is the end of that alarm's cascade, so the engine must
+  /// not carry on as though a wakeup exists.
+  bool accepts = true;
+
   @override
   Future<void> initialize() async {}
 
   @override
-  Future<void> scheduleCheck(int alarmId, DateTime at) async =>
-      booked[alarmId] = at;
+  Future<bool> scheduleCheck(int alarmId, DateTime at) async {
+    if (!accepts) return false;
+    booked[alarmId] = at;
+    return true;
+  }
 
   @override
   Future<void> cancelCheck(int alarmId) async => booked.remove(alarmId);
@@ -229,8 +343,11 @@ const alarm =
     NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1', courtSpeedLimitKmh: 4);
 final alarmAt = DateTime(2026, 7, 12, 6, 0); // 11 Jul 2026 is a Saturday
 
-// Ring lockers are split by ROLE: the pre-arm for an occurrence's own time
-// vs a LATE ring armed after T. That separation is what stops the next
-// occurrence's pre-arm from evicting a late ring.
+// Ring lockers are split by ROLE: the pre-arm for an occurrence's own time,
+// a LATE ring armed after T, and the pre-arm a roll-on writes for the NEXT
+// occurrence. That separation is what stops one pass — which closes an
+// occurrence and opens the following one together — from evicting a ring it
+// has just armed, or one that is still seconds from sounding.
 final todayRing = NivaatIds.ring(alarm.id);
 final lateRing = NivaatIds.lateRing(alarm.id);
+final nextRing = NivaatIds.nextRing(alarm.id);

@@ -32,14 +32,19 @@ const String kNivaatNotificationsOffIos =
 /// Home footer caveat (MESSAGES.md N13). Soft-wrap only — no hard `\n`
 /// (large accessibility text must reflow cleanly).
 ///
+/// `has enough battery`, not `charged` (2026-08-05, Samyak): "keep the phone
+/// charged" reads as *leave it plugged in*, which is not what the cascade
+/// needs — it needs the battery not to run out, and to not be throttled by
+/// the phone giving up on background work. Nothing here asks for a charger.
+///
 /// `connected to the internet`, not `online` (2026-07-31, Samyak): to a
 /// general reader "online" first suggests *signed in*, which this app has no
 /// concept of. The longer phrase is the plain-English one, and the note is a
 /// quiet footer with room to wrap.
 @visibleForTesting
 const String nivaatBackgroundNote =
-    'Keep the phone charged and connected to the internet before your '
-    'alarm — the background wind check needs both.';
+    'Make sure the phone has enough battery and is connected to the internet '
+    'before your alarm — the background wind check needs both.';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({

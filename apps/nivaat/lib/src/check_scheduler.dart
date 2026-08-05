@@ -16,7 +16,15 @@ import 'ids.dart';
 abstract class CheckScheduler {
   Future<void> initialize();
 
-  Future<void> scheduleCheck(int alarmId, DateTime at);
+  /// Books the next wind check, and reports whether it is really booked.
+  ///
+  /// **A caller that goes on as though a wakeup exists must check this.** On
+  /// Android nothing else re-books the cascade — checks only ever reschedule
+  /// themselves — so a swallowed failure ends the morning outright: no check
+  /// at T, no retries, no card, and no ring unless an earlier rung had
+  /// already found calm air (REVIEW #22). iOS is softer: the periodic refresh
+  /// re-drives everything within half an hour whatever this returns.
+  Future<bool> scheduleCheck(int alarmId, DateTime at);
 
   Future<void> cancelCheck(int alarmId);
 
@@ -62,20 +70,41 @@ class AndroidCheckScheduler implements CheckScheduler {
   }
 
   @override
-  Future<void> scheduleCheck(int alarmId, DateTime at) async {
+  Future<bool> scheduleCheck(int alarmId, DateTime at) async {
+    if (await _book(alarmId, at, exact: true)) return true;
+    // Coarse rather than nothing. The likeliest cause of an exact booking
+    // being refused is a SecurityException over exact-alarm permission, and an
+    // inexact alarm needs none — so it can succeed where the exact one did
+    // not. A check that runs a few minutes late still decides the morning;
+    // a cascade that stopped booking decides nothing ever again. Same
+    // strategy the `alarm` plugin uses for its own rings.
+    final coarse = await _book(alarmId, at, exact: false);
+    debugPrint(
+      coarse
+          ? 'nivaat scheduleCheck(alarm $alarmId) fell back to an INEXACT '
+              'wakeup near $at — the ladder still runs, just not on the dot'
+          : 'nivaat scheduleCheck(alarm $alarmId) FAILED for $at — nothing '
+              'will re-drive this alarm until the app is opened',
+    );
+    return coarse;
+  }
+
+  Future<bool> _book(int alarmId, DateTime at, {required bool exact}) async {
     try {
-      await AndroidAlarmManager.oneShotAt(
+      return await AndroidAlarmManager.oneShotAt(
         at,
         // Its own block, so a check wakeup can never land on a ring id.
         NivaatIds.check(alarmId),
         entrypoint,
-        exact: true,
+        exact: exact,
         wakeup: true,
         allowWhileIdle: true,
         rescheduleOnReboot: true,
       );
     } on Exception catch (e) {
-      _logCheckError('scheduleCheck', e, alarmId: alarmId);
+      _logCheckError(exact ? 'scheduleCheck' : 'scheduleCheck(inexact)', e,
+          alarmId: alarmId);
+      return false;
     }
   }
 
@@ -107,7 +136,7 @@ class IosCheckScheduler implements CheckScheduler {
   }
 
   @override
-  Future<void> scheduleCheck(int alarmId, DateTime at) async {
+  Future<bool> scheduleCheck(int alarmId, DateTime at) async {
     // iOS can't wake at an exact time, but a BGProcessingTask's earliestBeginDate
     // can be nudged to the next cascade rung ([at]), so a granted (opportunistic)
     // wakeup lands near T instead of being burned early. `requiresCharging:false`
@@ -131,8 +160,13 @@ class IosCheckScheduler implements CheckScheduler {
           requiresCharging: false,
         ),
       );
+      return true;
     } on Exception catch (e) {
       _logCheckError('scheduleCheck', e, alarmId: alarmId);
+      // Softer here than on Android: the periodic BGAppRefresh re-drives the
+      // whole cascade within half an hour regardless, so a refused
+      // BGProcessing submit costs precision, not the morning.
+      return false;
     }
   }
 

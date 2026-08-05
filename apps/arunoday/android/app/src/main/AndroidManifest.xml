@@ -49,6 +49,16 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- The alarm's own launch action (alarm 5.7.0+), so a ring opens
+                 us with ACTION_RING instead of the launcher intent — that is
+                 how RingGate tells an alarm launch from a tap on the icon.
+                 Repeated on EVERY launcher component below: an alternate icon
+                 disables MainActivity and the plugin skips disabled ones.
+                 ring_manifest_test enforces the count; CLAUDE.md has the rest. -->
+            <intent-filter>
+                <action android:name="com.gdelataillade.alarm.action.RING"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity>
         <!-- Alternate launcher icons (picked in Settings via core/app_icon,
              2026-07-20). MainActivity itself carries the default icon and
@@ -70,6 +80,14 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Same RING filter, and it MUST be repeated here: this alias is
+                 the enabled launcher component whenever an alternate icon is
+                 picked, and the plugin skips disabled ones. See MainActivity
+                 above for the whole reason. -->
+            <intent-filter>
+                <action android:name="com.gdelataillade.alarm.action.RING"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
         </activity-alias>
         <activity-alias
             android:name=".IconThree"
@@ -80,6 +98,14 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Same RING filter, and it MUST be repeated here: this alias is
+                 the enabled launcher component whenever an alternate icon is
+                 picked, and the plugin skips disabled ones. See MainActivity
+                 above for the whole reason. -->
+            <intent-filter>
+                <action android:name="com.gdelataillade.alarm.action.RING"/>
+                <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
         </activity-alias>
         <!-- Don't delete the meta-data below.

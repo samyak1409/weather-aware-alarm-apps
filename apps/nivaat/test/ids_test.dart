@@ -59,17 +59,61 @@ void main() {
       expect(NivaatIds.lateRing(7), NivaatIds.lateRing(7));
     });
 
-    test('allRings covers both lockers an alarm can ever use', () {
-      expect(NivaatIds.allRings(7),
-          containsAll(<int>[NivaatIds.ring(7), NivaatIds.lateRing(7)]));
-      expect(NivaatIds.allRings(7), hasLength(2));
+    test("the roll-on pre-arm never shares the closing occurrence's locker", () {
+      // The pass that finalises an occurrence opens the next one in the same
+      // breath — and it runs AT the moment the closing ring is due but may not
+      // have sounded yet. `Alarm.set` stops any alarm sharing the id first, so
+      // one locker meant tomorrow's pre-arm cancelled the ring about to wake
+      // you, while history recorded "Rang".
+      expect(NivaatIds.nextRing(7), isNot(NivaatIds.ring(7)));
+      // And not the late locker either: a late ring and a next-day pre-arm are
+      // different roles that can be live at the same instant.
+      expect(NivaatIds.nextRing(7), isNot(NivaatIds.lateRing(7)));
+    });
+
+    test('allRings covers every locker an alarm can ever use', () {
+      expect(
+          NivaatIds.allRings(7),
+          containsAll(<int>[
+            NivaatIds.ring(7),
+            NivaatIds.lateRing(7),
+            NivaatIds.nextRing(7),
+          ]));
+      expect(NivaatIds.allRings(7), hasLength(3));
+    });
+
+    test('alarmIdOfRing decodes rings and nothing else', () {
+      // The orphan sweep gets raw numbers back from `scheduledIds()` and
+      // cancels whatever it decodes as a ring for an alarm that has left the
+      // store. A check or card id mistaken for a ring would be cancelled by a
+      // number that means something else entirely.
+      for (final a in [1, 2, 42, NivaatIds.maxAlarmId]) {
+        expect(NivaatIds.alarmIdOfRing(NivaatIds.ring(a)), a);
+        expect(NivaatIds.alarmIdOfRing(NivaatIds.lateRing(a)), a);
+        expect(NivaatIds.alarmIdOfRing(NivaatIds.nextRing(a)), a);
+        expect(NivaatIds.alarmIdOfRing(NivaatIds.check(a)), isNull);
+        expect(NivaatIds.alarmIdOfRing(NivaatIds.card(a)), isNull);
+      }
+      // Alarm ids start at 1, so a bare block number is not a ring — and
+      // reading it as one would decode to alarm 0 and cancel by that number.
+      expect(NivaatIds.alarmIdOfRing(NivaatIds.ringBlock), isNull);
+      expect(NivaatIds.alarmIdOfRing(NivaatIds.nextRingBlock), isNull);
+      // Nothing outside the blocks, in either direction.
+      expect(NivaatIds.alarmIdOfRing(0), isNull);
+      expect(NivaatIds.alarmIdOfRing(-1), isNull);
+      expect(
+          NivaatIds.alarmIdOfRing(
+              NivaatIds.nextRingBlock + NivaatIds.maxAlarmId + 1),
+          isNull);
     });
 
     test('different alarms never share a locker', () {
       expect(NivaatIds.ring(7), isNot(NivaatIds.ring(8)));
       expect(NivaatIds.lateRing(7), isNot(NivaatIds.lateRing(8)));
+      expect(NivaatIds.nextRing(7), isNot(NivaatIds.nextRing(8)));
       expect(NivaatIds.ring(8), isNot(NivaatIds.lateRing(7)),
           reason: 'blocks must not overlap across roles either');
+      expect(NivaatIds.lateRing(8), isNot(NivaatIds.nextRing(7)));
     });
   });
 }

@@ -88,6 +88,7 @@ void main() {
     // every check below pass against an empty map. Exact, not `containsAll`,
     // so deleting a call site has to be a deliberate edit here too.
     expect(expected, {
+      'core/alarm_launch': {'consumeAlarmLaunch'},
       'core/app_icon': {'get', 'set'},
       'core/app_window': {'moveTaskToBack'},
       'core/system_settings': {'openNotificationSettings'},

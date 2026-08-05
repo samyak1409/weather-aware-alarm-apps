@@ -4,6 +4,7 @@ import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/controller.dart';
 import 'package:nivaat/src/engine.dart';
+import 'package:nivaat/src/ids.dart';
 import 'package:nivaat/src/skip_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,14 +22,22 @@ void main() {
   late FakeNotifier notifier;
   late NivaatEngine engine;
 
-  setUp(() {
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
     ring = FakeRing();
     checks = FakeChecks();
     api = FakeApi();
     notifier = FakeNotifier();
+    final store = NivaatStore();
+    // Seed the store, the way `morning_story_test` already does. The engine
+    // re-reads it before it arms anything (`_stillLive`), because an alarm
+    // that has left the store mid-pass must not be scheduled — so an alarm
+    // that was NEVER in it is a fixture production cannot produce, and tests
+    // built on one were quietly asserting against an impossible state.
+    await store.saveCourts([court]);
+    await store.saveAlarms([alarm]);
     engine = NivaatEngine(
-      store: NivaatStore(),
+      store: store,
       scheduler: ring,
       api: api,
       checks: checks,
@@ -84,8 +93,10 @@ void main() {
     final rolled = await engine.store.loadCheckState(7);
     expect(rolled!.alarmAt, alarmAt.add(const Duration(days: 1)),
         reason: "today closed; tomorrow's occurrence is already in flight");
-    expect(ring.scheduled[todayRing]!.at, alarmAt.add(const Duration(days: 1)),
+    expect(ring.scheduled[nextRing]!.at, alarmAt.add(const Duration(days: 1)),
         reason: 'tomorrow pre-armed while the forecast is calm');
+    expect(ring.scheduled.containsKey(todayRing), isFalse,
+        reason: "a roll-on never writes the closing occurrence's own locker");
     // The regression guard for the locker collision: the T-0 ring was
     // committed moments earlier in this same pass, into the LATE locker, and
     // the pre-arm above must NOT have evicted it. Under one locker per alarm
@@ -233,7 +244,7 @@ void main() {
     // silently, while history still recorded "Rang". Separate lockers now.
     expect(ring.scheduled[lateRing]!.at, late.add(const Duration(seconds: 10)),
         reason: 'the late ring must outlive the roll-on pre-arm');
-    expect(ring.scheduled[todayRing]!.at,
+    expect(ring.scheduled[nextRing]!.at,
         alarmAt.add(const Duration(days: 1)),
         reason: 'tomorrow pre-arms into its own locker, evicting nothing');
     // Append-only log (2026-07-20): the late ring is a NEW row; the
@@ -396,15 +407,324 @@ void main() {
     final lateNow = alarmAt.add(const Duration(minutes: 5));
     await engine.evaluateAlarm(alarm, [court], now: lateNow);
 
-    expect(ring.scheduled[todayRing]!.at.isAfter(lateNow), isTrue);
+    // The LATE locker is where a post-T ring lands, and it is what this test
+    // is about. (It used to read `todayRing`, which passed for the wrong
+    // reason: that locker held TOMORROW's roll-on pre-arm, also "after now".)
+    expect(ring.scheduled[lateRing]!.at, lateNow.add(const Duration(seconds: 10)),
+        reason: 'rings ten seconds out, never in the past');
     final history = await engine.store.loadHistory();
     expect(history.first.outcome, CheckOutcome.rang);
     expect(notifier.shown, isEmpty, reason: 'a ring needs no card');
   });
 
+  group('scheduling that fails must not read as success (#2, #22)', () {
+    test('a refused ring is never recorded as armed, and never as "Rang"',
+        () async {
+      // The whole of #2. `scheduleRing` used to swallow its failure and return
+      // as though it had worked, so the engine set `ringScheduled: true` for
+      // an alarm that did not exist — and the next pass read "committed, and
+      // its time has passed" as proof it had sounded. You were never woken,
+      // and the log said you were.
+      ring.accepts = false;
+      api.sample = wind(5.0, 5.0); // calm — the wind says ring
+
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      expect(ring.scheduled, isEmpty, reason: 'nothing was armed');
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isFalse,
+          reason: 'and nothing may claim it was');
+
+      // Now the pass that used to invent the "Rang" row.
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(seconds: 2)));
+      final history = await engine.store.loadHistory();
+      expect(history.where((h) => h.outcome == CheckOutcome.rang), isEmpty,
+          reason: 'a ring that was never armed cannot have rung');
+    });
+
+    test('the cascade keeps trying, and arms as soon as scheduling recovers',
+        () async {
+      // Leaving the occurrence undecided is the point: a refusal costs this
+      // rung, not the morning. The ladder has seven more.
+      ring.accepts = false;
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect(checks.booked[7], isNotNull, reason: 'the ladder carries on');
+
+      ring.accepts = true;
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 30)));
+
+      expect(ring.scheduled[todayRing]!.at, alarmAt);
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isTrue);
+    });
+
+    test('at T, a refused ring falls through to the watching card', () async {
+      // Not silence: the morning still gets its one card and its history row,
+      // because from the user's side "we could not ring" is a skip like any
+      // other and the retry window is still theirs.
+      ring.accepts = false;
+      api.sample = wind(5.0, 5.0);
+      // A rung before T, so the occurrence is in flight when T arrives —
+      // without one `nextOccurrence(T)` resolves to TOMORROW and the pass is
+      // just a pre-arm, which is a different scenario.
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 1)));
+
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+
+      expect(notifier.extended, hasLength(1),
+          reason: 'the morning is explained rather than dropped');
+      expect(ring.scheduled, isEmpty);
+    });
+
+    test('a failed LATE arm drops the claim the pre-arm left behind', () async {
+      // The half the first fix missed. `armedWith` covers "never armed"; this
+      // is "was armed, and the failing pass destroyed it on the way past" —
+      // the late branch cancels the pre-arm outright before trying the late
+      // locker. Carrying the earlier rung's `ringScheduled: true` forward is
+      // REVIEW #2 all over again, and this is the COMMON path: calm at T.
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect(ring.scheduled[todayRing]!.at, alarmAt);
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isTrue);
+
+      ring.accepts = false;
+      await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+
+      expect(ring.scheduled, isEmpty,
+          reason: 'the pre-arm was cancelled and nothing replaced it');
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isFalse,
+          reason: 'nothing is armed, so nothing may claim to be');
+
+      // The pass that used to invent the row. No wind reading, so nothing new
+      // can be armed and only the stored claim decides.
+      api.fail = true;
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(minutes: 2)));
+      expect(
+          (await engine.store.loadHistory())
+              .where((h) => h.outcome == CheckOutcome.rang),
+          isEmpty,
+          reason: 'no ring ever sounded, so no morning may say it did');
+    });
+
+    test('a failed same-id RE-arm mid-ladder drops the claim too', () async {
+      // The other way in, and the reason `FakeRing` destroys on refusal: a
+      // real `Alarm.set` stops the same id BEFORE it schedules, so a rung that
+      // fails has already taken the previous rung's ring with it.
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isTrue);
+
+      ring.accepts = false;
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(minutes: 30)));
+
+      expect(ring.scheduled.containsKey(todayRing), isFalse,
+          reason: 'the re-arm destroyed the old one on its way to failing');
+      expect((await engine.store.loadCheckState(7))!.ringScheduled, isFalse);
+
+      api.fail = true;
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(minutes: 2)));
+      expect(
+          (await engine.store.loadHistory())
+              .where((h) => h.outcome == CheckOutcome.rang),
+          isEmpty);
+    });
+
+    test('a refused check booking does not pass for a booked cascade (#22)',
+        () async {
+      // On Android nothing else re-books an alarm — checks only reschedule
+      // themselves — so a swallowed booking failure ends the morning: no check
+      // at T, no retries, no card. The engine may not carry on as though a
+      // wakeup exists.
+      checks.accepts = false;
+      api.sample = wind(5.0, 5.0);
+
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      expect(checks.booked, isEmpty, reason: 'nothing is booked');
+      // The ring the ladder already committed still stands: losing the next
+      // check costs the refinement, not the alarm.
+      expect(ring.scheduled[todayRing]!.at, alarmAt);
+    });
+
+    test('a failed booking never aborts the other alarms', () async {
+      // The old `on Exception` swallow existed for this, and it is worth
+      // keeping: one alarm's refused booking must not cost its neighbours
+      // their evaluation.
+      const other = NivaatAlarm(
+          id: 8, hour: 7, minute: 0, courtId: 'c1', courtSpeedLimitKmh: 4);
+      await engine.store.saveAlarms([alarm, other]);
+      checks.accepts = false;
+      api.sample = wind(5.0, 5.0);
+
+      await expectLater(
+          engine.evaluateAll(now: alarmAt.subtract(const Duration(hours: 2))),
+          completes);
+      expect(ring.scheduled.keys,
+          containsAll(<int>[todayRing, NivaatIds.ring(other.id)]));
+    });
+  });
+
+  group('stale snapshots: a deleted alarm must never stay armed (#23)', () {
+    // `evaluateAll` reads the alarm list ONCE and then spends seconds per
+    // alarm on a wind fetch — with the home screen already up, because `init`
+    // renders before it awaits `resync`. So a delete really does land while
+    // the loop is holding a stale, still-enabled copy of that alarm. Arming it
+    // then is unrecoverable from inside the cascade: `evaluateAll` only ever
+    // visits alarms that are in the store, so nothing looks at that id again
+    // and the ring fires on schedule for good.
+    const other = NivaatAlarm(
+        id: 8, hour: 7, minute: 0, courtId: 'c1', courtSpeedLimitKmh: 4);
+    final beforeBoth = alarmAt.subtract(const Duration(hours: 2));
+
+    /// Starts a full pass parked on the first alarm's fetch, so the caller can
+    /// change the store in that window. Returns the pass to await.
+    Future<(NivaatEngine, GatedApi, Future<void>)> passParkedOnFirst() async {
+      await engine.store.saveAlarms([alarm, other]);
+      final gated = GatedApi()..sample = wind(5.0, 5.0); // calm: would arm
+      final raced = NivaatEngine(
+        store: engine.store,
+        scheduler: ring,
+        api: gated,
+        checks: checks,
+        notifier: notifier,
+      );
+      final pass = raced.evaluateAll(now: beforeBoth);
+      await gated.parked.future;
+      return (raced, gated, pass);
+    }
+
+    test('deleting an alarm mid-pass never arms it', () async {
+      final (_, gated, pass) = await passParkedOnFirst();
+
+      await engine.store.saveAlarms([alarm]); // the user taps Delete
+      gated.gate.complete();
+      await pass;
+
+      expect(ring.scheduled.containsKey(NivaatIds.ring(other.id)), isFalse,
+          reason: 'a deleted alarm must not come back armed — permanently');
+      expect(ring.scheduled[todayRing]!.at, alarmAt,
+          reason: 'the alarm that survived is still armed as normal');
+    });
+
+    test('removing its court mid-pass never arms it', () async {
+      // The second door on the same hole. `removeCourt` drops the court and
+      // its alarms together, and the pass is holding a stale COURT list too —
+      // so `_evaluate`'s court-gone branch sees the court present and lets the
+      // alarm straight through.
+      final (_, gated, pass) = await passParkedOnFirst();
+
+      await engine.store.saveCourts(const []);
+      gated.gate.complete();
+      await pass;
+
+      expect(ring.scheduled.containsKey(NivaatIds.ring(other.id)), isFalse);
+      expect(ring.scheduled.containsKey(todayRing), isFalse,
+          reason: 'no court, no ring — for either alarm');
+    });
+
+    test('a delete made in ANOTHER isolate is seen, not cached past', () async {
+      // The same-isolate tests above share one SharedPreferences cache, so
+      // they pass whether or not anything refreshes. This one models the real
+      // split: the pass is holding the list this isolate last read, while the
+      // store on disk has already lost the alarm.
+      await engine.store.saveAlarms([alarm]); // the UI isolate deleted `other`
+      final stale = StaleUntilRefreshedStore([alarm, other]);
+      final backgroundPass = NivaatEngine(
+        store: stale,
+        scheduler: ring,
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      api.sample = wind(5.0, 5.0); // calm — it would arm if it got that far
+
+      await backgroundPass.evaluateAlarm(other, [court], now: beforeBoth);
+
+      expect(ring.scheduled.containsKey(NivaatIds.ring(other.id)), isFalse,
+          reason: 'an alarm deleted in another isolate must not be armed here');
+      expect(stale.refreshed, isTrue,
+          reason: 'and the reason it was seen is that the store was re-read');
+    });
+
+    test('an already-armed orphan is swept on the next pass', () async {
+      // The recovery half, and the only thing that reaches a ring armed by a
+      // build without the guard, or by a background isolate racing this one.
+      await ring.scheduleRing(
+          id: NivaatIds.ring(other.id),
+          at: alarmAt,
+          title: 't',
+          body: 'b',
+          volume: 1);
+      api.sample = wind(5.0, 5.0);
+
+      await engine.evaluateAll(now: beforeBoth);
+
+      expect(ring.scheduled.containsKey(NivaatIds.ring(other.id)), isFalse,
+          reason: 'alarm 8 is not in the store, so its ring is an orphan');
+      expect(ring.scheduled[todayRing]!.at, alarmAt,
+          reason: "a live alarm's own ring is never swept");
+    });
+
+    test('a cancel that throws does not take the whole pass down', () async {
+      // The sweep runs BEFORE the loop, so an exception escaping it aborts
+      // `evaluateAll` with no alarm evaluated at all — the safety net taking
+      // down the thing it protects. Only `scheduledIds()` was inside the try;
+      // the cancels were not.
+      final stubborn = UncancellableRing({NivaatIds.ring(other.id)});
+      await stubborn.scheduleRing(
+          id: NivaatIds.ring(other.id),
+          at: alarmAt,
+          title: 't',
+          body: 'b',
+          volume: 1);
+      final engine2 = NivaatEngine(
+        store: engine.store,
+        scheduler: stubborn,
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      api.sample = wind(5.0, 5.0);
+
+      await expectLater(engine2.evaluateAll(now: beforeBoth), completes);
+
+      expect(stubborn.scheduled[todayRing]!.at, alarmAt,
+          reason: 'the live alarm was still evaluated and armed');
+    });
+
+    test('the sweep survives a scheduler that cannot list ids', () async {
+      // The net must never become the thing that stops the cascade.
+      final blind = NivaatEngine(
+        store: engine.store,
+        scheduler: BlindRing(),
+        api: api,
+        checks: checks,
+        notifier: notifier,
+      );
+      api.sample = wind(5.0, 5.0);
+      await expectLater(blind.evaluateAll(now: beforeBoth), completes);
+    });
+  });
+
   group('NivaatController', () {
     late NivaatController controller;
-    setUp(() => controller = NivaatController(engine: engine));
+    setUp(() async {
+      // These build a user's data up from nothing, so they want the empty
+      // store the app ships with — not the seeded alarm the engine tests need.
+      await engine.store.saveAlarms(const []);
+      await engine.store.saveCourts(const []);
+      controller = NivaatController(engine: engine);
+    });
 
     test('addCourt persists, courtById finds it, existingCourtNear (~100m)',
         () async {
@@ -441,6 +761,32 @@ void main() {
       expect(controller.alarms.single.enabled, isFalse);
       await controller.deleteAlarm(7);
       expect(controller.alarms, isEmpty);
+    });
+
+    test('deleting an alarm disarms the ring it already had', () async {
+      // `_stillLive` stops a stale pass ARMING one, and the sweep catches an
+      // orphan on a later pass — but the alarm the user is deleting right now
+      // has a live ring in hand, and only delete's own cleanup takes it down.
+      // Nothing asserted that until this test (REVIEW #23).
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      api.sample = wind(5.0, 5.0); // calm → the follow-up evaluate arms it
+      await controller.upsertAlarm(alarm, now: alarmAt.subtract(const Duration(hours: 1)));
+      await controller.lastEvaluation;
+      expect(ring.scheduled.keys, contains(todayRing),
+          reason: 'precondition: there is something to disarm');
+
+      ring.cancelled.clear();
+      await controller.deleteAlarm(7);
+      await controller.lastEvaluation;
+
+      for (final id in NivaatIds.allRings(7)) {
+        expect(ring.scheduled.containsKey(id), isFalse,
+            reason: 'locker $id survived the delete');
+      }
+      expect(ring.cancelled, containsAll(NivaatIds.allRings(7)),
+          reason: 'every locker is cleared by hand, not left to the sweep — '
+              'the sweep only runs on the NEXT evaluateAll');
     });
 
     test('init stays loaded when resync hits a scheduler Exception', () async {
@@ -744,15 +1090,67 @@ void main() {
       return late;
     }
 
+    test('a check landing just after T leaves the pending ring alone', () async {
+      // THE #1 regression guard. The ring for T and the T-0 wind check are two
+      // exact alarms for the same instant, with no ordering between them. When
+      // the check wins by a hair the ring has not sounded yet, so Rule 1 sees
+      // nothing audible and Rule 2 finalises the morning as "rang" — correct,
+      // it is about to. What must NOT follow is the roll-on writing tomorrow
+      // into the same locker: `Alarm.set` stops the id it is replacing, so the
+      // alarm went silent a heartbeat before it would have woken you, under a
+      // history row that said `Rang`.
+      api.sample = wind(5.0, 5.0); // calm — the ladder commits a ring for T
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect(ring.scheduled[todayRing]!.at, alarmAt, reason: 'pre-armed for T');
+      ring.cancelled.clear();
+
+      // The check wins the race by two seconds.
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(seconds: 2)));
+
+      expect(ring.scheduled[todayRing]?.at, alarmAt,
+          reason: 'the ring about to sound is still armed, for its own time');
+      expect(ring.cancelled, isNot(contains(todayRing)),
+          reason: 'and nothing cancelled it on the way past');
+      expect(ring.scheduled[nextRing]!.at, alarmAt.add(const Duration(days: 1)),
+          reason: 'tomorrow is pre-armed too, in a locker of its own');
+      // The row is honest once the ring survives: it really is about to sound.
+      expect((await engine.store.loadHistory()).single.outcome,
+          CheckOutcome.rang);
+    });
+
+    test('the next occurrence hands its pre-arm back to the normal locker',
+        () async {
+      // The other half: `nextRing` is a staging locker, not a second home. At
+      // tomorrow's first ladder rung the pre-arm moves to `ring`, and the
+      // staging copy must go — two live alarms for one instant ring twice.
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.add(const Duration(seconds: 2)));
+      final tomorrow = alarmAt.add(const Duration(days: 1));
+      expect(ring.scheduled[nextRing]!.at, tomorrow);
+
+      await engine.evaluateAlarm(alarm, [court],
+          now: tomorrow.subtract(const Duration(hours: 1)));
+
+      expect(ring.scheduled[todayRing]!.at, tomorrow,
+          reason: 'the occurrence now owns its own locker');
+      expect(ring.scheduled.containsKey(nextRing), isFalse,
+          reason: 'the staged copy is cancelled, or the alarm sounds twice');
+    });
+
     test('arming a late ring disarms the pre-arm it supersedes', () async {
       // The path where this is load-bearing: calm all the way, so the skip
       // branch never runs and nothing else clears the pre-arm. The ladder
       // commits a ring for T itself, then the T-0 check re-decides on live
       // wind and arms a ring 10s out. Both are for the SAME occurrence, so the
       // first must be disarmed — otherwise the alarm sounds at T and again at
-      // T+10s. (The roll-on then refills the pre-arm locker with tomorrow in
-      // the same pass, which is why `cancelled` is what proves this, not
-      // `scheduled`.)
+      // T+10s. (`cancelled` is what proves this rather than `scheduled`: the
+      // cancel and any later write to that locker are indistinguishable in the
+      // final map.)
       api.sample = wind(5.0, 5.0); // calm
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(minutes: 1)));
@@ -766,9 +1164,11 @@ void main() {
       expect(ring.scheduled[lateRing]!.at,
           alarmAt.add(const Duration(seconds: 10)),
           reason: 'the T-0 ring lands in the late locker');
-      expect(ring.scheduled[todayRing]!.at,
+      expect(ring.scheduled[nextRing]!.at,
           alarmAt.add(const Duration(days: 1)),
-          reason: 'the pre-arm locker is refilled with tomorrow');
+          reason: "tomorrow goes in the roll-on's own locker");
+      expect(ring.scheduled.containsKey(todayRing), isFalse,
+          reason: 'and the locker it superseded stays empty');
     });
 
     test('a skip for the next occurrence never cancels a pending late ring',
@@ -849,15 +1249,17 @@ void main() {
       expect(notifier.cancelled, contains(alarm.id));
     });
 
-    test('a disabled alarm is disarmed in BOTH lockers', () async {
+    test('a disabled alarm is disarmed in EVERY locker', () async {
       final late = await armLateRing();
-      // Both lockers are occupied: the late ring, and tomorrow's pre-arm.
-      expect(ring.scheduled.keys, containsAll(<int>[todayRing, lateRing]));
+      // Two lockers are occupied: the late ring, and tomorrow's roll-on
+      // pre-arm. (`todayRing` is empty here — the skip at T cleared it.)
+      expect(ring.scheduled.keys, containsAll(<int>[lateRing, nextRing]));
 
       await engine.evaluateAlarm(alarm.copyWith(enabled: false), [court],
           now: late.add(const Duration(minutes: 1)));
 
       expect(ring.scheduled.containsKey(todayRing), isFalse);
+      expect(ring.scheduled.containsKey(nextRing), isFalse);
       expect(ring.scheduled.containsKey(lateRing), isFalse,
           reason: 'cancelling one locker leaves a disabled alarm still ringing');
     });
