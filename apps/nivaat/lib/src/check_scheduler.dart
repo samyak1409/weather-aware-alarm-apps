@@ -170,13 +170,15 @@ class IosCheckScheduler implements CheckScheduler {
     }
   }
 
+  /// **Deliberately does nothing, and must stay that way** (REVIEW #8).
+  ///
+  /// One BGProcessing task serves the whole app — iOS task ids are fixed in
+  /// Info.plist, so they cannot be per-alarm — so cancelling it for one alarm
+  /// cancelled every other alarm's next check too. It costs nothing to skip:
+  /// the submission is one-shot, so an unwanted task fires once, finds no work
+  /// and dies. A reference count is not the fix either (a fresh isolate starts
+  /// empty and would cancel anyway) — full argument in CLAUDE.md. Android is
+  /// genuinely per-alarm and still cancels.
   @override
-  Future<void> cancelCheck(int alarmId) async {
-    // Best-effort; a stale processing task just no-ops on its next run.
-    try {
-      await Workmanager().cancelByUniqueName(processingTaskId);
-    } on Exception catch (e) {
-      _logCheckError('cancelCheck', e, alarmId: alarmId);
-    }
-  }
+  Future<void> cancelCheck(int alarmId) async {}
 }

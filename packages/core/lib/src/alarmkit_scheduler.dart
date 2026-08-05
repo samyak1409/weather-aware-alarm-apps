@@ -14,7 +14,8 @@ import 'scheduler.dart';
 ///
 /// AlarmKit has no per-alarm volume; [soundAssetForVolume] maps the engine's
 /// volume (Nivaat's wind ramp) to a pre-rendered loudness variant. AlarmKit
-/// also assigns its own UUIDs, so an int-id -> UUID map is persisted.
+/// also assigns its own UUIDs, so an int-id -> UUIDs map is persisted — see
+/// [_loadMap] for why each id holds a list rather than one.
 class AlarmKitScheduler implements AlarmScheduler {
   AlarmKitScheduler({
     required this.soundAssetForVolume,
@@ -43,24 +44,47 @@ class AlarmKitScheduler implements AlarmScheduler {
     _authRequested = true;
   }
 
-  /// Reads the id->UUID map from DISK, not from this isolate's cache.
+  /// Reads the id -> UUIDs map from DISK, not from this isolate's cache.
   ///
   /// Without the reload a background isolate never sees what the UI isolate
   /// wrote, so its read-modify-write saves the other side's entries away
   /// (REVIEW #7). This narrows that to the gap between reload and save — there
   /// is still no cross-isolate lock, and SharedPreferences offers none — which
   /// is also why [scheduledIds] only writes when something actually changed.
-  Future<Map<String, String>> _loadMap() async {
+  ///
+  /// **Each id maps to a LIST, newest first** (REVIEW #4 · #5 · #6): the live
+  /// UUID plus any whose cancel was not confirmed. One slot per id could not
+  /// hold "keep the old handle when its cancel fails" and "create the
+  /// replacement before destroying what it replaces" at once — both want it —
+  /// so every operation here treats the whole list alike: cancel them all, ask
+  /// them all whether one is ringing, prune what AlarmKit has forgotten.
+  ///
+  /// Only [_saveMap] writes this key, so the shape on disk is always current;
+  /// an older build's blob is a cleared-data problem, not a parsing one (see
+  /// CLAUDE.md on the no-migration policy).
+  Future<Map<String, List<String>>> _loadMap() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     final raw = prefs.getString(_mapKey);
     if (raw == null) return {};
-    return (jsonDecode(raw) as Map<String, dynamic>).cast<String, String>();
+    return {
+      for (final e in (jsonDecode(raw) as Map<String, dynamic>).entries)
+        e.key: (e.value as List<dynamic>).cast<String>(),
+    };
   }
 
-  Future<void> _saveMap(Map<String, String> map) async {
+  /// Persists [map], dropping ids with nothing left in them — an id we hold no
+  /// UUID for is an id we know nothing about, and letting an empty list through
+  /// would make [scheduledIds] report a handle on no alarm at all.
+  Future<void> _saveMap(Map<String, List<String>> map) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_mapKey, jsonEncode(map));
+    await prefs.setString(
+      _mapKey,
+      jsonEncode({
+        for (final e in map.entries)
+          if (e.value.isNotEmpty) e.key: e.value,
+      }),
+    );
   }
 
   @override
@@ -72,18 +96,11 @@ class AlarmKitScheduler implements AlarmScheduler {
     required double? volume,
   }) async {
     await ensureInitialized();
-    // Replace semantics, same as the alarm package — but only once the old one
-    // is REALLY gone. Scheduling over an un-cancelled alarm would leave two
-    // live in AlarmKit and overwrite the only handle we have on the first, so
-    // the leak `cancel` was fixed to prevent would just move here (REVIEW #6).
-    //
-    // Refusing instead leaves exactly one alarm, still mapped and therefore
-    // still cancellable, and reports `false` so the caller does not record a
-    // ring it did not get — the next ladder rung retries the whole thing.
-    // Closing it properly (schedule the replacement FIRST, keep a set of
-    // pending-cancel UUIDs beside the live one) needs the map to stop being
-    // one UUID per id, which is REVIEW #5 + #6 landing together.
-    if (!await _cancelResolved(id)) return false;
+    // **Create the replacement BEFORE destroying what it replaces** (REVIEW
+    // #5): a failed create then leaves the old alarm armed and mapped instead
+    // of leaving the day silent. Do not "tidy" the order back — the accepted
+    // cost is the mirror image (a failed cancel leaves two live alarms, both
+    // sounding), and a duplicate alert beats a silent morning. CLAUDE.md.
     final String uuid;
     try {
       uuid = await _ak.scheduleOneShotAlarm(
@@ -107,59 +124,73 @@ class AlarmKitScheduler implements AlarmScheduler {
       return false;
     }
     final map = await _loadMap();
-    map['$id'] = uuid;
+    final superseded = map['$id'] ?? const <String>[];
+    // Record the new handle BEFORE cancelling anything, so a crash in the gap
+    // leaves an alarm we can still name.
+    //
+    // **The create→save window above is the one leak left, and it cannot be
+    // closed here:** AlarmKit mints the UUID, so nothing can be written down
+    // until the create returns, and dying in between (iOS killing a background
+    // task at expiry) arms an alarm no map names — so nothing can cancel it and
+    // it rings even on a morning the wind says to skip. Sweeping alarms this
+    // map does not name is the only fix and is NOT a drive-by: in that same
+    // window a new alarm looks exactly like an orphan. CLAUDE.md.
+    map['$id'] = [uuid, ...superseded];
     await _saveMap(map);
+    await _cancelEach(id, superseded);
     return true;
   }
 
-  /// Cancels the alarm, and **keeps the mapping unless it really went**.
+  /// Cancels every alarm still held for [id], and **keeps the handle of any
+  /// that refuses**.
   ///
-  /// `cancelAlarm` reports failure two ways — a `false` return and a throw —
-  /// and this used to drop the id->UUID entry before either was consulted. An
-  /// alarm that refuses cancellation then becomes unreachable for good: its
-  /// UUID is the only handle we have, and nothing can name it again (REVIEW
-  /// #6). Keeping the entry costs nothing, because a mapping AlarmKit no
-  /// longer knows about is pruned by [scheduledIds] on the next sweep — so the
+  /// `cancelAlarm` signals failure BOTH by returning false and by throwing,
+  /// and dropping the entry before consulting either left the alarm unreachable
+  /// for good — its UUID is the only handle there is (REVIEW #6). Keeping it
+  /// costs nothing: [scheduledIds] prunes what AlarmKit has forgotten, so the
   /// failure mode is a retry, not a leak.
   @override
-  Future<void> cancel(int id) => _cancelResolved(id);
-
-  /// Cancels, and reports whether the alarm is definitely gone.
-  ///
-  /// `true` also covers "there was nothing mapped" — nothing to lose is the
-  /// same as nothing left.
-  Future<bool> _cancelResolved(int id) async {
+  Future<void> cancel(int id) async {
     final map = await _loadMap();
-    final uuid = map['$id'];
-    if (uuid == null) return true;
-    bool cancelled;
-    try {
-      cancelled = await _ak.cancelAlarm(alarmId: uuid);
-    } on PlatformException {
-      // Includes "already gone" (fired, or the user removed it), which is
-      // indistinguishable here from a real error — so treat it as unresolved
-      // and let the sweep decide, rather than guessing in the direction that
-      // loses the handle.
-      cancelled = false;
+    await _cancelEach(id, map['$id'] ?? const <String>[]);
+  }
+
+  /// Cancels [uuids] one by one and removes from [id]'s entry only the ones
+  /// AlarmKit confirmed are gone. Best effort by design: whatever survives
+  /// stays mapped, so the next cancel — or the next sweep — reaches it again.
+  Future<void> _cancelEach(int id, List<String> uuids) async {
+    if (uuids.isEmpty) return;
+    final gone = <String>{};
+    for (final uuid in uuids) {
+      bool cancelled;
+      try {
+        cancelled = await _ak.cancelAlarm(alarmId: uuid);
+      } on PlatformException {
+        // Includes "already gone" (fired, or the user removed it), which is
+        // indistinguishable here from a real error — so treat it as unresolved
+        // and let the sweep decide, rather than guessing in the direction that
+        // loses the handle.
+        cancelled = false;
+      }
+      if (cancelled) gone.add(uuid);
     }
-    if (!cancelled) return false;
-    map.remove('$id');
+    if (gone.isEmpty) return;
+    // Re-read: the cancels above took real time, and this entry is a
+    // read-modify-write with no cross-isolate lock (REVIEW #7).
+    final map = await _loadMap();
+    map['$id'] =
+        (map['$id'] ?? const <String>[]).where((u) => !gone.contains(u)).toList();
     await _saveMap(map);
-    return true;
   }
 
   /// The int ids AlarmKit still holds something for.
   ///
-  /// **Prunes only what AlarmKit no longer knows AT ALL.** Keeping just
-  /// `AlarmState.scheduled` dropped the UUID of an *alerting* alarm — the one
-  /// sounding right now — and with the mapping gone [isRinging] went blind and
-  /// [cancel] could no longer reach the system alert (REVIEW #4). Every other
-  /// state is still an alarm we own: `countdown`, `paused`, `alerting`, and
-  /// `unknown`, which is what a state name added by a future iOS arrives as —
-  /// treating that as "gone" would wipe the whole map on the first resync.
-  ///
-  /// Nivaat's orphan sweep calls this on every pass, so the pruning had to
-  /// stop being destructive before that could be safe.
+  /// **Prunes only what AlarmKit no longer knows AT ALL** (REVIEW #4). Keeping
+  /// just `AlarmState.scheduled` dropped the UUID of the alarm sounding right
+  /// now, blinding [isRinging] and putting the live alert beyond [cancel].
+  /// Every other state is still ours — including `unknown`, which is how a
+  /// state a future iOS adds arrives, so pruning on it would wipe the whole map
+  /// on the first resync. Nivaat's orphan sweep runs this every pass.
   @override
   Future<Set<int>> scheduledIds() async {
     final map = await _loadMap();
@@ -169,24 +200,33 @@ class AlarmKitScheduler implements AlarmScheduler {
     } on PlatformException {
       return {};
     }
-    final before = map.length;
-    map.removeWhere((_, uuid) => !known.contains(uuid));
+    var changed = false;
+    final kept = <String, List<String>>{};
+    for (final e in map.entries) {
+      final live = e.value.where(known.contains).toList();
+      if (live.length != e.value.length) changed = true;
+      if (live.isNotEmpty) kept[e.key] = live;
+    }
     // Only write when something actually went. This map is a read-modify-write
     // blob with no cross-isolate lock (REVIEW #7), so every needless save is
     // another chance for two isolates to overwrite each other.
-    if (map.length != before) await _saveMap(map);
-    return map.keys.map(int.parse).toSet();
+    if (changed) await _saveMap(kept);
+    return kept.keys.map(int.parse).toSet();
   }
 
   @override
   Future<bool> isRinging(int id) async {
     final map = await _loadMap();
-    final uuid = map['$id'];
-    if (uuid == null) return false;
+    // ANY of this id's alarms, not just the newest: a replacement whose cancel
+    // was refused leaves an older one live, and if that is what the user can
+    // hear then this id is ringing. Answering "no" would let the cascade
+    // cancel a ring that is physically sounding.
+    final uuids = map['$id'] ?? const <String>[];
+    if (uuids.isEmpty) return false;
     try {
       final alarms = await _ak.getAlarms();
       for (final a in alarms) {
-        if (a.id == uuid && a.state == AlarmState.alerting) return true;
+        if (uuids.contains(a.id) && a.state == AlarmState.alerting) return true;
       }
     } on PlatformException {
       // fall through

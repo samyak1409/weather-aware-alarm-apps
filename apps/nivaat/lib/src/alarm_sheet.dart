@@ -37,14 +37,14 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   // Fall back to the first court if the alarm's court was deleted — a value
   // absent from the dropdown items would assert-crash the DropdownButton.
   late String _courtId = _initialCourtId();
-  // Clamp defensively so an out-of-range saved value never crashes the dropdown.
+  // A new alarm opens on the defaults; an edit opens on what was saved, which
+  // this editor is the only writer of — so both are always values the dropdown
+  // and the segments actually offer.
   late int _limit =
-      (widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit)
-          .clamp(WindThresholds.minLimit, WindThresholds.maxLimit);
-  // Per-alarm retry window (1 / 30 / 60). Missing/legacy → 30 (2026-07-26).
-  late int _retryMinutes = NivaatAlarm.clampRetryMinutes(
-    widget.existing?.retryMinutesAfter ?? CheckCascade.retryCapMinutesAfter,
-  );
+      widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit;
+  // Per-alarm retry window (1 / 30 / 60), default 30 (2026-07-26).
+  late int _retryMinutes =
+      widget.existing?.retryMinutesAfter ?? CheckCascade.retryCapMinutesAfter;
   late final Set<int> _weekdays =
       {...(widget.existing?.weekdays ?? const {1, 2, 3, 4, 5, 6, 7})};
   // Live cue above Save — checked on open and after each time pick so

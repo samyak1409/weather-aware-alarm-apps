@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'alarm_time_conflict.dart';
 import 'engine.dart';
+import 'ids.dart';
 
 /// App state for Nivaat: courts, alarms, history. Every mutation re-runs the
 /// engine so the cascade and scheduled rings stay consistent.
@@ -59,6 +60,11 @@ class NivaatController extends ChangeNotifier {
   /// Store-side, `[]` can only mean "nothing saved": `_decodeList` returns it
   /// for an absent key and *throws* on corrupt JSON.
   Future<List<HistoryRecord>> _loadHistory() async {
+    // From disk, not this isolate's cache. [resync] refreshed before the
+    // engine ran, but delete / court-removal / save reach here on their own,
+    // and this method PRUNES — deciding what to throw away from a stale read
+    // is the same mistake as writing over one (REVIEW #7).
+    await store.refresh();
     final rows = await store.loadHistory();
     final live = {for (final c in courts) c.id};
     final orphans = {
@@ -118,6 +124,14 @@ class NivaatController extends ChangeNotifier {
   Future<void> _reload() async {
     courts = await store.loadCourts();
     alarms = await store.loadAlarms();
+    // Nothing saved = nothing ever saved an alarm, so start at 1. **Never
+    // derive it from the alarms** — "highest + 1" IS the bug [nextAlarmId]
+    // kills, and it returns the moment anything recomputes it, since deleting
+    // the newest alarm drops the highest with it. [upsertAlarm] keeps the
+    // counter ahead of every stored id, so there is nothing here to heal, and
+    // alarms-with-no-counter is deliberately neither asserted nor thrown on —
+    // [nextAlarmId] already makes that state cost a number rather than an alarm.
+    _alarmIdSeq = await store.loadAlarmIdSeq() ?? 1;
     history = await _loadHistory();
     await _reloadCheckStates();
   }
@@ -195,8 +209,43 @@ class NivaatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  int nextAlarmId() =>
-      alarms.isEmpty ? 1 : alarms.map((a) => a.id).reduce((a, b) => a > b ? a : b) + 1;
+  /// The next alarm id to hand out. Loaded in [_reload], advanced and persisted
+  /// by [upsertAlarm] — never by this getter.
+  int _alarmIdSeq = 1;
+
+  /// The id a NEW alarm would be given (REVIEW #9).
+  ///
+  /// **Pure — asking twice gives the same answer**, which the alarm sheet
+  /// depends on: it mints the id once for the live HH:MM conflict check and
+  /// again for the alarm it saves, and those two disagreeing would check one
+  /// alarm and write another. So the counter advances on SAVE, not here.
+  ///
+  /// It used to be "highest existing + 1", which handed a deleted alarm's
+  /// number to the next one created — and since every id here is
+  /// `block + alarmId`, the new alarm inherited its ring, checks and card: a
+  /// fresh 07:00 could pick up the ring armed for the 06:30 you just deleted.
+  ///
+  /// **One rule: never hand out a number a live alarm already holds.** The
+  /// counter satisfies it on its own in every state this build can produce —
+  /// it is saved before the alarm that spends it, so it is always past every
+  /// stored id.
+  int nextAlarmId() {
+    final used = {for (final a in alarms) a.id};
+    if (_alarmIdSeq <= NivaatIds.maxAlarmId && !used.contains(_alarmIdSeq)) {
+      return _alarmIdSeq;
+    }
+    // Two ways here. Past the ceiling, `ring(10001)` would BE `lateRing(1)`
+    // (REVIEW #21). And a counter standing on a LIVE alarm — storage this build
+    // cannot write, which is what lets [_reload] stay quiet about it — would
+    // otherwise be silent damage: `upsertAlarm` reads a colliding id as an EDIT
+    // and overwrites the alarm already wearing it. A free number always exists,
+    // since N18 caps coexisting alarms at 1440 inside a 9999-wide block.
+    var id = 1;
+    while (used.contains(id)) {
+      id++;
+    }
+    return id;
+  }
 
   /// Returns `false` when [alarm] collides on HH:MM with another alarm
   /// (MESSAGES N18) so callers don't treat a no-op as a successful save.
@@ -219,6 +268,19 @@ class NivaatController extends ChangeNotifier {
       alarms[i] = alarm;
     } else {
       alarms.add(alarm);
+    }
+    // **Burn the id BEFORE the alarm that spends it reaches the disk** (REVIEW
+    // #9). The order is the whole guarantee: interrupted here, one number is
+    // skipped and nothing is lost; the other way round leaves an alarm with no
+    // counter past it, and the next one created overwrites it. Nothing
+    // re-derives the counter afterwards to paper over that (see [_reload]).
+    //
+    // Guarded because most calls here are EDITS (every toggle is one), which
+    // must leave the counter alone. `>=` not `>`: the id being handed out right
+    // now is `_alarmIdSeq` itself.
+    if (alarm.id >= _alarmIdSeq) {
+      _alarmIdSeq = alarm.id + 1;
+      await store.saveAlarmIdSeq(_alarmIdSeq);
     }
     await store.saveAlarms(alarms);
     // Mid-window: limit / Keep checking / add-only weekdays KEEP flying under

@@ -330,6 +330,36 @@ void main() {
         reason: 'once the ring ends, the stale id is swept');
   });
 
+  test('deleting the last location never silences an alarm that is ringing',
+      () async {
+    // REVIEW #3. Losing the location disarms everything — and that path
+    // cancelled unconditionally, twenty lines below the ringing guard the
+    // resync loop already had. Delete your last location while the bedtime
+    // alarm is sounding and the sound stopped.
+    final fake = FakeScheduler();
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    expect(fake.scheduled, isNotEmpty, reason: 'something to disarm');
+
+    fake.scheduled[2500] =
+        DateTime.now().subtract(const Duration(seconds: 30));
+    fake.ringing.add(2500);
+
+    await c.update(const ArunodaySettings()); // the last location, deleted
+
+    expect(fake.scheduled.keys, [2500],
+        reason: 'every future alarm is disarmed, the audible one is not');
+
+    // And it is not immortal — the next resync after it stops sweeps it.
+    fake.ringing.remove(2500);
+    await c.resync();
+    expect(fake.scheduled, isEmpty);
+  });
+
   test('every user-facing time is a whole minute (dawn quantized)', () async {
     final fake = FakeScheduler();
     final c = ArunodayController(store: ArunodayStore(), scheduler: fake);

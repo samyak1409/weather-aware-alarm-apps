@@ -225,7 +225,8 @@ class SkipNotifier {
   // the one that's still worth acting on. Renamed 2026-07-22, id reset to drop
   // the `_v2` (that suffix only existed because Android freezes a channel's
   // importance at creation, and the 2026-07-12 silent→audible switch needed a
-  // fresh id; with no installed base there's nothing to migrate).
+  // fresh id; a channel already on a phone is a clear-data problem, not one
+  // this repo carries — see CLAUDE.md on the no-migration policy).
   //
   // Public (2026-07-31) so `notification_message_test` can lock them: the name
   // and description are user-visible in Android's notification settings — the

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
@@ -74,10 +75,7 @@ class CheckState {
   /// card down if one is up.
   ///
   /// Renamed from `extendedCheckShown` with the one-card model (2026-07-26) —
-  /// the "extended check" card it was named for no longer exists. Cascade state
-  /// is per-occurrence scratch, cleared at the end of every morning, so the
-  /// changed JSON key needs no migration: the worst an upgrade mid-window can
-  /// do is post one card, and its row, a second time.
+  /// the "extended check" card it was named for no longer exists.
   final bool cardShown;
 
   /// The last KNOWN skip reading — kept across no-data retries so the final
@@ -144,14 +142,14 @@ class CheckState {
   factory CheckState.fromJson(Map<String, dynamic> j) => CheckState(
         alarmId: j['alarmId'] as int,
         alarmAt: DateTime.parse(j['alarmAt'] as String),
-        ringScheduled: j['ringScheduled'] as bool? ?? false,
+        ringScheduled: j['ringScheduled'] as bool,
         ringCourtSpeedKmh: (j['ringCourtSpeedKmh'] as num?)?.toDouble(),
         ringRawGustKmh: (j['ringRawGustKmh'] as num?)?.toDouble(),
         ringVolume: (j['ringVolume'] as num?)?.toDouble(),
-        cardShown: j['cardShown'] as bool? ?? false,
+        cardShown: j['cardShown'] as bool,
         skipCourtSpeedKmh: (j['skipCourtSpeedKmh'] as num?)?.toDouble(),
         skipRawGustKmh: (j['skipRawGustKmh'] as num?)?.toDouble(),
-        skipGusty: j['skipGusty'] as bool? ?? false,
+        skipGusty: j['skipGusty'] as bool,
         lastCheckAt: switch (j['lastCheckAt']) {
           final String s => DateTime.parse(s),
           _ => null,
@@ -160,13 +158,14 @@ class CheckState {
           final String s => DateTime.parse(s),
           _ => null,
         },
-        pushSeq: j['pushSeq'] as int? ?? 0,
+        pushSeq: j['pushSeq'] as int,
       );
 }
 
 class NivaatStore {
   static const _courtsKey = 'nivaat.courts';
   static const _alarmsKey = 'nivaat.alarms';
+  static const _alarmIdSeqKey = 'nivaat.alarmIdSeq';
   static const _historyKey = 'nivaat.history';
   static const _statePrefix = 'nivaat.checkstate.';
   static const _soundKey = 'nivaat.sound';
@@ -212,6 +211,22 @@ class NivaatStore {
   Future<void> saveAlarms(List<NivaatAlarm> alarms) =>
       _saveList(_alarmsKey, alarms.map((a) => a.toJson()));
 
+  /// The next alarm id to hand out, or null before the first alarm has ever
+  /// been saved (REVIEW #9). **Null means 1, never "work it out from the
+  /// alarms"** — deriving it is the original bug wearing a recovery hat, since
+  /// ids are `block + alarmId` and a reissued number inherits the old alarm's
+  /// ring, check and card. `NivaatController.upsertAlarm` keeps this ahead of
+  /// every stored id by saving it first.
+  Future<int?> loadAlarmIdSeq() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_alarmIdSeqKey);
+  }
+
+  Future<void> saveAlarmIdSeq(int next) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_alarmIdSeqKey, next);
+  }
+
   Future<List<HistoryRecord>> loadHistory() async {
     final prefs = await SharedPreferences.getInstance();
     return _decodeList(prefs.getString(_historyKey), HistoryRecord.fromJson);
@@ -246,27 +261,69 @@ class NivaatStore {
   /// near half a megabyte — fine for the prefs store, and the writes run in a
   /// background isolate. It is still the reason a future version that wants
   /// years of history wants a real database rather than a bigger blob.
+  ///
+  /// **Surviving the other isolate (REVIEW #7).** One blob, read-modify-write,
+  /// two isolates that genuinely run at once — the app open at 06:00 while the
+  /// AlarmManager wakeup fires is the DESIGNED case, not a corner. Two things
+  /// keep a row from being written straight over:
+  ///
+  /// 1. **[refresh] first**, so the read is of the disk and not of this
+  ///    isolate's cache. Without it the whole hazard needs no concurrency at
+  ///    all: a foreground that loaded prefs at startup rebuilds the log from a
+  ///    snapshot taken before the background check's row existed, and saving it
+  ///    back deletes that row. That was the reported bug — a background `Still
+  ///    checking` losing to a foreground `Cancelled`.
+  /// 2. **Read back and re-apply.** If a concurrent isolate's save landed
+  ///    between our read and our write, our row is simply gone; writing it
+  ///    again on top of the now-fresher list keeps BOTH. This converges rather
+  ///    than livelocking — each retry reads the other side's row and preserves
+  ///    it — and it is bounded, because a row that cannot be re-applied twice
+  ///    is losing to something we cannot outrun anyway.
+  ///
+  /// **This is convergence, not a lock:** SharedPreferences offers none, the
+  /// read-modify-write is still not atomic, and an unlucky interleaving can
+  /// still drop a row. The real answer is a database, not more retries here.
   Future<void> upsertHistory(HistoryRecord record) async {
-    final all = await loadHistory();
-    final i = all.indexWhere((r) =>
+    bool isSamePush(HistoryRecord r) =>
         r.alarmId == record.alarmId &&
         r.at == record.at &&
-        r.pushSeq == record.pushSeq);
-    final rows = [...all];
-    if (i >= 0) {
-      rows[i] = record;
-    } else {
-      rows.insert(0, record);
+        r.pushSeq == record.pushSeq;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await refresh();
+      final all = await loadHistory();
+      final i = all.indexWhere(isSamePush);
+      final rows = [...all];
+      if (i >= 0) {
+        rows[i] = record;
+      } else {
+        rows.insert(0, record);
+      }
+      await _saveList(_historyKey, rows.map((r) => r.toJson()));
+      await refresh();
+      // By KEY, not by content: a foreground/background double-write of the
+      // same push is meant to converge onto one row, so finding the other
+      // side's copy of it is success, not a reason to write again.
+      if ((await loadHistory()).any(isSamePush)) return;
     }
-    await _saveList(_historyKey, rows.map((r) => r.toJson()));
+    // Logged rather than swallowed: this is the log that explains a morning the
+    // alarm didn't ring, so a row lost here is worth a trace even though there
+    // is nothing left to do about it.
+    debugPrint('nivaat history row (alarm ${record.alarmId}, ${record.at}, '
+        'push ${record.pushSeq}) lost to a concurrent write after 3 tries');
   }
 
   /// Drops every history row for [courtId] — used when a court is deleted, so
   /// its whole skip/ring log goes with it. Keyed by court, so this reaches
   /// *every* row for the court, including those from alarms deleted earlier.
+  ///
+  /// [refresh] first for the same reason as [upsertHistory]: this rebuilds the
+  /// whole blob from what it reads, so reading a stale cache would resurrect
+  /// every row a background check has written since. No read-back here — a
+  /// removal that loses the race leaves court-less rows, and
+  /// `NivaatController._loadHistory` already prunes those on every load.
   Future<void> removeHistoryForCourt(String courtId) async {
-    final kept =
-        (await loadHistory()).where((r) => r.courtId != courtId);
+    await refresh();
+    final kept = (await loadHistory()).where((r) => r.courtId != courtId);
     await _saveList(_historyKey, kept.map((r) => r.toJson()));
   }
 

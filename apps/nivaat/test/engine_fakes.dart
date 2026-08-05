@@ -329,6 +329,25 @@ class FailingHistoryStore extends NivaatStore {
       throw Exception('history write failed');
 }
 
+/// Reads the persisted alarm-id counter at the instant the alarm list is
+/// written, which is the only place the two can be compared.
+///
+/// `upsertAlarm` must burn the id BEFORE the alarm that spends it reaches the
+/// disk (REVIEW #9) — interrupted the other way round, an alarm exists with no
+/// counter past it and the next one created overwrites it. In memory both
+/// orders look the same, and nothing re-derives the counter from the alarms
+/// afterwards, so this hook is what holds the ordering.
+class SeqWatchingStore extends NivaatStore {
+  /// The counter on disk each time [saveAlarms] ran, oldest first.
+  final List<int?> seqWhenAlarmsSaved = [];
+
+  @override
+  Future<void> saveAlarms(List<NivaatAlarm> alarms) async {
+    seqWhenAlarmsSaved.add(await loadAlarmIdSeq());
+    return super.saveAlarms(alarms);
+  }
+}
+
 WindSample wind(double rawSpeed, double rawGust) => WindSample(
       rawSpeedKmh: rawSpeed,
       rawGustKmh: rawGust,

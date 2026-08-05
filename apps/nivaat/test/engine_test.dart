@@ -753,6 +753,136 @@ void main() {
       expect(controller.alarms.single.hour, 7);
     });
 
+    test('a deleted alarm never hands its number to the next one', () async {
+      // REVIEW #9. Ids used to be "highest existing + 1", so deleting your
+      // newest alarm gave its number straight back. Every id in this app is
+      // `block + alarmId`, so the new alarm inherited the old one's ring, late
+      // ring, wind check, card and cascade state — leftover work landing on an
+      // alarm that never asked for it.
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      await controller.upsertAlarm(
+          const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
+      await controller.upsertAlarm(
+          const NivaatAlarm(id: 2, hour: 6, minute: 30, courtId: 'c1'));
+      expect(controller.nextAlarmId(), 3);
+
+      await controller.deleteAlarm(2);
+      await controller.lastEvaluation;
+      expect(controller.nextAlarmId(), 3,
+          reason: '2 is spent — deleting it does not make it available again');
+
+      // Deleting ALL of them is the same rule: the counter is not a function
+      // of what happens to be in the list.
+      await controller.deleteAlarm(1);
+      await controller.lastEvaluation;
+      expect(controller.alarms, isEmpty);
+      expect(controller.nextAlarmId(), 3);
+    });
+
+    test('the id counter survives a restart — after a delete', () async {
+      // In memory it is just a variable; the fix is that it is PERSISTED, so a
+      // cold start after a delete does not fall back to "highest + 1". The
+      // delete is the point: without it the counter and "highest + 1" agree,
+      // and a restart proves nothing.
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      await controller.upsertAlarm(
+          const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
+      await controller.deleteAlarm(1);
+      await controller.lastEvaluation;
+
+      final restarted = NivaatController(engine: engine);
+      await restarted.init();
+      expect(restarted.nextAlarmId(), 2, reason: 'read back from the store');
+    });
+
+    test('the counter is burned BEFORE the alarm that spends it', () async {
+      // The ordering IS the fix (REVIEW #9). Nothing re-derives the counter
+      // from the alarm list any more, so if the alarm reached the disk first
+      // and the process died in between, the next alarm created would take a
+      // live alarm's number and overwrite it — along with every `block + id`
+      // notification and cascade slot hanging off that number.
+      //
+      // Asserted on the STORE, not the controller: in memory both orders look
+      // identical, and a crash can only land between the two writes.
+      final store = SeqWatchingStore();
+      await store.saveCourts([court]);
+      final watched = NivaatController(
+        engine: NivaatEngine(
+          store: store,
+          scheduler: ring,
+          api: api,
+          checks: checks,
+          notifier: notifier,
+        ),
+      );
+      await watched.init();
+
+      await watched.upsertAlarm(
+          const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
+      expect(store.seqWhenAlarmsSaved, [2],
+          reason: 'the counter was already past 1 when alarm 1 was written');
+    });
+
+    test('a counter standing on a live alarm never overwrites it', () async {
+      // Storage this build cannot write (the counter is saved first), but it
+      // is one hand-seeded prefs blob away — the screenshot pass writes them,
+      // and the counter is not a model key. What made it worth guarding, and
+      // worth guarding HERE rather than with an assert, is that the damage
+      // was SILENT: `nextAlarmId` would hand back 1, and `upsertAlarm` reads a
+      // colliding id as an edit, so "add alarm" would quietly replace the
+      // 06:00 you already had. A skipped number is the harmless direction.
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarms(const [
+        NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'),
+        NivaatAlarm(id: 2, hour: 6, minute: 30, courtId: 'c1'),
+      ]);
+      final seeded = NivaatController(engine: engine);
+      await seeded.init();
+      expect(await engine.store.loadAlarmIdSeq(), isNull, reason: 'no counter');
+      expect(seeded.nextAlarmId(), 3);
+
+      await seeded.upsertAlarm(
+          NivaatAlarm(id: seeded.nextAlarmId(), hour: 7, minute: 0, courtId: 'c1'));
+      await seeded.lastEvaluation;
+      expect(seeded.alarms.map((a) => a.id), [1, 2, 3]);
+      expect(seeded.alarms.first.hour, 6, reason: 'the 06:00 alarm survived');
+      // And the save writes the counter through, so the state heals itself.
+      expect(await engine.store.loadAlarmIdSeq(), 4);
+    });
+
+    test('past the block ceiling it reuses the smallest FREE id (REVIEW #21)',
+        () async {
+      // A counter that only climbs makes the 9999 ceiling more reachable, not
+      // less — past it, `ring(10001)` would BE `lateRing(1)`. Reuse is the
+      // lesser evil there, but only of a number no live alarm holds.
+      await engine.store.saveCourts([court]);
+      await engine.store.saveAlarmIdSeq(NivaatIds.maxAlarmId + 1);
+      await engine.store.saveAlarms(const [
+        NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'),
+        NivaatAlarm(id: 2, hour: 6, minute: 30, courtId: 'c1'),
+        NivaatAlarm(id: 4, hour: 7, minute: 0, courtId: 'c1'),
+      ]);
+      final full = NivaatController(engine: engine);
+      await full.init();
+      expect(full.nextAlarmId(), 3, reason: 'the gap, not 5 and not 10000');
+      // Still pure: N18 caps coexisting alarms at 1440, so a free number
+      // always exists and finding it never consumes anything.
+      expect(full.nextAlarmId(), 3);
+    });
+
+    test('nextAlarmId is pure — the sheet asks twice and must be told once',
+        () async {
+      // The alarm sheet mints the id for its live HH:MM conflict check and
+      // again for the alarm it saves. If asking advanced the counter those two
+      // would disagree: it would validate one alarm and write a different one.
+      await engine.store.saveCourts([court]);
+      await controller.init();
+      expect(controller.nextAlarmId(), controller.nextAlarmId());
+      expect(controller.nextAlarmId(), 1, reason: 'and nothing was consumed');
+    });
+
     test('toggleAlarm flips enabled; deleteAlarm removes', () async {
       await engine.store.saveCourts([court]);
       await controller.init();
@@ -1532,22 +1662,23 @@ void main() {
     expect(latest['7@${tomorrow.millisecondsSinceEpoch}']!.kind,
         HistoryKind.stillChecking);
 
-    // Rows written before push numbers existed ALL carry 0, so the number
-    // can't break the tie — list order has to, and callers pass newest-first.
-    // Resolving a tie the other way reads a finished old morning as an open
-    // window, and home would promise checking that stopped days ago.
-    final legacy = nivaatLatestRowPerOccurrence([
+    // Equal numbers have to break SOMEWHERE, and this function takes any
+    // iterable — so the rule is list order, and callers pass newest-first.
+    // Resolving a tie the other way reads a finished morning as an open
+    // window, and home would promise checking that already stopped.
+    final tied = nivaatLatestRowPerOccurrence([
       row(0, HistoryKind.outcome),
       row(0, HistoryKind.stillChecking),
     ]);
-    expect(legacy.values.single.kind, HistoryKind.outcome,
+    expect(tied.values.single.kind, HistoryKind.outcome,
         reason: 'newest-first: the outcome row was written last');
   });
 
   test('an off-step volume snaps to the nearest file, ties going louder', () {
-    // volumeForWind only ever returns a step, but a persisted CheckState from
-    // an older build can carry anything — it must still resolve to a shipped
-    // file rather than falling off the end of the ramp.
+    // volumeForWind only ever returns a step, but the resolver takes any
+    // 0-1 double on purpose: retuning the ramp is meant to be a one-line edit
+    // in core plus a render, with no midpoint table here to keep in sync. So
+    // every value must land on a file that ships, not off the end of it.
     final was = nivaatSelectedSound;
     addTearDown(() => nivaatSelectedSound = was);
     nivaatSelectedSound = null;

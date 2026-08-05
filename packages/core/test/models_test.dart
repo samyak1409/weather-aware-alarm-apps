@@ -71,13 +71,20 @@ void main() {
       expect(back.locations.single.name, 'A');
     });
 
-    test('fromJson tolerates a bare/empty map (defaults)', () {
-      final s = ArunodaySettings.fromJson(const {});
+    test('an unsaved install gets the defaults from the CONSTRUCTOR', () {
+      // Not from `fromJson`, which no longer fills in missing keys: the only
+      // caller is `ArunodayStore.load`, and an absent blob returns
+      // `const ArunodaySettings()` without parsing anything (locked in
+      // `repos_test`). A half-written map is a bug worth a loud cast error,
+      // not a settings screen quietly showing someone else's defaults.
+      const s = ArunodaySettings();
       expect(s.locations, isEmpty);
       expect(s.wakeOffsetMinutes, 0);
       expect(s.bedtimeOffsetMinutes, isNull);
       expect(s.wakeEnabled, isTrue);
       expect(s.bedtimeDelayedUntil, isNull);
+      expect(() => ArunodaySettings.fromJson(const {}), throwsA(anything),
+          reason: 'no migration: the parser reads the shape this build writes');
     });
   });
 
@@ -124,67 +131,40 @@ void main() {
       expect(back.retryMinutesAfter, 60);
     });
 
-    test('fromJson applies defaults for missing optional fields', () {
-      final a = NivaatAlarm.fromJson(
-          {'id': 9, 'hour': 6, 'minute': 0, 'courtId': 'c'});
+    test('an alarm made without settings gets the CONSTRUCTOR defaults', () {
+      // `fromJson` no longer supplies them — see the ArunodaySettings note
+      // above; every alarm on disk was written by this build's `toJson`, which
+      // always writes all eight keys.
+      const a = NivaatAlarm(id: 9, hour: 6, minute: 0, courtId: 'c');
       expect(a.courtSpeedLimitKmh, WindThresholds.defaultLimit);
       expect(a.retryMinutesAfter, CheckCascade.retryCapMinutesAfter);
       expect(a.weekdays, const {1, 2, 3, 4, 5, 6, 7});
       expect(a.enabled, isTrue);
+      expect(
+        () => NivaatAlarm.fromJson(
+            {'id': 9, 'hour': 6, 'minute': 0, 'courtId': 'c'}),
+        throwsA(anything),
+        reason: 'no migration: the parser reads the shape this build writes',
+      );
     });
 
-    test('fromJson clamps a legacy out-of-range speed limit into 4-6', () {
-      // Settings 1-3 were dropped with the gust floor (2026-07-14); an alarm
-      // saved at "1" migrates up to the new minimum rather than crashing the
-      // dropdown with a value it no longer offers.
-      final legacy = NivaatAlarm.fromJson(
-          {'id': 1, 'hour': 6, 'minute': 0, 'courtId': 'c', 'courtSpeedLimitKmh': 1});
-      expect(legacy.courtSpeedLimitKmh, 4);
-      final high = NivaatAlarm.fromJson(
-          {'id': 2, 'hour': 6, 'minute': 0, 'courtId': 'c', 'courtSpeedLimitKmh': 9});
-      expect(high.courtSpeedLimitKmh, 6);
-    });
-
-    test('retryMinutesAfter round-trips and snaps unknown values onto 1/30/60',
-        () {
+    test('retryMinutesAfter round-trips, and the options stay ascending', () {
       final short = alarm.copyWith(retryMinutesAfter: 1);
       expect(short.retryCapAt(DateTime(2026, 7, 12, 6, 0)),
           DateTime(2026, 7, 12, 6, 1));
-      final back = NivaatAlarm.fromJson(short.toJson());
-      expect(back.retryMinutesAfter, 1);
+      expect(NivaatAlarm.fromJson(short.toJson()).retryMinutesAfter, 1);
+      expect(
+          NivaatAlarm.fromJson(alarm.copyWith(retryMinutesAfter: 60).toJson())
+              .retryMinutesAfter,
+          60);
 
-      final hour = NivaatAlarm.fromJson({
-        'id': 1,
-        'hour': 6,
-        'minute': 0,
-        'courtId': 'c',
-        'retryMinutesAfter': 60,
-      });
-      expect(hour.retryMinutesAfter, 60);
-
-      // clampRetryMinutes walks the options in order and keeps the FIRST
-      // nearest, so "ties prefer the lower" only holds while the list is
-      // ascending. Reorder it and 45 would snap to 60.
+      // The editor renders one segment per option in LIST order, so this is
+      // what puts "1m 30m 60m" on the screen in that order — reorder the list
+      // and the control reorders with it.
       expect(
         CheckCascade.retryMinutesOptions,
         orderedEquals(List.of(CheckCascade.retryMinutesOptions)..sort()),
         reason: 'retryMinutesOptions must stay ascending',
-      );
-
-      // Nearest option; ties prefer the lower (45 → 30). Boundary only —
-      // fromJson (and the editor) clamp; copyWith does not.
-      expect(NivaatAlarm.clampRetryMinutes(45), 30);
-      expect(NivaatAlarm.clampRetryMinutes(2), 1);
-      expect(NivaatAlarm.clampRetryMinutes(50), 60);
-      expect(
-        NivaatAlarm.fromJson({
-          'id': 1,
-          'hour': 6,
-          'minute': 0,
-          'courtId': 'c',
-          'retryMinutesAfter': 45,
-        }).retryMinutesAfter,
-        30,
       );
     });
   });
@@ -235,30 +215,28 @@ void main() {
       expect(back.watchedUntil, DateTime(2026, 7, 13, 6, 30));
     });
 
-    test('rows written before kinds existed are read the old way', () {
-      // A deadline meant "heads-up snapshot", anything else meant "final".
-      final snapshot = HistoryRecord(
+    test('a row is read the way it was written, or not at all', () {
+      // No migration: `kind` and `pushSeq` used to be inferred when absent, and
+      // that inference is gone with the builds that needed it. A row missing
+      // either is corrupt, and the two are worth failing loudly over — the
+      // guessed `kind` decided whether a row read as a promise or a verdict,
+      // and a defaulted `pushSeq` of 0 collides with the first real push, which
+      // is `upsertHistory`'s dedup key.
+      final row = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
         kind: HistoryKind.stillChecking,
+        pushSeq: 2,
         watchedUntil: DateTime(2026, 7, 13, 6, 30),
         outcome: CheckOutcome.skippedWindy,
-      ).toJson()
-        ..remove('kind')
-        ..remove('pushSeq');
-      expect(HistoryRecord.fromJson(snapshot).kind, HistoryKind.stillChecking);
-      expect(HistoryRecord.fromJson(snapshot).pushSeq, 0);
-
-      final finalRow = HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: DateTime(2026, 7, 13, 6, 0),
-        outcome: CheckOutcome.rang,
-        volume: 1,
-      ).toJson()
-        ..remove('kind');
-      expect(HistoryRecord.fromJson(finalRow).kind, HistoryKind.outcome);
+      ).toJson();
+      expect(HistoryRecord.fromJson(row).kind, HistoryKind.stillChecking);
+      expect(HistoryRecord.fromJson(row).pushSeq, 2);
+      expect(() => HistoryRecord.fromJson({...row}..remove('kind')),
+          throwsA(anything));
+      expect(() => HistoryRecord.fromJson({...row}..remove('pushSeq')),
+          throwsA(anything));
     });
 
     test('a deadline can only sit on a still-checking row', () {
@@ -329,9 +307,12 @@ void main() {
       expect(r.windGustSummary, 'wind 3 (≤4) · gusts 16 (≤15) km/h');
     });
 
-    test('windGustSummary degrades for old rows and no-data skips', () {
-      // Pre-limits row: values but no stored caps.
-      final old = HistoryRecord(
+    test('windGustSummary degrades without stored caps, and on no-data', () {
+      // Readings but no caps. The engine always writes both, so this is the
+      // getter staying TOTAL over its own nullable fields rather than a shape
+      // anything produces — the same call as A6/A7's `—` clocks: keep the
+      // guard against a force-unwrap, drop the story that it is for old rows.
+      final noCaps = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
         at: DateTime(2026, 7, 13, 6, 0),
@@ -339,7 +320,7 @@ void main() {
         courtSpeedKmh: 7.4,
         rawGustKmh: 14.0,
       );
-      expect(old.windGustSummary, 'wind 7 · gusts 14 km/h');
+      expect(noCaps.windGustSummary, 'wind 7 · gusts 14 km/h');
       // No-data skip carries caps but nothing was measured.
       final noData = HistoryRecord(
         alarmId: 7,
@@ -379,13 +360,20 @@ void main() {
     expect(back.skipGusty, isTrue);
     expect(back.lastCheckAt, DateTime(2026, 7, 12, 22, 0));
     expect(back.lastAttemptAt, DateTime(2026, 7, 13, 6, 29));
-    // Old rows without the new keys default cleanly.
-    final bare = CheckState.fromJson(
-        {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'});
-    expect(bare.ringScheduled, isFalse);
-    expect(bare.ringCourtSpeedKmh, isNull);
-    expect(bare.cardShown, isFalse);
-    expect(bare.skipCourtSpeedKmh, isNull);
-    expect(bare.lastCheckAt, isNull);
+
+    // A fresh occurrence's state comes from the CONSTRUCTOR, never from a
+    // half-written blob: `fromJson` no longer fills in absent flags (no
+    // migration), and `ringScheduled`/`cardShown` defaulting to false is
+    // exactly how a morning would re-arm a ring or re-post a card it had
+    // already done once.
+    final fresh = CheckState(alarmId: 1, alarmAt: DateTime(2026, 7, 13, 6, 0));
+    expect(fresh.ringScheduled, isFalse);
+    expect(fresh.cardShown, isFalse);
+    expect(fresh.pushSeq, 0);
+    expect(
+        () => CheckState.fromJson(
+            {'alarmId': 1, 'alarmAt': '2026-07-13T06:00:00.000'}),
+        throwsA(anything),
+        reason: 'no migration: the parser reads the shape this build writes');
   });
 }

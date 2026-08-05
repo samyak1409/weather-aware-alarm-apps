@@ -177,11 +177,15 @@ bool nivaatEditAbandonsInFlight(
 /// [HistoryRecord.pushSeq] (2026-07-26).
 ///
 /// A tie keeps the row seen FIRST, and callers pass history newest-first (the
-/// order [NivaatStore.loadHistory] returns), so the newer row wins. Two live
-/// rows can't tie — `upsertHistory` converges same-numbered writes onto one —
-/// but every row written before push numbers existed carries 0, so a finished
-/// morning from an older build would otherwise resolve to its still-checking
-/// row and read as an open window.
+/// order [NivaatStore.loadHistory] returns), so the newer row wins. **Nothing
+/// the store can hand over actually ties** — `upsertHistory` keys on
+/// `alarmId + at + pushSeq` and converges same-numbered writes onto one row —
+/// so this is a determinism rule for a function that takes any iterable, not a
+/// case with a story behind it. (It used to have one: rows predating push
+/// numbers all carried 0. Those can no longer be read at all — `fromJson`
+/// requires `pushSeq` — so the rule outlived its reason and is kept for the
+/// obvious one.) Resolving a tie the other way reads a finished morning as an
+/// open window, and home promises checking that already stopped.
 Map<String, HistoryRecord> nivaatLatestRowPerOccurrence(
   Iterable<HistoryRecord> history,
 ) {

@@ -34,6 +34,13 @@ Seed prefs, then launch. **Both platforms store Flutter prefs under the
 `flutter.` key prefix.** iOS: write the container plist while the simulator
 is shut down.
 
+**A seeded blob must carry every key the model writes** (2026-08-05). The
+parsers supply no defaults for keys `toJson` always writes — this repo runs no
+data migrations, so a hand-written `arunoday.settings` / `nivaat.alarms` with
+fields left out now throws a cast error on load instead of quietly filling
+them in. Easiest safe route: build the object in a throwaway test, print its
+`toJson()`, and seed that.
+
 For Nivaat screenshots: leave `nivaat.notifPermissionAsked` **false** (harness
 skips the prompt — marking it asked without a grant would make the home
 nudge appear in a *non*-harness build). On Android, `adb shell pm grant …

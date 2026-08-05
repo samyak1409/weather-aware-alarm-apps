@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -222,5 +224,109 @@ void main() {
       expect(h.map((r) => r.courtId), ['c2'],
           reason: 'every c1 row gone, incl. the orphaned-alarm one; c2 kept');
     });
+
+    group('a write survives the other isolate (REVIEW #7)', () {
+      // History is ONE JSON blob, read-modify-written, and this app's two
+      // isolates genuinely run at once — the app open at 06:00 while the
+      // AlarmManager wakeup fires is the DESIGNED case, not a corner. Both
+      // stores below write through to the real prefs, so what is asserted is
+      // what a second isolate would actually find on disk.
+      final at = DateTime(2026, 7, 13, 6, 0);
+      HistoryRecord row(int alarmId) => HistoryRecord(
+            alarmId: alarmId,
+            courtId: 'c1',
+            at: at,
+            outcome: CheckOutcome.rang,
+          );
+
+      test('a stale prefs cache cannot delete the row it never saw', () async {
+        // The reported bug, and it needs no concurrency at all: a foreground
+        // that loaded prefs at startup holds a snapshot from before the
+        // background check's row existed, and rebuilding the blob from that
+        // snapshot deletes it. "A background check writes `Still checking`,
+        // you toggle the alarm off, and the row is gone."
+        await NivaatStore().upsertHistory(row(1)); // the background check
+        final stale = _StaleCacheStore(const []); // opened before that row
+        await stale.upsertHistory(row(2)); // the toggle-off
+
+        expect(
+          (await NivaatStore().loadHistory()).map((r) => r.alarmId).toSet(),
+          {1, 2},
+          reason: 'the row we could not see must survive our write',
+        );
+      });
+
+      test('a save landing on top of ours is noticed and written through',
+          () async {
+        // The concurrent half. Once our save has landed, another isolate
+        // saving a blob built before it wipes our row outright — no reload can
+        // prevent that, because the damage happens after we have read. Reading
+        // back and re-applying converges instead of losing it.
+        final intruder = row(9);
+        final store = _ClobberedOnceStore([intruder]);
+        await store.upsertHistory(row(2));
+
+        expect(store.struck, isTrue,
+            reason: 'without a read-back there is no window to strike in, and '
+                'this whole test would pass by doing nothing');
+        final disk = await NivaatStore().loadHistory();
+        expect(disk.map((r) => r.alarmId).toSet(), {2, 9},
+            reason: 'ours came back, and theirs — which proves the competing '
+                'write really did land on the same blob');
+      });
+    });
   });
+}
+
+/// A store whose prefs cache is a SNAPSHOT until something reloads it, which
+/// is what SharedPreferences really does per isolate. Every other test shares
+/// one cache, so without this a reload-before-read is indistinguishable from
+/// no reload at all.
+class _StaleCacheStore extends NivaatStore {
+  _StaleCacheStore(this._cached);
+
+  List<HistoryRecord>? _cached;
+
+  @override
+  Future<void> refresh() async {
+    await super.refresh();
+    _cached = null; // the reload drops the snapshot; the next read hits disk
+  }
+
+  @override
+  Future<List<HistoryRecord>> loadHistory() async =>
+      _cached ?? super.loadHistory();
+}
+
+/// The other isolate, saving a blob built before our row existed — landing it
+/// the moment ours reaches disk, which is the interleaving no reload can close.
+///
+/// The trigger is the STATE of the log, not a count of calls: it strikes the
+/// first time it can see our own write, whenever that happens. So a
+/// `upsertHistory` that never re-reads after saving never gives it a chance to
+/// fire, and `struck` stays false — which is the assertion above.
+class _ClobberedOnceStore extends NivaatStore {
+  _ClobberedOnceStore(this.otherIsolateRows);
+
+  final List<HistoryRecord> otherIsolateRows;
+  bool struck = false;
+  int _before = -1;
+
+  @override
+  Future<void> refresh() async {
+    await super.refresh();
+    if (struck) return;
+    final rows = await super.loadHistory();
+    if (_before < 0) {
+      _before = rows.length;
+      return;
+    }
+    if (rows.length <= _before) return; // our save has not landed yet
+    struck = true;
+    // Written raw rather than through upsertHistory, because that is what the
+    // other isolate does: it saves its OWN list, and ours is simply not in it.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('nivaat.history',
+        jsonEncode([for (final r in otherIsolateRows) r.toJson()]));
+  }
 }

@@ -15,15 +15,13 @@
 /// One card per morning (2026-07-26): it posts at T as "Still checking" and
 /// is rewritten in place to "Skipped" / "Cancelled" as the morning resolves,
 /// so the old 50000 "skipped" block went away. 50000 is now [NivaatIds.nextRing]
-/// — a deliberate reuse of a freed number, not an oversight. The one thing it
-/// could theoretically meet is a skip card orphaned by an upgrade from before
-/// 2026-07-26 (a ring's Android notification id IS its alarm id, so they share
-/// a namespace); that block has had no installed base at any point, which is
-/// the same reason its removal needed no renumbering.
+/// — a deliberate reuse of a freed number, not an oversight. Nothing sat above
+/// it, so nothing renumbered, and a card already posted under the old meaning
+/// is not a case this repo carries (see CLAUDE.md on the no-migration policy).
 ///
 /// **A block's width must exceed the largest index it can ever hold** (see
-/// CLAUDE.md). The index here is an alarm id from `nextAlarmId()`, which
-/// creeps upward across the app's lifetime, so the blocks are 10000 wide
+/// CLAUDE.md). The index here is an alarm id from `nextAlarmId()`, a PERSISTED
+/// counter that only ever climbs (REVIEW #9), so the blocks are 10000 wide
 /// (Arunoday's are 1000 — its index is a bounded 0..6 day-slot, a different
 /// domain and so a different answer to the same rule).
 ///
@@ -39,6 +37,10 @@ class NivaatIds {
   /// The largest alarm id the blocks can hold without touching. Asserted by
   /// `ids_test.dart`; far beyond anything `nextAlarmId()` can reach in
   /// practice (it hands out 1, 2, 3, …).
+  ///
+  /// It is also a real ceiling, not just a bound: `NivaatController.nextAlarmId`
+  /// stops at this number and falls back to the smallest id no live alarm
+  /// holds, because the counter behind it only climbs (REVIEW #9 · #21).
   static const int maxAlarmId = 9999;
 
   static const int ringBlock = 10000;

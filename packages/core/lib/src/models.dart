@@ -125,16 +125,16 @@ class ArunodaySettings {
 
   factory ArunodaySettings.fromJson(Map<String, dynamic> j) =>
       ArunodaySettings(
-        locations: (j['locations'] as List? ?? const [])
+        locations: (j['locations'] as List)
             .cast<Map<String, dynamic>>()
             .map(SavedLocation.fromJson)
             .toList(),
         activeLocationId: j['activeLocationId'] as String?,
-        wakeOffsetMinutes: j['wakeOffsetMinutes'] as int? ?? 0,
+        wakeOffsetMinutes: j['wakeOffsetMinutes'] as int,
         bedtimeOffsetMinutes: j['bedtimeOffsetMinutes'] as int?,
-        wakeEnabled: j['wakeEnabled'] as bool? ?? true,
-        bedtimeEnabled: j['bedtimeEnabled'] as bool? ?? true,
-        oneTimeExtraMinutes: j['oneTimeExtraMinutes'] as int? ?? 0,
+        wakeEnabled: j['wakeEnabled'] as bool,
+        bedtimeEnabled: j['bedtimeEnabled'] as bool,
+        oneTimeExtraMinutes: j['oneTimeExtraMinutes'] as int,
         oneTimeExtraDate: j['oneTimeExtraDate'] as String?,
         bedtimeDelayedUntil: j['bedtimeDelayedUntil'] == null
             ? null
@@ -225,38 +225,11 @@ class NivaatAlarm {
         hour: j['hour'] as int,
         minute: j['minute'] as int,
         courtId: j['courtId'] as String,
-        // Clamp into the offered range: alarms saved with the old 1-3 settings
-        // (dropped 2026-07-14 with the gust floor) migrate up to the new minimum
-        // instead of feeding the dropdown a value it no longer lists.
-        courtSpeedLimitKmh:
-            ((j['courtSpeedLimitKmh'] as int?) ?? WindThresholds.defaultLimit)
-                .clamp(WindThresholds.minLimit, WindThresholds.maxLimit),
-        // Missing key → default 30 (alarms saved before per-alarm windows).
-        // Unknown values snap to the nearest offered option.
-        retryMinutesAfter: clampRetryMinutes(
-          (j['retryMinutesAfter'] as int?) ??
-              CheckCascade.retryCapMinutesAfter,
-        ),
-        weekdays: (j['weekdays'] as List? ?? const [1, 2, 3, 4, 5, 6, 7])
-            .cast<int>()
-            .toSet(),
-        enabled: j['enabled'] as bool? ?? true,
+        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int,
+        retryMinutesAfter: j['retryMinutesAfter'] as int,
+        weekdays: (j['weekdays'] as List).cast<int>().toSet(),
+        enabled: j['enabled'] as bool,
       );
-
-  /// Snap [raw] onto [CheckCascade.retryMinutesOptions] (nearest; ties → lower).
-  static int clampRetryMinutes(int raw) {
-    final options = CheckCascade.retryMinutesOptions;
-    var best = options.first;
-    var bestDist = (raw - best).abs();
-    for (final o in options.skip(1)) {
-      final d = (raw - o).abs();
-      if (d < bestDist) {
-        best = o;
-        bestDist = d;
-      }
-    }
-    return best;
-  }
 }
 
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
@@ -401,18 +374,11 @@ class HistoryRecord {
 
   factory HistoryRecord.fromJson(Map<String, dynamic> j) => HistoryRecord(
         alarmId: j['alarmId'] as int,
-        courtId: j['courtId'] as String? ?? '',
+        courtId: j['courtId'] as String,
         at: DateTime.parse(j['at'] as String),
         outcome: CheckOutcome.values.byName(j['outcome'] as String),
-        // Rows written before kinds existed are told apart the old way — a
-        // deadline meant it was the heads-up snapshot, anything else final.
-        kind: switch (j['kind']) {
-          final String s => HistoryKind.values.byName(s),
-          _ => j['watchedUntil'] == null
-              ? HistoryKind.outcome
-              : HistoryKind.stillChecking,
-        },
-        pushSeq: j['pushSeq'] as int? ?? 0,
+        kind: HistoryKind.values.byName(j['kind'] as String),
+        pushSeq: j['pushSeq'] as int,
         checkedAt: switch (j['checkedAt']) {
           final String s => DateTime.parse(s),
           _ => null,

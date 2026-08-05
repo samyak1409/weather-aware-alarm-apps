@@ -294,7 +294,7 @@ class ArunodayController extends ChangeNotifier {
     final loc = activeLocation;
     if (loc == null) {
       plan = null;
-      await _cancelAll();
+      await _cancelExcept(const {});
       return;
     }
     // Auto bedtime anchors to pure dawn (offset 0): the wake offset moves
@@ -360,15 +360,7 @@ class ArunodayController extends ChangeNotifier {
       );
     }
 
-    final existing = await scheduler.scheduledIds();
-    for (final id in existing) {
-      // Never cancel a ringing alarm: its moment is in the past so it can't
-      // be in `wanted`, and cancelling silences it — opening the app during
-      // a ring must not stop the ring.
-      if (!wanted.containsKey(id) && !await scheduler.isRinging(id)) {
-        await scheduler.cancel(id);
-      }
-    }
+    await _cancelExcept(wanted.keys.toSet());
     for (final e in wanted.entries) {
       // Arunoday records nothing about whether an alarm is armed, so unlike
       // Nivaat it has no claim to withhold — but a failure still means no
@@ -393,8 +385,20 @@ class ArunodayController extends ChangeNotifier {
     }
   }
 
-  Future<void> _cancelAll() async {
+  /// Cancels every armed alarm except the ids in [keep] — and except one that
+  /// is **sounding right now**.
+  ///
+  /// A ringing alarm's moment is already past, so it can never be in [keep],
+  /// and cancelling it silences it mid-ring. That guard used to live only in
+  /// the resync loop; the "no location left" path twenty lines below cancelled
+  /// unconditionally, so deleting your last location while the bedtime alarm
+  /// was sounding stopped the sound (REVIEW #3). Both paths are this one method
+  /// now, which is the actual fix — a second copy of the guard would just be a
+  /// second thing to forget.
+  Future<void> _cancelExcept(Set<int> keep) async {
     for (final id in await scheduler.scheduledIds()) {
+      if (keep.contains(id)) continue;
+      if (await scheduler.isRinging(id)) continue;
       await scheduler.cancel(id);
     }
   }
