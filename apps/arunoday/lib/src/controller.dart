@@ -25,14 +25,6 @@ class ArunodayController extends ChangeNotifier {
   /// drift apart.
   static const int windowDays = ArunodayIds.slots;
 
-  /// The calendar day [i] days after [now]. A pure calendar step, NOT
-  /// `now.add(Duration(days: i))`: on a DST fall-back day adding 24h can land
-  /// back on the same calendar date, and two window slots resolving to one
-  /// date would then claim one id — silently dropping a day's alarm.
-  /// Only the y/m/d of this value is ever read (dawn math is date-only).
-  static DateTime _dayAhead(DateTime now, int i) =>
-      DateTime(now.year, now.month, now.day + i);
-
   ArunodaySettings settings = const ArunodaySettings();
   SleepPlanResult? plan;
   bool loaded = false;
@@ -138,25 +130,53 @@ class ArunodayController extends ChangeNotifier {
     return base;
   }
 
-  /// The next wake alarm moment strictly after now.
-  DateTime? get nextWake {
-    final now = DateTime.now();
+  /// The first moment [on] produces in the window strictly after [now],
+  /// stepping by [calendarDay] like the resync that arms these (REVIEW #13).
+  /// **One walk for both callers**, so the countdown and "+2h tomorrow" can
+  /// never disagree about which morning is next.
+  DateTime? _firstFuture(DateTime now, DateTime? Function(DateTime) on) {
     for (var i = 0; i <= windowDays; i++) {
-      final w = wakeOn(now.add(Duration(days: i)));
+      final w = on(calendarDay(now, i));
       if (w != null && w.isAfter(now)) return w;
     }
     return null;
   }
+
+  /// The next wake alarm moment strictly after [now]. `now` is a parameter for
+  /// the same reason [nextDailyBedtime]'s is — it is the only way to pin this
+  /// to a clock-change date.
+  @visibleForTesting
+  DateTime? nextWakeAt(DateTime now) => _firstFuture(now, wakeOn);
+
+  /// The next wake alarm moment strictly after now.
+  DateTime? get nextWake => nextWakeAt(DateTime.now());
+
+  /// The bedtime moments the window wants at [now] — one per calendar
+  /// **date**, each at the bedtime **clock** time on it (REVIEW #11).
+  ///
+  /// Both steps are calendar steps; the second is the one that bit, a line
+  /// after the day had been chosen correctly. Takes `now` because the arming
+  /// loop reads the clock, and this arithmetic is worth pinning to a
+  /// transition date rather than to whatever week the tests run in — so **the
+  /// arming loop must stay its only caller**, or the pin stops covering what
+  /// actually gets armed.
+  @visibleForTesting
+  static List<DateTime> bedtimeWindowAt(DateTime now, int bedMinutes) => [
+        for (var i = 0; i < windowDays; i++)
+          clockTimeOn(calendarDay(now, i), bedMinutes)
+      ];
 
   /// Next daily bedtime occurrence strictly after now (ignores AGAIN).
   @visibleForTesting
   DateTime? nextDailyBedtime(DateTime now) {
     final bed = bedtimeMinutes;
     if (bed == null) return null;
-    var s = DateTime(now.year, now.month, now.day)
-        .add(Duration(minutes: bed.round()));
-    while (!s.isAfter(now)) {
-      s = s.add(const Duration(days: 1));
+    // Both halves are clock arithmetic (REVIEW #14): the same time of day, on
+    // today's date and then on the next DATE. Rolling forward 24 elapsed hours
+    // aimed a 00:15 bedtime at 23:15 the same evening on a fall-back day.
+    var s = clockTimeOn(now, bed.round());
+    for (var d = 1; !s.isAfter(now); d++) {
+      s = clockTimeOn(calendarDay(now, d), bed.round());
     }
     return s;
   }
@@ -184,10 +204,12 @@ class ArunodayController extends ChangeNotifier {
     DateTime? daily;
     if (w != null && bed != null) {
       // The bedtime occurrence that pairs with this wake: the latest one
-      // strictly before it.
-      daily = DateTime(w.year, w.month, w.day)
-          .add(Duration(minutes: bed.round()));
-      if (!daily.isBefore(w)) daily = daily.subtract(const Duration(days: 1));
+      // strictly before it — clock time on a date, stepped back by date, the
+      // same pair of rules as [nextDailyBedtime] (REVIEW #13).
+      daily = clockTimeOn(w, bed.round());
+      if (!daily.isBefore(w)) {
+        daily = clockTimeOn(calendarDay(w, -1), bed.round());
+      }
     }
     final now = DateTime.now();
     final d = settings.bedtimeDelayedUntil;
@@ -214,10 +236,23 @@ class ArunodayController extends ChangeNotifier {
   static DateTime _floorToMinute(DateTime t) =>
       DateTime(t.year, t.month, t.day, t.hour, t.minute);
 
+  /// Loads settings, **shows the screen, and only then arms anything**
+  /// (REVIEW #15). Home renders nothing while `!loaded`, so arming first put
+  /// every plugin call between the user and their app: one throw and neither
+  /// `loaded` nor the notify was reached — a black screen, and `main` launches
+  /// this unawaited, so the only trace was a console line.
+  ///
+  /// **What moves ahead of the screen is only what cannot fail.**
+  /// [_recomputePlan] goes first because home reads `plan` for the bedtime
+  /// clock; without it the first frame prints `—` and fills it in a moment
+  /// later, trading a black screen for a flicker. It touches no plugin, so it
+  /// cannot be the throw this is all about.
   Future<void> init() async {
     settings = await store.load();
-    await _recomputeAndResync();
+    _recomputePlan();
     loaded = true;
+    notifyListeners();
+    await _armWindow();
     notifyListeners();
   }
 
@@ -239,19 +274,14 @@ class ArunodayController extends ChangeNotifier {
   /// Bedtime-ritual action: "tomorrow only, wake N minutes later".
   /// Applies to the next upcoming wake; auto-clears once it has passed.
   Future<void> setOneTimeExtra(int minutes) async {
-    final now = DateTime.now();
-    DateTime? nextBase;
-    for (var i = 0; i <= windowDays; i++) {
-      final w = baseWakeOn(now.add(Duration(days: i)));
-      if (w != null && w.isAfter(now)) {
-        nextBase = w;
-        break;
-      }
-    }
+    // Shares [nextWakeAt]'s walk (REVIEW #13) — and not display-only here:
+    // this stamps `oneTimeExtraDate`, so a skipped date lands "+2h tomorrow"
+    // on the wrong morning and leaves the intended one at its normal time.
+    final nextBase = _firstFuture(DateTime.now(), baseWakeOn);
     if (nextBase == null) return;
     await update(settings.copyWith(
       oneTimeExtraMinutes: minutes,
-      oneTimeExtraDate: () => minutes == 0 ? null : _dateKey(nextBase!),
+      oneTimeExtraDate: () => minutes == 0 ? null : _dateKey(nextBase),
     ));
   }
 
@@ -289,29 +319,54 @@ class ArunodayController extends ChangeNotifier {
   }
 
   Future<void> _recomputeAndResync() async {
+    _recomputePlan();
+    await _armWindow();
+  }
+
+  /// The half that touches nothing outside this isolate — the sleep plan and
+  /// the expired one-timers — so [init] can run it before the screen appears
+  /// (REVIEW #15).
+  void _recomputePlan() {
     sound.selectedSoundPath = settings.soundPath;
     _clearExpiredOneTimers();
     final loc = activeLocation;
+    // Auto bedtime anchors to pure dawn (offset 0): the wake offset moves
+    // only the wake alarm, never the bedtime (user decision 2026-07-12).
+    plan = loc == null
+        ? null
+        : SleepPlan.forLocation(
+            year: DateTime.now().year,
+            latDeg: loc.lat,
+            lonDeg: loc.lon,
+            wakeOffsetMinutes: 0,
+          );
+  }
+
+  /// The half that reaches for the alarm plugin. **Soft-fails** on [Exception]
+  /// like Nivaat's `resync` (REVIEW #15) — a hiccup must cost the alarms it
+  /// could not arm, never the app, and every resync rebuilds the whole window
+  /// from scratch so a failure is not sticky. `Error`s still propagate.
+  /// Reads `plan` via [bedtimeMinutes], so [_recomputePlan] runs first.
+  Future<void> _armWindow() async {
+    try {
+      await _arm();
+    } on Exception catch (e, st) {
+      debugPrint('arunoday resync failed (non-fatal): $e\n$st');
+    }
+  }
+
+  Future<void> _arm() async {
+    final loc = activeLocation;
     if (loc == null) {
-      plan = null;
       await _cancelExcept(const {});
       return;
     }
-    // Auto bedtime anchors to pure dawn (offset 0): the wake offset moves
-    // only the wake alarm, never the bedtime (user decision 2026-07-12).
-    plan = SleepPlan.forLocation(
-      year: DateTime.now().year,
-      latDeg: loc.lat,
-      lonDeg: loc.lon,
-      wakeOffsetMinutes: 0,
-    );
-
     final now = DateTime.now();
     final wanted = <int, ({DateTime at, String title, String body})>{};
 
     if (settings.wakeEnabled) {
       for (var i = 0; i < windowDays; i++) {
-        final day = _dayAhead(now, i);
+        final day = calendarDay(now, i);
         final wake = wakeOn(day);
         if (wake != null && wake.isAfter(now)) {
           // "First light" is only honest when the wake IS the dawn.
@@ -337,12 +392,10 @@ class ArunodayController extends ChangeNotifier {
 
     final bed = bedtimeMinutes;
     if (settings.bedtimeEnabled && bed != null) {
-      for (var i = 0; i < windowDays; i++) {
-        final day = _dayAhead(now, i);
-        final at = DateTime(day.year, day.month, day.day)
-            .add(Duration(minutes: bed.round()));
+      for (final at in bedtimeWindowAt(now, bed.round())) {
         if (at.isAfter(now) && at != reRing) {
-          wanted[ArunodayIds.bedtime(day)] = (
+          // `bedtime()` reads only the date, which `at` still carries.
+          wanted[ArunodayIds.bedtime(at)] = (
             at: at,
             title: kArunodayBedtimeTitle,
             body: kArunodayBedtimeBody,

@@ -81,6 +81,13 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
   bool _locating = false;
   String? _error;
 
+  /// Which search the sheet is showing, counted up on every keystroke that
+  /// changes what is being asked (REVIEW #17). The debounce cancels a pending
+  /// *timer*, never a request already sent, and nothing tied a reply to the
+  /// query that asked for it — a slow `To` could land after a fast `Tokyo`.
+  /// Every reply checks it is still the newest before touching the screen.
+  int _queryEpoch = 0;
+
   @override
   void dispose() {
     _debounce?.cancel();
@@ -89,8 +96,16 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
 
   void _onQuery(String q) {
     _debounce?.cancel();
+    // Bumped BEFORE the early return too: clearing the field must also orphan
+    // whatever is in flight, or deleting your query repopulates the list.
+    final epoch = ++_queryEpoch;
     if (q.trim().length < 2) {
-      setState(() => _results = const []);
+      // `_loading` too: the request this orphans will skip its own `finally`,
+      // and the bar would spin with nothing behind it.
+      setState(() {
+        _results = const [];
+        _loading = false;
+      });
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 400), () async {
@@ -100,36 +115,53 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
       });
       try {
         final results = await widget.api.geocode(q.trim());
-        if (mounted) setState(() => _results = results);
+        if (mounted && epoch == _queryEpoch) setState(() => _results = results);
       } catch (e, st) {
         reportLocationSearchFailure(
           e,
           (msg) {
-            if (mounted) setState(() => _error = msg);
+            // A stale query's failure is not this query's failure — showing it
+            // would put "check network" over results that arrived fine.
+            if (mounted && epoch == _queryEpoch) setState(() => _error = msg);
           },
           stackTrace: st,
         );
       } finally {
-        if (mounted) setState(() => _loading = false);
+        if (mounted && epoch == _queryEpoch) setState(() => _loading = false);
       }
     });
   }
 
+  /// A **live** fix for "use my current location", or null.
+  ///
+  /// **There is no last-known-position fallback, and there must not be one**
+  /// (REVIEW #18 · #19, Samyak 2026-08-05). `getLastKnownPosition` used to
+  /// stand in whenever the 20-second fix failed — an ordinary indoor outcome —
+  /// and whatever the OS still held went through `validate` and into a saved
+  /// place unexamined, which is how yesterday's city becomes "Home Court".
+  /// **An age limit is not the answer either**: a cached fix is a guess about
+  /// where you are whatever its timestamp says, and this coordinate is saved
+  /// once and then trusted by every alarm it feeds.
+  ///
+  /// **Null is a complete answer** — [_useGps] turns it into "try search
+  /// instead" — so the one guard below covers every plugin call here. The old
+  /// fallback had none of its own, sitting inside the timeout's handler, so a
+  /// throw there escaped `_useGps` (a `finally`, no `catch`) with no message.
   Future<Position?> _gpsFix() async {
-    if (!await Geolocator.isLocationServiceEnabled()) {
-      setState(() => _error = 'Turn on location services first');
-      return null;
-    }
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
-    if (perm == LocationPermission.denied ||
-        perm == LocationPermission.deniedForever) {
-      setState(() => _error = 'Location permission denied');
-      return null;
-    }
     try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        setState(() => _error = 'Turn on location services first');
+        return null;
+      }
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        setState(() => _error = 'Location permission denied');
+        return null;
+      }
       // Low accuracy = fast fix; dawn/wind barely change across a few km.
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -138,7 +170,7 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
         ),
       );
     } on Exception {
-      return Geolocator.getLastKnownPosition();
+      return null;
     }
   }
 

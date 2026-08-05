@@ -45,12 +45,72 @@ class FakeScheduler implements AlarmScheduler {
   Future<bool> isRinging(int id) async => ringing.contains(id);
 }
 
+/// A scheduler whose first plugin call fails. `scheduledIds` is the one every
+/// resync reaches, location or not.
+class _ThrowingScheduler extends FakeScheduler {
+  _ThrowingScheduler(this.error);
+  final Object error;
+
+  @override
+  Future<Set<int>> scheduledIds() async {
+    // ignore: only_throw_errors — test seam for the Exception vs Error policy
+    throw error;
+  }
+}
+
 const tonk = SavedLocation(id: 'tonk', name: 'Tonk', lat: 26.17, lon: 75.79);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('a plugin failure at startup costs the alarms, not the screen', () async {
+    // REVIEW #15. `init` armed the window BEFORE setting `loaded`, and home
+    // renders nothing until then — so one plugin throw left a permanently
+    // black app, traced only by a console line.
+    final c = ArunodayController(
+        store: ArunodayStore(), scheduler: _ThrowingScheduler(Exception('x')));
+    var notified = 0;
+    c.addListener(() => notified++);
+    await c.init();
+    expect(c.loaded, isTrue);
+    expect(notified, greaterThan(0), reason: 'the screen was told to draw');
+  });
+
+  test('the screen is told to draw only once the plan is ready', () async {
+    // The other side of #15's reordering: moving `loaded` ahead of the arming
+    // must NOT drag `plan` with it. Home reads it for the bedtime clock, so a
+    // first frame without it prints `—` and fills it in a moment later — a
+    // black screen traded for a flicker.
+    final store = ArunodayStore();
+    await store.save(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    final c = ArunodayController(store: store, scheduler: FakeScheduler());
+    SleepPlanResult? planAtFirstNotify;
+    var notified = false;
+    c.addListener(() {
+      if (notified) return;
+      notified = true;
+      planAtFirstNotify = c.plan;
+    });
+    await c.init();
+    expect(notified, isTrue);
+    expect(planAtFirstNotify, isNotNull);
+  });
+
+  test('a programming Error still propagates — but the screen is up first',
+      () async {
+    // Two halves in one: soft-failing is for Exceptions only, so this escapes
+    // — and it escapes AFTER `loaded`, which is the ordering fix. The old
+    // order threw first and `loaded` stayed false.
+    final c = ArunodayController(
+        store: ArunodayStore(), scheduler: _ThrowingScheduler(StateError('b')));
+    await expectLater(c.init(), throwsStateError);
+    expect(c.loaded, isTrue);
+  });
 
   test('no location -> nothing scheduled', () async {
     final fake = FakeScheduler();
@@ -129,11 +189,11 @@ void main() {
 
     // At 06:00, tonight's bedtime is still ahead → today's occurrence.
     expect(c.nextDailyBedtime(DateTime(2026, 7, 20, 6, 0)),
-        DateTime(2026, 7, 20).add(Duration(minutes: bed)));
+        clockTimeOn(DateTime(2026, 7, 20), bed));
 
     // At 23:59 it has passed → rolls to tomorrow.
     expect(c.nextDailyBedtime(DateTime(2026, 7, 20, 23, 59)),
-        DateTime(2026, 7, 21).add(Duration(minutes: bed)));
+        clockTimeOn(DateTime(2026, 7, 21), bed));
   });
 
   test('nextBedtimeRing is the sooner of the daily bedtime and a pending AGAIN',
@@ -237,7 +297,7 @@ void main() {
     expect(shifted.difference(base).inMinutes, 120);
 
     // Only the one dated wake moved; the day after is unshifted dawn+offset.
-    final dayAfter = shifted.add(const Duration(days: 1));
+    final dayAfter = calendarDay(shifted, 1);
     final baseDayAfter = c.baseWakeOn(dayAfter)!;
     expect(c.wakeOn(dayAfter), baseDayAfter);
 

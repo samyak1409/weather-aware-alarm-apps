@@ -1,3 +1,4 @@
+import 'calendar.dart';
 import 'format.dart';
 import 'wind.dart';
 
@@ -179,11 +180,17 @@ class NivaatAlarm {
       alarmAt.add(Duration(minutes: retryMinutesAfter));
 
   /// Next occurrence strictly after [now].
+  ///
+  /// Walks **calendar** days, not 24-hour blocks (REVIEW #10). `now.add(days)`
+  /// visited the same date twice on a fall-back day, so eight steps covered
+  /// seven dates and a once-a-week alarm could return null — and null is not
+  /// "no alarm today": `_resolveOccurrence` handing it to `_evaluate` cancels
+  /// that alarm's ring **and** its next check. Android checks only re-book
+  /// themselves, so a lone alarm there then waits for you to open the app.
   DateTime? nextOccurrence(DateTime now) {
     if (weekdays.isEmpty) return null;
     for (var d = 0; d <= 7; d++) {
-      final day = now.add(Duration(days: d));
-      final at = DateTime(day.year, day.month, day.day, hour, minute);
+      final at = clockTimeOn(calendarDay(now, d), hour * 60 + minute);
       if (at.isAfter(now) && weekdays.contains(at.weekday)) return at;
     }
     return null;

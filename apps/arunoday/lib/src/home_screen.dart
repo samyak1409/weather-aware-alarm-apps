@@ -140,7 +140,10 @@ class _HomeScreenState extends State<HomeScreen>
     var sunriseShown = c.sunriseOn(now);
     final dawnRolled = sunriseShown != null && !sunriseShown.isAfter(now);
     if (dawnRolled) {
-      final tomorrow = now.add(const Duration(days: 1));
+      // Calendar step, not +24h (REVIEW #13): on a fall-back evening the
+      // elapsed one comes back to today, and the footer re-prints the dawn it
+      // just decided was over.
+      final tomorrow = calendarDay(now, 1);
       dawnShown = c.dawnOn(tomorrow);
       sunriseShown = c.sunriseOn(tomorrow);
     }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +13,21 @@ class _ThrowGeocode extends OpenMeteo {
   Future<List<GeoPlace>> geocode(String query) async {
     // ignore: only_throw_errors — test seam for Exception vs Error paths
     throw _error;
+  }
+}
+
+/// Answers each query after its own delay, so replies land out of order —
+/// the only way to reproduce REVIEW #17.
+class _OutOfOrderGeocode extends OpenMeteo {
+  _OutOfOrderGeocode(this.delays);
+  final Map<String, Duration> delays;
+  final List<String> asked = [];
+
+  @override
+  Future<List<GeoPlace>> geocode(String query) async {
+    asked.add(query);
+    await Future<void>.delayed(delays[query] ?? Duration.zero);
+    return [GeoPlace(name: 'result:$query', region: 'r', lat: 1, lon: 2)];
   }
 }
 
@@ -178,5 +194,76 @@ void main() {
 
     expect(find.text('Search failed — check network'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  /// Opens the search sheet with [api] and returns once it is up.
+  Future<void> openSearch(WidgetTester tester, OpenMeteo api) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () =>
+              unawaited(showLocationSearchForTest(context, api: api)),
+          child: const Text('open'),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('a slow older search never lands on a newer one (REVIEW #17)',
+      (tester) async {
+    // The debounce cancels a pending timer, never a request already sent, so
+    // the field said Tokyo above a list of Toronto — and tapping a row saved
+    // the wrong place.
+    final api = _OutOfOrderGeocode({'To': const Duration(milliseconds: 500)});
+    await openSearch(tester, api);
+
+    await tester.enterText(find.byType(TextField), 'To');
+    await tester.pump(const Duration(milliseconds: 400)); // 'To' is sent
+    await tester.enterText(find.byType(TextField), 'Tokyo');
+    await tester.pump(const Duration(milliseconds: 400)); // 'Tokyo' is sent
+    await tester.pump(); // and answers straight away
+    expect(find.text('result:Tokyo'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 600)); // 'To' finally lands
+    expect(api.asked, ['To', 'Tokyo'],
+        reason: 'both really were in flight — otherwise this proves nothing');
+    expect(find.text('result:Tokyo'), findsOneWidget);
+    expect(find.text('result:To'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('clearing the field drops the reply already in flight',
+      (tester) async {
+    // The other direction: delete what you typed and the list must stay empty
+    // rather than filling in behind you.
+    final api = _OutOfOrderGeocode({'Tokyo': const Duration(milliseconds: 500)});
+    await openSearch(tester, api);
+
+    await tester.enterText(find.byType(TextField), 'Tokyo');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump();
+    expect(find.byType(LinearProgressIndicator), findsNothing,
+        reason: 'nothing is loading for a query that no longer exists');
+
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('result:Tokyo'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('the GPS path never reaches for a cached position (REVIEW #18)', () {
+    // Read off the source, because the rule is an ABSENCE and no widget test
+    // can assert one. A live fix or nothing — an age limit was tried and
+    // rejected (Samyak, 2026-08-05): a cached fix is a guess about where you
+    // are whatever its timestamp says, and this coordinate is saved once and
+    // then trusted by every alarm it feeds.
+    final source = File('lib/src/location_picker.dart').readAsStringSync();
+    final code = source
+        .split('\n')
+        .where((l) => !l.trimLeft().startsWith('//'))
+        .join('\n');
+    expect(code, isNot(contains('getLastKnownPosition')));
   });
 }

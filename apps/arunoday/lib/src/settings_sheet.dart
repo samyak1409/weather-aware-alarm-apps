@@ -119,10 +119,56 @@ class _SettingsPageState extends State<_SettingsPage> {
     }
     final now = DateTime.now();
     for (var i = 0; i <= ArunodayController.windowDays; i++) {
-      final d = c.dawnOn(now.add(Duration(days: i)));
+      final d = c.dawnOn(calendarDay(now, i));
       if (d != null && d.isAfter(now)) return d;
     }
     return null;
+  }
+
+  /// Long-press "reset to dawn" — **through the same A16 check the dialog
+  /// runs** (REVIEW #16). The dialogs refuse a same-minute wake and bedtime by
+  /// disabling Save; this wrote straight through, so the one gesture that
+  /// skipped validation could arm two alarms on one minute, and the plugin
+  /// queues the second so they sound back to back. A refusal says why rather
+  /// than doing nothing — a silent no-op reads as a missed press.
+  Future<void> _resetWakeOffset() async {
+    final dawn = _anchorDawn();
+    // No dawn, nothing to collide with — the same reading the builders take
+    // whenever the other side is unknown.
+    final conflict = dawn == null
+        ? null
+        : arunodayWakeConflictsWithBedtime(
+            wakeOffsetMinutes: 0,
+            dawn: dawn,
+            bedtimeMinuteOfDay: c.bedtimeMinutes?.round(),
+          );
+    if (conflict != null) {
+      _refuse(conflict);
+      return;
+    }
+    await c.update(c.settings.copyWith(wakeOffsetMinutes: 0));
+  }
+
+  /// Long-press "return to auto" — the bedtime half of [_resetWakeOffset].
+  Future<void> _resetBedtime() async {
+    final auto = c.plan?.bedtimeMinutes.round();
+    final wake = c.nextWake;
+    final conflict = auto == null
+        ? null
+        : arunodayBedtimeConflictsWithWake(
+            bedtimeMinuteOfDay: auto,
+            wakeMinuteOfDay: wake == null ? null : wake.hour * 60 + wake.minute,
+          );
+    if (conflict != null) {
+      _refuse(conflict);
+      return;
+    }
+    await c.update(c.settings.copyWith(bedtimeOffsetMinutes: () => null));
+  }
+
+  void _refuse(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _editBedtime() async {
@@ -155,6 +201,13 @@ class _SettingsPageState extends State<_SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    // **Rendering only — nothing a tap runs may read `s`** (REVIEW #20).
+    // `c.update` notifies after saving AND re-arming the whole window, so a
+    // second tap arrives before this frame is replaced and a `copyWith` on
+    // this snapshot undoes the first: switch off Wake, then Bedtime, and Wake
+    // comes back on. What this frame SHOWS may use it; anything a callback
+    // carries forward — what it writes, what it seeds a picker with — reads
+    // `c.settings` at tap time, as the handlers outside `build` already do.
     final s = c.settings;
     final plan = c.plan;
 
@@ -175,7 +228,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Wake alarm'),
               value: s.wakeEnabled,
-              onChanged: (v) => c.update(s.copyWith(wakeEnabled: v)),
+              onChanged: (v) => c.update(c.settings.copyWith(wakeEnabled: v)),
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -183,9 +236,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               trailing: Text(fmtOffset(s.wakeOffsetMinutes),
                   style: text.titleMedium),
               onTap: _editOffset,
-              onLongPress: s.wakeOffsetMinutes == 0
-                  ? null
-                  : () => c.update(s.copyWith(wakeOffsetMinutes: 0)),
+              onLongPress: s.wakeOffsetMinutes == 0 ? null : _resetWakeOffset,
             ),
             if (s.wakeOffsetMinutes != 0)
               Padding(
@@ -197,7 +248,8 @@ class _SettingsPageState extends State<_SettingsPage> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Bedtime alarm'),
               value: s.bedtimeEnabled,
-              onChanged: (v) => c.update(s.copyWith(bedtimeEnabled: v)),
+              onChanged: (v) =>
+                  c.update(c.settings.copyWith(bedtimeEnabled: v)),
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -210,10 +262,8 @@ class _SettingsPageState extends State<_SettingsPage> {
                 style: text.titleMedium,
               ),
               onTap: _editBedtime,
-              onLongPress: s.bedtimeOffsetMinutes == null
-                  ? null
-                  : () => c.update(
-                      s.copyWith(bedtimeOffsetMinutes: () => null)),
+              onLongPress:
+                  s.bedtimeOffsetMinutes == null ? null : _resetBedtime,
             ),
             if (s.bedtimeOffsetMinutes != null)
               Padding(
@@ -249,8 +299,8 @@ class _SettingsPageState extends State<_SettingsPage> {
               ),
               onTap: () async {
                 final picked = await showSoundPicker(context,
-                    selectedPath:
-                        s.soundPath ?? 'assets/sounds/arunoday_dawn.wav');
+                    selectedPath: c.settings.soundPath ??
+                        'assets/sounds/arunoday_dawn.wav');
                 if (picked != null) {
                   await c.update(
                       c.settings.copyWith(soundPath: () => picked.path));

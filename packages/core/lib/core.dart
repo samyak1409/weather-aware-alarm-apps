@@ -7,6 +7,7 @@ export 'src/alarmkit_scheduler.dart';
 export 'src/app_icon.dart';
 export 'src/app_window.dart';
 export 'src/appearance.dart';
+export 'src/calendar.dart';
 export 'src/crafted_by.dart';
 export 'src/flashing_scrollbar.dart';
 export 'src/format.dart';

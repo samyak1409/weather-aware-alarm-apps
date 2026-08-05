@@ -78,8 +78,16 @@ class Solar {
   /// as minutes-after-local-midnight. Never assumes solstices: the real
   /// extremes fall around early June and mid-January (equation of time).
   ///
-  /// [utcOffsetMinutes] defaults to the device's current offset; tests pass
-  /// it explicitly (e.g. 330 for IST) to stay machine-independent.
+  /// **Each day is converted at its OWN offset** (REVIEW #12). Today's offset
+  /// applied to all 365 days swung the whole yearly plan by an hour twice a
+  /// year — in New York the auto bedtime read 22:19 in summer and 21:19 in
+  /// winter — while the daily wake, which goes through `.toLocal()`, did not
+  /// move at all. A plan that disagrees with the alarms it is planning for is
+  /// worse than one that is merely off.
+  ///
+  /// [utcOffsetMinutes] pins every day to one offset instead: a **test-only
+  /// fiction** (e.g. 330 for IST) that keeps wall-clock assertions
+  /// machine-independent. Production passes null.
   static ({double earliestMinutes, double latestMinutes, DateTime earliestDay,
       DateTime latestDay})? yearlyDawnExtremes(
     int year,
@@ -87,8 +95,6 @@ class Solar {
     double lonDeg, {
     int? utcOffsetMinutes,
   }) {
-    final offset =
-        utcOffsetMinutes ?? DateTime.now().timeZoneOffset.inMinutes;
     double? lo, hi;
     DateTime? loDay, hiDay;
     var day = DateTime.utc(year, 1, 1);
@@ -96,7 +102,10 @@ class Solar {
       final utcMin =
           _morningEventUtcMinutes(day, latDeg, lonDeg, zenith: civilZenith);
       if (utcMin != null) {
-        final m = (utcMin + offset) % 1440.0;
+        final m = utcOffsetMinutes != null
+            ? (utcMin + utcOffsetMinutes) % 1440.0
+            : _localMinutesOfDay(
+                day.add(Duration(milliseconds: (utcMin * 60000).round())));
         if (lo == null || m < lo) {
           lo = m;
           loDay = day;
@@ -131,6 +140,14 @@ class Solar {
       day = day.add(const Duration(days: 1));
     }
     return true;
+  }
+
+  /// Minutes after local midnight of [instant]'s own local wall clock — the
+  /// same conversion `.toLocal()` gives the daily dawn, applied one day at a
+  /// time so a zone change lands where it really lands.
+  static double _localMinutesOfDay(DateTime instant) {
+    final t = instant.toLocal();
+    return t.hour * 60.0 + t.minute + t.second / 60.0;
   }
 
   // From calendar components only: diffing the raw instant against UTC Jan 1
