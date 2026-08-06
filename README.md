@@ -102,6 +102,17 @@ flutter run                             # builds + installs + launches on it
 - _First time only_ — pair: open "Pair device with pairing code", then on the Mac `adb pair <IP:PORT>` (the IP:PORT and 6-digit code shown _in that pairing dialog_). Once the Mac appears under the phone's "Paired devices", never pair again.
 - _Each session_ — connect: take the IP:PORT from the **main** Wireless-debugging screen (different port than pairing) and run `adb connect <IP:PORT>`. Often `adb` auto-reconnects to a paired phone, so try `adb devices` first — if it's already listed, you're done.
 
+If `adb pair` / `adb connect` fails even with the right ports: restart the Mac-side daemon and retry while the pairing dialog is still open (code and pairing port expire in about a minute):
+
+```sh
+adb kill-server && adb start-server
+adb pair <IP:PAIRING_PORT>     # 6-digit code from the dialog
+adb connect <IP:CONNECT_PORT>  # from the main Wireless debugging screen
+adb devices
+```
+
+If `adb mdns services` is empty, manual `adb connect <IP:PORT>` from the phone screen may still work — but treat empty discovery as worth checking (`adb server-status`, `adb mdns track-services --proto-text`), not as normal. `dns-sd -B _adb-tls-connect._tcp .` only confirms Bonjour sees the phone, not that ADB can use it.
+
 A build note: `flutter run` prints a harmless `KGP` deprecation warning that originates inside the `alarm` plugin's own Gradle script — nothing on our side, safe to ignore until the plugin updates upstream.
 
 See `SPEC.md` for the full locked v1 specification and the research behind every number, and `RUNNING.md` for how to run both apps on the local emulator/simulator.
