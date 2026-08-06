@@ -191,13 +191,46 @@ void main() {
     expect(find.text('Gust guard auto: ≤22 km/h'), findsOneWidget);
     expect(find.text('Keep checking'), findsOneWidget);
     expect(find.text('Rings late if the wind drops in time.'), findsOneWidget,
-        reason: 'the hint states the payoff — why 60m over 1m');
-    for (final segment in ['1m', '30m', '60m']) {
+        reason: 'the hint states the payoff — why 60m over 30m');
+    for (final segment in ['30m', '60m']) {
       expect(find.text(segment), findsOneWidget);
     }
+    expect(find.text('1m'), findsNothing,
+        reason: 'a one-minute window is a testing tool — it appears only '
+            'behind core DevMode\'s seven-tap gate (2026-08-06)');
     expect(find.text('Save'), findsOneWidget);
     expect(find.text('Delete'), findsNothing,
         reason: 'a new alarm has nothing to delete');
+  });
+
+  group('N17 — the dev-gated one-minute window', () {
+    // A static notifier outlives the test that flipped it; a leaked `true`
+    // would make the assertion above pass or fail depending on test order.
+    tearDown(() => DevMode.enabled.value = false);
+
+    testWidgets('the gate open puts 1m back in the control', (tester) async {
+      DevMode.enabled.value = true;
+      final c = await controller(courts: [court]);
+      await openVia(tester, (ctx) => showAlarmSheet(ctx, c, alarm: null));
+
+      for (final segment in ['1m', '30m', '60m']) {
+        expect(find.text(segment), findsOneWidget, reason: 'segment $segment');
+      }
+    });
+
+    testWidgets('an alarm already on 1m still shows it with the gate shut',
+        (tester) async {
+      // Otherwise the control would draw with no segment selected and
+      // misrepresent the alarm — the 1m is real until you change it, and the
+      // cascade goes on honouring it whatever the editor offers.
+      final c = await controller(courts: [court]);
+      const short = NivaatAlarm(
+          id: 1, hour: 6, minute: 0, courtId: 'c1', retryMinutesAfter: 1);
+      await openVia(tester, (ctx) => showAlarmSheet(ctx, c, alarm: short));
+
+      expect(DevMode.enabled.value, isFalse, reason: 'the gate is shut');
+      expect(find.text('1m'), findsOneWidget);
+    });
   });
 
   testWidgets('N17 — day chips are Mon-first single letters', (tester) async {

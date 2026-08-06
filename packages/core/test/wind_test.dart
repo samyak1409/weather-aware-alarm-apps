@@ -219,6 +219,44 @@ void main() {
         reason: 'last half-minute of the default window books the cap',
       );
     });
+
+    group('which Keep-checking options the editor may show', () {
+      // 1m plays a whole morning out in a minute, which is a testing tool and
+      // not a choice to put in front of a user — behind the seven-tap gate
+      // since 2026-08-06. The cascade itself still honours a 1, so an alarm
+      // saved with one keeps working with the gate shut.
+      test('30 and 60, plus 1 for dev mode or for an alarm already on it', () {
+        expect(CheckCascade.retryOptionsFor(devMode: false, selected: 30),
+            [30, 60]);
+        expect(CheckCascade.retryOptionsFor(devMode: true, selected: 30),
+            [1, 30, 60]);
+        // A stored 1 keeps its segment with the gate shut, or the control
+        // would draw with nothing selected and misrepresent the alarm — and
+        // the next Save would look like it changed nothing while changing the
+        // window. It heals on its own: pick 60 and the stray option is gone.
+        expect(CheckCascade.retryOptionsFor(devMode: false, selected: 1),
+            [1, 30, 60]);
+        expect(CheckCascade.retryOptionsFor(devMode: false, selected: 60),
+            [30, 60]);
+      });
+
+      test('always ascending, and never a duplicate', () {
+        // The editor renders one segment per option in list order, so this is
+        // what puts "1m 30m 60m" on screen in that order.
+        for (final dev in [false, true]) {
+          for (final selected in [1, 30, 60, 45]) {
+            final options =
+                CheckCascade.retryOptionsFor(devMode: dev, selected: selected);
+            expect(options, orderedEquals(List.of(options)..sort()),
+                reason: 'dev=$dev selected=$selected must be ascending');
+            expect(options.toSet().length, options.length,
+                reason: 'dev=$dev selected=$selected has a repeat');
+            expect(options, contains(selected),
+                reason: 'the selected value must have a segment to sit on');
+          }
+        }
+      });
+    });
   });
 
   group('NivaatAlarm.nextOccurrence', () {

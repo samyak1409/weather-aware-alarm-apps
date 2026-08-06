@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// **Every shared string in MESSAGES.md (X1–X7), locked here.**
+/// **Every shared string in MESSAGES.md (X1–X8), locked here.**
 ///
 /// These live in `core` and render in BOTH apps, so a change here is a change
 /// in two places at once — and until 2026-07-26 only X4's `CRAFTED WITH` was
@@ -289,6 +289,17 @@ void main() {
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
+    });
+  });
+
+  group('X8 — developer settings toast', () {
+    test('names the switch and which way it went', () {
+      // Both halves matter. "Developer settings" is what the gesture is FOR,
+      // and the direction is the only feedback there is — the switch has no
+      // screen of its own to check. Rendering is locked in dev_mode_test,
+      // which taps the mark seven times for real; this pins the wording.
+      expect(kDevModeOnMessage, 'Developer settings enabled');
+      expect(kDevModeOffMessage, 'Developer settings disabled');
     });
   });
 }

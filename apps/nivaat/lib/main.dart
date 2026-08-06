@@ -28,6 +28,9 @@ Future<void> main() async {
   applyMotionPacing();
   await lockToPortrait();
   await Appearance.load();
+  // Before runApp: the editor's Keep-checking options read this, and a gate
+  // that opened one frame late would draw the wrong control first.
+  await DevMode.load();
 
   // NivaatEngine.standard() also loads the selected alarm tone into
   // nivaatSelectedSound (shared with the background entrypoints).

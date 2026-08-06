@@ -148,7 +148,10 @@ void main() {
       );
     });
 
-    test('retryMinutesAfter round-trips, and the options stay ascending', () {
+    test('retryMinutesAfter round-trips, dev-only 1 included', () {
+      // The gate decides who is OFFERED a one-minute window (which options
+      // appear at all is `CheckCascade.retryOptionsFor`, locked in wind_test);
+      // an alarm already holding one must save and read back either way.
       final short = alarm.copyWith(retryMinutesAfter: 1);
       expect(short.retryCapAt(DateTime(2026, 7, 12, 6, 0)),
           DateTime(2026, 7, 12, 6, 1));
@@ -157,15 +160,6 @@ void main() {
           NivaatAlarm.fromJson(alarm.copyWith(retryMinutesAfter: 60).toJson())
               .retryMinutesAfter,
           60);
-
-      // The editor renders one segment per option in LIST order, so this is
-      // what puts "1m 30m 60m" on the screen in that order — reorder the list
-      // and the control reorders with it.
-      expect(
-        CheckCascade.retryMinutesOptions,
-        orderedEquals(List.of(CheckCascade.retryMinutesOptions)..sort()),
-        reason: 'retryMinutesOptions must stay ascending',
-      );
     });
   });
 

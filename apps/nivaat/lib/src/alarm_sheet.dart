@@ -42,7 +42,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   // and the segments actually offer.
   late int _limit =
       widget.existing?.courtSpeedLimitKmh ?? WindThresholds.defaultLimit;
-  // Per-alarm retry window (1 / 30 / 60), default 30 (2026-07-26).
+  // Per-alarm retry window (30 / 60, plus a dev-gated 1), default 30.
   late int _retryMinutes =
       widget.existing?.retryMinutesAfter ?? CheckCascade.retryCapMinutesAfter;
   late final Set<int> _weekdays =
@@ -383,7 +383,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
                         // Says the PAYOFF, which the old "After a skip,
                         // re-check for calm this long." never did — nothing
                         // told you the alarm actually rings when it clears, so
-                        // there was no reason to prefer 60m over 1m. ("Skip"
+                        // there was no reason to prefer 60m over 30m. ("Skip"
                         // is also a word this screen never uses.)
                         Text(
                           'Rings late if the wind drops in time.',
@@ -439,8 +439,9 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   }
 }
 
-/// Compact trailing segments — 1 / 30 / 60 min — day-chip accent language.
-/// Width tracks option count so dropping 1m later still reads as a trailer.
+/// Compact trailing segments — 30 / 60 min, plus a dev-only 1m — in the
+/// day-chip accent language. Width tracks option count, so the control is a
+/// trailer at either size.
 class _RetrySegmented extends StatelessWidget {
   const _RetrySegmented({
     required this.value,
@@ -450,9 +451,22 @@ class _RetrySegmented extends StatelessWidget {
   final int value;
   final ValueChanged<int> onChanged;
 
+  /// Listens rather than reads: the gate is seven taps away on the home
+  /// screen, so it cannot flip while this sheet is up — but a widget that
+  /// silently depends on a notifier it never subscribes to is a bug waiting
+  /// for the day something else can flip it.
   @override
   Widget build(BuildContext context) {
-    final options = CheckCascade.retryMinutesOptions;
+    return ValueListenableBuilder<bool>(
+      valueListenable: DevMode.enabled,
+      builder: (context, devMode, _) => _control(
+        context,
+        CheckCascade.retryOptionsFor(devMode: devMode, selected: value),
+      ),
+    );
+  }
+
+  Widget _control(BuildContext context, List<int> options) {
     // "60m" is three glyphs in a box the size of a one-glyph day chip, so this
     // is the tightest text in the sheet: measured, it starts clipping just past
     // 1.3x and loses half the label at 2x — and the ClipRRect below hides that
@@ -508,7 +522,7 @@ class _RetrySegment extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Compact trailing labels — "1m" / "30m" / "60m".
+    // Compact trailing labels — "30m" / "60m", and "1m" behind the gate.
     final label = '${minutes}m';
     return Material(
       color: selected ? AppPalette.wind : Colors.transparent,

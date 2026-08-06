@@ -14,6 +14,9 @@ Future<void> main() async {
   applyMotionPacing();
   await lockToPortrait();
   await Appearance.load();
+  // Nothing hides behind this gate in Arunoday yet — the gesture is here so
+  // the way in is the same in both apps (core's DevMode).
+  await DevMode.load();
   // One scheduler for BOTH wake and bedtime. On Android → the alarm package
   // (its ring screen still hosts the bedtime +1h ritual). On iOS 26+ →
   // AlarmKit: a real system alarm that survives force-quit and reboot, so a

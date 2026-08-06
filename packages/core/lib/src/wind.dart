@@ -136,12 +136,13 @@ WindDecision decide(WindSample sample, WindThresholds thresholds) {
 }
 
 /// Check cascade (2026-07-15): T-1h, -30m, -15m, -10m, -5m, -2m, -1m, T-0, then
-/// every minute up to the per-alarm retry cap (default +30 min; options 1 / 30 /
-/// 60 since 2026-07-26). The far pre-arm rungs (T-12h…-2h) were dropped — they
-/// only ever ran on Android (exact wakeups), where the near ladder + T-0 carry
-/// it, and on iOS the whole ladder is opportunistic anyway. The post-T retries
-/// run after *any* skip (windy/gusty/no-data), not just no-data, so a morning
-/// that calms within the window still rings (late) — see [NivaatEngine].
+/// every minute up to the per-alarm retry cap (default +30 min; options 30 / 60
+/// since 2026-07-26, plus a dev-only 1 since 2026-08-06). The far pre-arm rungs
+/// (T-12h…-2h) were dropped — they only ever ran on Android (exact wakeups),
+/// where the near ladder + T-0 carry it, and on iOS the whole ladder is
+/// opportunistic anyway. The post-T retries run after *any* skip
+/// (windy/gusty/no-data), not just no-data, so a morning that calms within the
+/// window still rings (late) — see [NivaatEngine].
 class CheckCascade {
   CheckCascade._();
 
@@ -149,8 +150,32 @@ class CheckCascade {
     60, 30, 15, 10, 5, 2, 1, 0,
   ];
 
-  /// Choices offered in the alarm editor (1 is for short-window testing).
-  static const List<int> retryMinutesOptions = [1, 30, 60];
+  /// Choices offered in the alarm editor.
+  static const List<int> retryMinutesOptions = [30, 60];
+
+  /// Developer-only extras (2026-08-06, Samyak). A one-minute window plays a
+  /// whole morning out in a minute, which is how the cascade gets tested by
+  /// hand — and is nothing to offer a real user, since a minute is barely
+  /// room for the wind to drop. Behind the seven-tap gate (`DevMode`).
+  static const List<int> devRetryMinutesOptions = [1];
+
+  /// What the editor renders, ascending.
+  ///
+  /// The ordinary options, the dev ones while the gate is open, and [selected]
+  /// itself either way: an alarm saved at 1m with dev mode on must still show
+  /// what it is set to after the gate closes, or the control would draw with
+  /// nothing selected and quietly misrepresent the alarm. It heals on its own
+  /// — pick another value and the stray option is gone on the next build.
+  static List<int> retryOptionsFor({
+    required bool devMode,
+    required int selected,
+  }) =>
+      <int>{
+        ...retryMinutesOptions,
+        if (devMode) ...devRetryMinutesOptions,
+        selected,
+      }.toList()
+        ..sort();
 
   /// Default post-alarm retry window when the alarm doesn't pick another.
   static const int retryCapMinutesAfter = 30;

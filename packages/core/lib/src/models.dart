@@ -164,8 +164,9 @@ class NivaatAlarm {
   final String courtId;
   final int courtSpeedLimitKmh;
 
-  /// How long after T to keep re-checking a skip (1 / 30 / 60). Stored per
-  /// alarm; drives `watchedUntil`, the heads-up deadline, and the cascade cap.
+  /// How long after T to keep re-checking a skip (30 / 60, or a dev-gated 1).
+  /// Stored per alarm; drives `watchedUntil`, the heads-up deadline, and the
+  /// cascade cap.
   final int retryMinutesAfter;
 
   /// DateTime.weekday values (1 = Mon .. 7 = Sun).
@@ -318,10 +319,10 @@ class HistoryRecord {
   /// rows → falls back to [at]. See [whenChecked].
   final DateTime? checkedAt;
 
-  /// The deadline this row promised — that alarm's retry cap (1/30/60 min)
-  /// as it stood at this push. [HistoryKind.stillChecking] rows only, and
-  /// frozen: a later Keep-checking edit writes a NEW row with the new cap
-  /// rather than touching this one.
+  /// The deadline this row promised — that alarm's retry cap (30/60 min, or a
+  /// dev-gated 1) as it stood at this push. [HistoryKind.stillChecking] rows
+  /// only, and frozen: a later Keep-checking edit writes a NEW row with the new
+  /// cap rather than touching this one.
   final DateTime? watchedUntil;
 
   /// When checking actually stopped, which is not always when we last *saw*

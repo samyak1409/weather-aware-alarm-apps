@@ -193,7 +193,15 @@ void main() {
     final box = t.getRect(find
         .ancestor(of: find.text('60m'), matching: find.byType(ClipRRect))
         .first);
-    final perSegment = box.width / CheckCascade.retryMinutesOptions.length;
+    // Derived from the same call the widget builds from, not the base list:
+    // the control also renders the dev-only 1m and any value the alarm already
+    // holds, so a fixture on a 1m window lays out THREE segments and a fixed
+    // divisor of 2 would measure a per-segment width that is not on screen.
+    final perSegment = box.width /
+        CheckCascade.retryOptionsFor(
+          devMode: DevMode.enabled.value,
+          selected: filled.retryMinutesAfter,
+        ).length;
     expect(label.getMaxIntrinsicWidth(double.infinity),
         lessThanOrEqualTo(perSegment),
         reason: 'the label needs more room than its segment gives it');
