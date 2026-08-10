@@ -28,6 +28,10 @@ String nivaatNotificationTitle(String courtName, DateTime at, String status) =>
 /// `Stop`, and "Stopped" on a card would read as "you silenced the alarm".
 const String kNivaatRing = 'Play! 🏸';
 const String kNivaatStillChecking = 'Still checking';
+/// History / disposition line when the host dropped a owed ring (known miss).
+const String kNivaatMissed = 'Missed';
+/// History line when an owed ring vanished with no host event (policy B).
+const String kNivaatUnknownRing = "Couldn't confirm";
 const String kNivaatSkipped = 'Skipped';
 const String kNivaatCancelled = 'Cancelled';
 

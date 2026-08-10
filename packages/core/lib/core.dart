@@ -12,6 +12,7 @@ export 'src/crafted_by.dart';
 export 'src/dev_mode.dart';
 export 'src/flashing_scrollbar.dart';
 export 'src/format.dart';
+export 'src/host_alarm_events.dart';
 export 'src/location_picker.dart';
 export 'src/models.dart';
 export 'src/motion.dart';

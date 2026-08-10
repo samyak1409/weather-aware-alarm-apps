@@ -5,10 +5,10 @@ publish_to: none
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
-  flutter: ">=3.22.0"
+  flutter: ">=3.44.0"
 
 dependencies:
-  alarm: ^5.8.0
+  alarm: ^5.10.0
   audioplayers: ^6.8.1
   flutter:
     sdk: flutter

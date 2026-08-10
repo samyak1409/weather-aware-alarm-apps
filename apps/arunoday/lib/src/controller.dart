@@ -15,7 +15,63 @@ class ArunodayController extends ChangeNotifier {
   ArunodayController({
     required this.store,
     required this.scheduler,
-  });
+  }) {
+    scheduler.setHostAlarmEventHandler(_onHostAlarmEvent);
+  }
+
+  /// A host moved or dropped one of our alarms — rebuild the window so a
+  /// deferral is preserved and a drop is re-armed.
+  ///
+  /// **Two guards, and both were learned the hard way.**
+  ///
+  /// `loaded` first: `main` starts the plugin, and `Alarm.init()` replays every
+  /// pending native event immediately. Reaching [_arm] before [init] has read
+  /// settings means `activeLocation` is still null, and that branch cancels
+  /// EVERYTHING — one replayed event at launch would disarm the user's whole
+  /// window before the app had finished reading it back.
+  ///
+  /// Then the re-entrancy guard: [_arm] awaits its own event barrier, so a
+  /// handler running inside one and calling [_armWindow] would either recurse
+  /// or (once the pass is serialised) queue behind the very job that is
+  /// awaiting it. Recording that another pass is owed and letting the current
+  /// one finish converges to the same place without either.
+  Future<void> _onHostAlarmEvent(HostAlarmEvent event) async {
+    // **Dropping the event before `loaded` costs nothing, and that is worth
+    // stating rather than leaving to be re-derived.** The bridge marks an
+    // event handled when the handler returns without throwing, so returning
+    // here does consume it. It is safe only because this handler never reads
+    // the event: it triggers a full window rebuild, and `init` runs exactly
+    // that rebuild the moment settings finish loading. The information is
+    // redundant with the resync that immediately follows.
+    //
+    // If this handler ever starts acting on `event` itself, that stops being
+    // true and the event has to be held rather than swallowed.
+    if (!loaded) return;
+    if (_armRunning) {
+      _armAgain = true;
+      return;
+    }
+    await _armWindow();
+  }
+
+  // **This handler is deliberately advisory, and the bridge's retry cannot
+  // change that.** A previous version threw when the pass soft-failed, so the
+  // event would be deferred and retried — three things were wrong with it.
+  //
+  // It threw a `StateError`, which is an `Error`; the bridge defers on
+  // `Exception`, so nothing was retried and the event was lost harder than
+  // before. The `_armRunning` branch returns normally anyway, so an event
+  // arriving mid-pass was claimed regardless. And structurally it could never
+  // have worked: **every one of Arunoday's barriers is inside `_arm` itself**,
+  // so a deferred event is re-run during the very pass that would retry it,
+  // burns its three attempts while `_armRunning` is true, and is abandoned.
+  //
+  // What makes losing it acceptable is the same thing that makes the `loaded`
+  // guard acceptable: this handler never reads the event. It asks for a full
+  // window rebuild, `_arm` rebuilds from scratch and is idempotent, and app
+  // resume / a settings change / a ring ending all run the same rebuild. A
+  // failed pass costs promptness, not correctness. If this handler ever starts
+  // acting on `event` itself, that stops being true.
 
   final ArunodayStore store;
   final AlarmScheduler scheduler;
@@ -347,32 +403,77 @@ class ArunodayController extends ChangeNotifier {
   /// could not arm, never the app, and every resync rebuilds the whole window
   /// from scratch so a failure is not sticky. `Error`s still propagate.
   /// Reads `plan` via [bedtimeMinutes], so [_recomputePlan] runs first.
-  Future<void> _armWindow() async {
+  /// One arming pass at a time, in order.
+  ///
+  /// Two overlapping passes each hold their own snapshot of what the plugin
+  /// has armed and then cancel against it, so the second undoes what the first
+  /// just wrote. Resyncs are triggered from several places at once — app
+  /// resume, a settings save, a ring ending, and now a host event — so the
+  /// overlap is ordinary rather than exotic.
+  Future<void> _armLane = Future<void>.value();
+  bool _armRunning = false;
+  bool _armAgain = false;
+
+  Future<void> _armWindowAt([DateTime? clock]) {
+    final run = _armLane.then((_) => _runArmPasses(clock));
+    // Park an error-swallowing copy so one failed pass can't jam the lane.
+    _armLane = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  Future<void> _runArmPasses(DateTime? clock) async {
+    _armRunning = true;
     try {
-      await _arm();
-    } on Exception catch (e, st) {
-      debugPrint('arunoday resync failed (non-fatal): $e\n$st');
+      // Bounded: a host event landing mid-pass asks for one more pass, and an
+      // event storm must not keep this one running forever.
+      var passes = 0;
+      do {
+        _armAgain = false;
+        try {
+          await _arm(clock: clock);
+        } on Exception catch (e, st) {
+          debugPrint('arunoday resync failed (non-fatal): $e\n$st');
+        }
+        passes++;
+      } while (_armAgain && passes < 3);
+    } finally {
+      _armRunning = false;
     }
   }
 
-  Future<void> _arm() async {
+  Future<void> _armWindow() => _armWindowAt();
+
+  /// Test seam: resync the alarm window as if wall clock were [now].
+  @visibleForTesting
+  Future<void> syncArmsAt(DateTime now) => _armWindowAt(now);
+
+  Future<void> _arm({DateTime? clock}) async {
+    // Drain host drop/move events before any cancel/re-arm decision.
+    await scheduler.applyHostAlarmEvents();
+
     final loc = activeLocation;
     if (loc == null) {
       await _cancelExcept(const {});
       return;
     }
-    final now = DateTime.now();
+    final now = clock ?? DateTime.now();
     final wanted = <int, ({DateTime at, String title, String body})>{};
+    // Every logical alarm the config still wants — including ones whose minute
+    // has passed but a short host deferral may still be live on the plugin.
+    final expectedById = <int, DateTime>{};
 
     if (settings.wakeEnabled) {
       for (var i = 0; i < windowDays; i++) {
         final day = calendarDay(now, i);
         final wake = wakeOn(day);
-        if (wake != null && wake.isAfter(now)) {
+        if (wake == null) continue;
+        final id = ArunodayIds.wake(day);
+        expectedById[id] = wake;
+        if (wake.isAfter(now)) {
           // "First light" is only honest when the wake IS the dawn.
           final dawn = dawnOn(day);
           final shift = dawn == null ? 0 : wake.difference(dawn).inMinutes;
-          wanted[ArunodayIds.wake(day)] = (
+          wanted[id] = (
             at: wake,
             title: kArunodayWakeTitle,
             body: arunodayWakeBody(loc.name, shift),
@@ -385,17 +486,21 @@ class ArunodayController extends ChangeNotifier {
     // that lands on it so only one alarm sounds. Cancelling the re-ring restores
     // the daily bedtime on the next resync (it's recomputed from scratch).
     final delayed = settings.bedtimeDelayedUntil;
-    final reRing = (settings.bedtimeEnabled && delayed != null &&
-            delayed.isAfter(now))
+    final reRingMinute = (settings.bedtimeEnabled && delayed != null)
         ? _floorToMinute(delayed)
+        : null;
+    final reRing = (reRingMinute != null && delayed!.isAfter(now))
+        ? reRingMinute
         : null;
 
     final bed = bedtimeMinutes;
     if (settings.bedtimeEnabled && bed != null) {
       for (final at in bedtimeWindowAt(now, bed.round())) {
+        final id = ArunodayIds.bedtime(at);
+        expectedById[id] = at;
         if (at.isAfter(now) && at != reRing) {
           // `bedtime()` reads only the date, which `at` still carries.
-          wanted[ArunodayIds.bedtime(at)] = (
+          wanted[id] = (
             at: at,
             title: kArunodayBedtimeTitle,
             body: kArunodayBedtimeBody,
@@ -405,16 +510,85 @@ class ArunodayController extends ChangeNotifier {
     }
 
     // "Not sleepy yet" delayed bedtime reminder from the ring screen.
-    if (reRing != null) {
-      wanted[ArunodayIds.bedtimeAgain] = (
-        at: delayed!,
-        title: kArunodayBedtimeTitle,
-        body: kArunodayBedtimeAgainBody,
-      );
+    if (settings.bedtimeEnabled && delayed != null) {
+      expectedById[ArunodayIds.bedtimeAgain] = _floorToMinute(delayed);
+      if (delayed.isAfter(now)) {
+        wanted[ArunodayIds.bedtimeAgain] = (
+          at: delayed,
+          title: kArunodayBedtimeTitle,
+          body: kArunodayBedtimeAgainBody,
+        );
+      }
     }
 
-    await _cancelExcept(wanted.keys.toSet());
+    // Preserve plugin times that still match the logical alarm (or a short
+    // host deferral of it). Scan [expectedById], not only [wanted.keys]:
+    // after logical T the id drops out of wanted but a +30s deferral must
+    // stay in [keep] until it fires.
+    //
+    // **One snapshot for the whole pass.** Asking the plugin per id was both
+    // twenty-odd platform round trips per resync and a moving target — the
+    // answers could disagree with each other halfway through, so the set being
+    // preserved and the set being cancelled were computed against different
+    // worlds.
+    final armedNow = await scheduler.scheduledAlarms();
+    final preserved = <int>{};
+    // Ids whose plugin time may be kept, and the logical time it is judged
+    // against. NOT the same as [expectedById]: a daily bedtime whose minute the
+    // AGAIN re-ring has taken over is expected in the abstract but must not be
+    // preserved, or the suppressed alarm survives from an earlier pass and both
+    // sound on the same minute.
+    final preservable = <int, DateTime>{};
+    final keep = Set<int>.from(wanted.keys);
+    // The AGAIN re-ring owns its minute either because it is still ahead of us,
+    // or because the platform is holding it (or a short deferral of it) right
+    // now. [reRingMinute] above is the same minute — one name for one thing.
+    final againInfo = armedNow[ArunodayIds.bedtimeAgain];
+    final againOwnsSlot = reRingMinute != null &&
+        (delayed!.isAfter(now) ||
+            (againInfo != null &&
+                _isPreservable(againInfo, reRingMinute, now)));
+    for (final entry in expectedById.entries) {
+      if (againOwnsSlot &&
+          entry.key >= ArunodayIds.bedtimeBlock &&
+          entry.key < ArunodayIds.bedtimeAgain &&
+          entry.value == reRingMinute) {
+        continue; // AGAIN owns this minute — same rule as wanted's at != reRing
+      }
+      preservable[entry.key] = entry.value;
+      final info = armedNow[entry.key];
+      if (info == null) continue;
+      if (_isPreservable(info, entry.value, now)) {
+        preserved.add(entry.key);
+        keep.add(entry.key);
+      }
+    }
+
+    // The cancel loop re-reads each id immediately before destroying it: a move
+    // can land between the snapshot above and the cancel, and cancelling a
+    // `06:00:30` deferral of a 06:00 alarm whose own minute has passed loses
+    // the ring outright — nothing re-arms it, because 06:00 is behind us and
+    // never re-enters [wanted].
+    await _cancelExcept(
+      keep,
+      stillWanted: (id, info) {
+        final expected = preservable[id];
+        return expected != null && _isPreservable(info, expected, now);
+      },
+    );
+    // One more drain and one more snapshot, AFTER the cancels: a move that
+    // landed during them makes an id preservable that was not preservable when
+    // `preserved` was built, and arming over it would throw the deferral away.
+    // One read for the whole loop rather than one per id — asking inside the
+    // loop was a full platform round trip per alarm in the window.
+    await scheduler.applyHostAlarmEvents();
+    final armedAfterCancels = await scheduler.scheduledAlarms();
     for (final e in wanted.entries) {
+      if (preserved.contains(e.key)) continue;
+      final info = armedAfterCancels[e.key];
+      if (info != null && _isPreservable(info, e.value.at, now)) {
+        continue;
+      }
       // Arunoday records nothing about whether an alarm is armed, so unlike
       // Nivaat it has no claim to withhold — but a failure still means no
       // alarm, and every resync retries. Logged rather than dropped so a
@@ -438,6 +612,43 @@ class ArunodayController extends ChangeNotifier {
     }
   }
 
+  /// Whether [pluginAt] is still the logical [expected] occurrence, or a short
+  /// host deferral of it (platform refusal ~+30s) — not a leftover after an
+  /// edit that moved the alarm to a different minute.
+  bool _isPreservable(
+    ScheduledAlarmInfo info,
+    DateTime expected,
+    DateTime now,
+  ) {
+    // **One id, more than one live alarm → never preserve.** On iOS a refused
+    // cancel keeps its handle, so an id can still resolve to an old alarm at
+    // the old minute while the newest sits at the right one. Preserving skips
+    // `scheduleRing`, and `scheduleRing` is the only thing that ever retries
+    // those failed cancels — so a "duplicate alert you can stop" would quietly
+    // become permanent, and the 06:00 the user edited away from keeps ringing.
+    // Re-arming instead costs one platform call and clears the stragglers.
+    if (info.handles != 1) return false;
+    final pluginAt = info.dateTime;
+    if (!pluginAt.isAfter(now)) return false;
+    final delta = pluginAt.difference(expected);
+    // The alarm is exactly where we put it.
+    if (delta.inSeconds.abs() <= 1) return true;
+    // **A forward deferral, and only once the alarm's own moment has come.**
+    // The host defers a ring because it tried to fire and was refused, so
+    // before [expected] there is nothing for it to have deferred — a plugin
+    // time sitting a minute ahead of a future alarm is not a deferral at all,
+    // it is the OLD alarm the user has just edited away from. Without the
+    // clock test, nudging wake from 06:00 to 05:59 the night before read as a
+    // 60-second deferral of 05:59, and the edit silently did nothing: the
+    // alarm went on ringing at 06:00.
+    if (delta > Duration.zero &&
+        delta <= const Duration(minutes: 2) &&
+        !expected.isAfter(now)) {
+      return true;
+    }
+    return false;
+  }
+
   /// Cancels every armed alarm except the ids in [keep] — and except one that
   /// is **sounding right now**.
   ///
@@ -448,9 +659,30 @@ class ArunodayController extends ChangeNotifier {
   /// was sounding stopped the sound (REVIEW #3). Both paths are this one method
   /// now, which is the actual fix — a second copy of the guard would just be a
   /// second thing to forget.
-  Future<void> _cancelExcept(Set<int> keep) async {
-    for (final id in await scheduler.scheduledIds()) {
+  ///
+  /// Delete/disable clears ids from [keep], so a plugin-future time is still
+  /// cancelled — preserve is only for ids the config still wants.
+  ///
+  /// [stillWanted] is consulted with each id's time **as read at the moment of
+  /// cancelling**, which is the one thing [keep] cannot express: [keep] was
+  /// computed from a snapshot, and a host move landing after it makes an id
+  /// worth keeping that was not worth keeping when the set was built. The gap
+  /// is narrowed, not closed — there is no way to make read-and-cancel atomic
+  /// across a platform channel — but the drain sits immediately before it, and
+  /// a move that still slips through asks for another pass (see
+  /// [_onHostAlarmEvent]).
+  Future<void> _cancelExcept(
+    Set<int> keep, {
+    bool Function(int id, ScheduledAlarmInfo info)? stillWanted,
+  }) async {
+    await scheduler.applyHostAlarmEvents();
+    final armed = await scheduler.scheduledAlarms();
+    for (final entry in armed.entries) {
+      final id = entry.key;
       if (keep.contains(id)) continue;
+      if (stillWanted != null && stillWanted(id, entry.value)) {
+        continue;
+      }
       if (await scheduler.isRinging(id)) continue;
       await scheduler.cancel(id);
     }

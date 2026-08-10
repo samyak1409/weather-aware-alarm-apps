@@ -2,8 +2,29 @@ import 'dart:async';
 
 import 'package:core/core.dart';
 import 'package:nivaat/src/check_scheduler.dart';
+import 'package:nivaat/src/engine.dart';
 import 'package:nivaat/src/ids.dart';
 import 'package:nivaat/src/skip_notifier.dart';
+
+/// Mark armed lockers ringing and re-evaluate so Rule 1 settles pending → Rang.
+/// Post-T `scheduleRing` success no longer writes history immediately.
+Future<void> settleAudibleRing({
+  required FakeRing ring,
+  required NivaatEngine engine,
+  required NivaatAlarm alarm,
+  required List<SavedLocation> courts,
+  required DateTime now,
+}) async {
+  final pending = await engine.store.loadPendingRing(alarm.id);
+  if (pending != null) {
+    ring.ringingIds.add(pending.pluginId);
+  } else {
+    for (final id in NivaatIds.allRings(alarm.id)) {
+      if (ring.scheduled.containsKey(id)) ring.ringingIds.add(id);
+    }
+  }
+  await engine.evaluateAlarm(alarm, courts, now: now);
+}
 
 /// Recording doubles shared by the engine tests. They live outside any
 /// `_test.dart` file on purpose: importing one test file from another works,
@@ -109,6 +130,11 @@ class FakeRing implements AlarmScheduler {
   /// scheduler that reports failure must leave the occurrence unarmed.
   bool accepts = true;
 
+  /// Whether a REFUSED booking also destroys what the locker held. True is
+  /// Android (`Alarm.set` stops first); false is AlarmKit (schedules first,
+  /// so a failed create leaves the old alarm live). See [scheduleRing].
+  bool destructiveOnFailure = true;
+
   @override
   Future<bool> scheduleRing({
     required int id,
@@ -118,11 +144,20 @@ class FakeRing implements AlarmScheduler {
     required double? volume,
   }) async {
     if (!accepts) {
-      // DESTRUCTIVE on failure, because the real ones are: `Alarm.set` stops
-      // the same id before it schedules, and `AlarmKitScheduler` cancels then
-      // schedules. A fake that merely declined would leave the previous arm
-      // standing and hide every failed-RE-arm bug behind a green suite.
-      scheduled.remove(id);
+      // **The two platforms fail in OPPOSITE directions, and this fake must
+      // not pretend otherwise.** On Android `Alarm.set` stops the same id
+      // before it schedules, so a refusal leaves the locker empty — modelled
+      // by [destructiveOnFailure], the default, because a fake that merely
+      // declined would leave the previous arm standing and hide every
+      // failed-RE-arm bug behind a green suite.
+      //
+      // AlarmKit is the mirror image: it schedules FIRST and cancels what it
+      // superseded afterwards (REVIEW #5), deliberately, so a failed create
+      // leaves the OLD alarm armed and named rather than leaving the day
+      // silent. `NoEventRing` sets this false. Modelling iOS as destructive
+      // was a lie in the direction that hides a ring the engine has stopped
+      // tracking.
+      if (destructiveOnFailure) scheduled.remove(id);
       return false;
     }
     scheduled[id] = (at: at, volume: volume, title: title, body: body);
@@ -141,6 +176,88 @@ class FakeRing implements AlarmScheduler {
 
   @override
   Future<bool> isRinging(int id) async => ringingIds.contains(id);
+
+  /// True: this fake models the **Android** scheduler, the one platform that
+  /// reports host drops. `SilentRing` is the iOS-shaped double (false), and
+  /// that difference is what decides whether a vanished ring reads as
+  /// `Couldn't confirm` or as an ordinary morning.
+  @override
+  bool get reportsHostEvents => true;
+
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async => {
+        for (final e in scheduled.entries)
+          e.key: ScheduledAlarmInfo(id: e.key, dateTime: e.value.at),
+      };
+
+  /// The claim store the bridge uses — exposed so a test can assert an event
+  /// was NOT marked handled, which is the whole difference between "deferred
+  /// for the next barrier" and "lost".
+  final HostAlarmEventClaims hostEventClaims = HostAlarmEventClaims();
+
+  /// **The REAL bridge, not a copy of it.** An earlier version of this fake
+  /// reimplemented the queue, the drain and the re-entrancy rules, so the whole
+  /// Nivaat matrix proved things about a parallel implementation: the ordering
+  /// under test was whatever this file happened to do, and the shipped
+  /// bridge — claims, per-event isolation, bounded retry — was exercised by
+  /// nothing at all.
+  late final HostAlarmEventBridge _bridge = HostAlarmEventBridge(
+    events: () => _events.stream,
+    claims: hostEventClaims,
+  );
+  final StreamController<HostAlarmEvent> _events =
+      StreamController<HostAlarmEvent>.broadcast();
+
+  @override
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {
+    _bridge.setHandler(handler);
+  }
+
+  /// Emit an event the way the plugin does — into the stream, drained by the
+  /// bridge — then await the barrier so the test sees a settled world.
+  Future<void> emitHostEvent(HostAlarmEvent event) async {
+    await _bridge.start();
+    _events.add(event);
+    await applyHostAlarmEvents();
+  }
+
+  @override
+  Future<void> applyHostAlarmEvents() => _bridge.apply();
+}
+
+/// **The iOS-shaped scheduler:** arms and tracks rings exactly like the Android
+/// one, but has no channel to report a move or a drop.
+///
+/// That single difference is the whole of AlarmKit's position. An alarm leaves
+/// AlarmKit the moment it fires and is dismissed, which is indistinguishable
+/// from one the host quietly discarded — so an engine that reads "gone" as an
+/// anomaly labels every good morning `Couldn't confirm`. Pair it with
+/// [FakeRing] to assert the two platforms answer the same story differently.
+class NoEventRing extends FakeRing {
+  NoEventRing() {
+    // AlarmKit schedules before it cancels, so a refused create leaves the
+    // superseded alarm armed — the opposite of Android.
+    destructiveOnFailure = false;
+  }
+
+  @override
+  bool get reportsHostEvents => false;
+}
+
+/// Answers every other question, but cannot be asked what is armed.
+///
+/// Models a platform query failing — an AlarmKit `PlatformException`, a Pigeon
+/// hiccup — which must never be read as "nothing is armed".
+class UnqueryableRing extends FakeRing {
+  bool blind = true;
+
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async {
+    if (blind) throw Exception('cannot reach the platform');
+    return super.scheduledAlarms();
+  }
 }
 
 /// Throws Exception on any scheduler touch — guards resync/init soft-fail

@@ -6,6 +6,7 @@ import 'package:flutter_alarmkit/flutter_alarmkit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'alarm_pkg_scheduler.dart';
+import 'host_alarm_events.dart';
 import 'scheduler.dart';
 
 /// [AlarmScheduler] backed by Apple AlarmKit (iOS 26+): system-rung alarms
@@ -183,27 +184,46 @@ class AlarmKitScheduler implements AlarmScheduler {
     await _saveMap(map);
   }
 
-  /// The int ids AlarmKit still holds something for.
+  /// The int ids AlarmKit still holds something for, pruned by [_livingMap].
+  /// Nivaat's orphan sweep runs this every pass.
+  @override
+  Future<Set<int>> scheduledIds() async {
+    try {
+      return (await _livingMap()).map.keys.map(int.parse).toSet();
+    } on PlatformException {
+      // The sweep this feeds decides what to CANCEL, and cancelling nothing is
+      // safe — so unlike [scheduledAlarms] this one may answer "none" when the
+      // platform cannot be asked.
+      return {};
+    }
+  }
+
+  /// The map with everything AlarmKit has forgotten removed, plus AlarmKit's
+  /// own alarms by UUID so a caller can read each one's state or date.
+  ///
+  /// **Pruning lives here, not in one caller.** It used to sit inside
+  /// [scheduledIds], which was fine while that was the only batch read — then
+  /// [scheduledAlarms] arrived, Arunoday moved onto it, and Arunoday stopped
+  /// pruning entirely. On iOS a fired-and-dismissed alarm's `cancelAlarm`
+  /// cannot be distinguished from a real failure, so its UUID is deliberately
+  /// kept (REVIEW #6); without a prune those dead handles accumulate under the
+  /// id forever and every later `cancel` retries all of them.
   ///
   /// **Prunes only what AlarmKit no longer knows AT ALL** (REVIEW #4). Keeping
   /// just `AlarmState.scheduled` dropped the UUID of the alarm sounding right
   /// now, blinding [isRinging] and putting the live alert beyond [cancel].
   /// Every other state is still ours — including `unknown`, which is how a
   /// state a future iOS adds arrives, so pruning on it would wipe the whole map
-  /// on the first resync. Nivaat's orphan sweep runs this every pass.
-  @override
-  Future<Set<int>> scheduledIds() async {
+  /// on the first resync.
+  Future<({Map<String, List<String>> map, Map<String, Alarm> byUuid})>
+      _livingMap() async {
     final map = await _loadMap();
-    final Set<String> known;
-    try {
-      known = {for (final a in await _ak.getAlarms()) a.id};
-    } on PlatformException {
-      return {};
-    }
+    final alarms = await _ak.getAlarms();
+    final byUuid = {for (final a in alarms) a.id: a};
     var changed = false;
     final kept = <String, List<String>>{};
     for (final e in map.entries) {
-      final live = e.value.where(known.contains).toList();
+      final live = e.value.where(byUuid.containsKey).toList();
       if (live.length != e.value.length) changed = true;
       if (live.isNotEmpty) kept[e.key] = live;
     }
@@ -211,7 +231,7 @@ class AlarmKitScheduler implements AlarmScheduler {
     // blob with no cross-isolate lock (REVIEW #7), so every needless save is
     // another chance for two isolates to overwrite each other.
     if (changed) await _saveMap(kept);
-    return kept.keys.map(int.parse).toSet();
+    return (map: kept, byUuid: byUuid);
   }
 
   @override
@@ -223,16 +243,83 @@ class AlarmKitScheduler implements AlarmScheduler {
     // cancel a ring that is physically sounding.
     final uuids = map['$id'] ?? const <String>[];
     if (uuids.isEmpty) return false;
-    try {
-      final alarms = await _ak.getAlarms();
-      for (final a in alarms) {
-        if (uuids.contains(a.id) && a.state == AlarmState.alerting) return true;
-      }
-    } on PlatformException {
-      // fall through
+    // **A failed query THROWS rather than answering "not ringing"**, the same
+    // rule [scheduledAlarms] follows and for a worse reason: every caller of
+    // this is asking permission to destroy something. `_cancelExcept` and the
+    // orphan sweep both read `false` as "safe to cancel", so swallowing a
+    // transient AlarmKit error here silences an alarm that is physically
+    // sounding — which is exactly what this method was written to prevent
+    // (REVIEW #3 · #4). A throw aborts the pass instead, and every pass here
+    // is rebuilt from scratch on the next one.
+    final alarms = await _ak.getAlarms();
+    for (final a in alarms) {
+      if (uuids.contains(a.id) && a.state == AlarmState.alerting) return true;
     }
     return false;
   }
+
+  /// **False — AlarmKit tells us nothing it did on its own.** There is no iOS
+  /// equivalent of `Alarm.events`: no boot receiver to discard a stale alarm,
+  /// no foreground-service refusal to defer one, and no marker drained at
+  /// init. So on iOS "the ring is no longer there" carries no information
+  /// about whether it rang — it is what an ordinary dismissed alarm looks
+  /// like — and Nivaat must not read it as a miss. Getting this wrong labels
+  /// every iOS morning `Couldn't confirm`, because AlarmKit never opens the
+  /// app and so the app is essentially never running while the alert sounds.
+  @override
+  bool get reportsHostEvents => false;
+
+  @override
+  Future<void> applyHostAlarmEvents() async {}
+
+  /// What AlarmKit still holds, per int id, with each alarm's own fire date.
+  ///
+  /// **A `null` here used to be unconditional, and that was a real hazard**:
+  /// Nivaat reads "the plugin has nothing for this id" as evidence the ring is
+  /// gone, so a late ring armed for ten seconds' time was read as vanished and
+  /// the occurrence closed out from under it. Only [FixedAlarmSchedule] can
+  /// answer the question — a relative or unknown schedule has no single
+  /// instant — and every alarm this class creates is a one-shot, so anything
+  /// else is a handle we should keep but cannot date.
+  /// **A failed query THROWS rather than answering "nothing is armed".**
+  ///
+  /// [scheduledIds] may swallow the same failure because it feeds the orphan
+  /// sweep, where the worst case is cancelling nothing. This one feeds the
+  /// opposite decision: Nivaat reads an absent id as "the ring is gone" and
+  /// closes the occurrence on it. Returning an empty map on a transient
+  /// AlarmKit hiccup would finalise a morning whose alarm is still sitting in
+  /// the system, armed and about to sound — "I could not ask" is not "it is
+  /// not there", which is REVIEW #2's rule pointed at a different call.
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async {
+    final living = await _livingMap();
+    final out = <int, ScheduledAlarmInfo>{};
+    for (final e in living.map.entries) {
+      final id = int.parse(e.key);
+      // Newest first, so the first datable one is the live handle. An older
+      // UUID whose cancel was refused is still ours, but the newest is what
+      // this id means now.
+      for (final uuid in e.value) {
+        final schedule = living.byUuid[uuid]?.schedule;
+        if (schedule is FixedAlarmSchedule) {
+          out[id] = ScheduledAlarmInfo(
+            id: id,
+            dateTime: schedule.date,
+            // Every handle AlarmKit still knows, not just the datable newest:
+            // a refused cancel leaves an older alarm live under this same id.
+            handles: e.value.length,
+          );
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  @override
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {}
 }
 
 /// Picks the scheduler for the platform: **AlarmKit on iOS** (min target 26,

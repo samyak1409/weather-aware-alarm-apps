@@ -83,14 +83,19 @@ class _HistorySheetState extends State<_HistorySheet> {
                       // icon too — the wind isn't what ended that morning.
                       final icon = h.kind == HistoryKind.cancelled
                           ? Icons.cancel_outlined
-                          : switch (h.outcome) {
-                              CheckOutcome.rang =>
-                                Icons.notifications_active_outlined,
-                              CheckOutcome.skippedWindy ||
-                              CheckOutcome.skippedGusty =>
-                                Icons.air,
-                              CheckOutcome.skippedNoData =>
-                                Icons.cloud_off_outlined,
+                          : switch (h.ringDisposition) {
+                              RingDisposition.missed ||
+                              RingDisposition.unknown =>
+                                Icons.alarm_off_outlined,
+                              _ => switch (h.outcome) {
+                                  CheckOutcome.rang =>
+                                    Icons.notifications_active_outlined,
+                                  CheckOutcome.skippedWindy ||
+                                  CheckOutcome.skippedGusty =>
+                                    Icons.air,
+                                  CheckOutcome.skippedNoData =>
+                                    Icons.cloud_off_outlined,
+                                },
                             };
                       // Both lines are built outside this widget, so they can
                       // be asserted as whole strings — see nivaatHistorySub.

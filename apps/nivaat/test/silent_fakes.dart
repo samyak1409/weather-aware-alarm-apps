@@ -47,6 +47,24 @@ class SilentRing implements AlarmScheduler {
 
   @override
   Future<bool> isRinging(int id) async => false;
+
+  /// False — this is the **iOS-shaped** double. AlarmKit reports nothing it
+  /// does on its own, so a ring that is no longer armed says nothing about
+  /// whether it sounded, and Nivaat must record an ordinary morning rather
+  /// than `Couldn't confirm`. `FakeRing` is the Android side (true).
+  @override
+  bool get reportsHostEvents => false;
+
+  @override
+  Future<void> applyHostAlarmEvents() async {}
+
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async => {};
+
+  @override
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {}
 }
 
 class SilentChecks implements CheckScheduler {

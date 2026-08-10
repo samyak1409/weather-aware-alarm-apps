@@ -5,10 +5,10 @@ packages:
     dependency: "direct main"
     description:
       name: alarm
-      sha256: b88ca65501047cfb099b362c6d5b09eca41f3cc8c9bdb0ca9db98b4e2048e59c
+      sha256: "942841fa7c669f948555109ab03e2aaa7af3741dc38b2f1fc899d040182c735b"
       url: "https://pub.dev"
     source: hosted
-    version: "5.8.0"
+    version: "5.10.0"
   args:
     dependency: transitive
     description:

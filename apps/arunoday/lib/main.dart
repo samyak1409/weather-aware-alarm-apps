@@ -30,6 +30,19 @@ Future<void> main() async {
           soundAssetForVolume: arunodaySoundForVolume,
           tintColor: '#FFB067',
         );
+  // **Built BEFORE the plugin is initialised, and that order is load-bearing.**
+  // The controller's constructor registers the host-event handler, while
+  // `ensureInitialized` runs `Alarm.init()` — which drains every event the host
+  // recorded while no engine was running and replays it immediately. Starting
+  // the plugin first meant those replays arrived with no handler attached and
+  // were simply gone: a ring dropped at boot, and nothing in the app that could
+  // re-arm it. (The handler itself waits for `loaded` before touching alarms —
+  // see `_onHostAlarmEvent` — so registering this early cannot arm anything
+  // against half-read settings.)
+  final controller = ArunodayController(
+    store: ArunodayStore(),
+    scheduler: scheduler,
+  );
   try {
     await scheduler.ensureInitialized();
   } on Exception catch (e) {
@@ -37,10 +50,6 @@ Future<void> main() async {
     debugPrint('arunoday Alarm.init failed (non-fatal): $e');
   }
 
-  final controller = ArunodayController(
-    store: ArunodayStore(),
-    scheduler: scheduler,
-  );
   unawaited(controller.init());
   // Notification permission (Android: the ring's card/full-screen UI). The
   // future resolves when the dialog is answered — kept so the home screen's

@@ -162,12 +162,116 @@ class CheckState {
       );
 }
 
+/// Which of Nivaat's three ring lockers held the pending ring.
+enum RingLockerRole { ring, lateRing, nextRing }
+
+/// A ring that was scheduled but not yet settled as audible / dropped / unknown.
+///
+/// Separate from [CheckState] so roll-on can open the next occurrence while
+/// this still tracks the previous ring: [CheckState] is one slot per alarm, so
+/// it cannot hold an unsettled ring and the next occurrence at once.
+class PendingRing {
+  const PendingRing({
+    required this.alarmId,
+    required this.pluginId,
+    required this.role,
+    required this.occurrenceAt,
+    required this.scheduledFor,
+    required this.courtId,
+    this.volume,
+    this.courtSpeedKmh,
+    this.rawGustKmh,
+    this.courtSpeedLimitKmh,
+    this.rawGustLimitKmh,
+    this.lastCheckAt,
+    this.rollOnDone = false,
+  });
+
+  final int alarmId;
+  final int pluginId;
+  final RingLockerRole role;
+
+  /// The occurrence this ring belongs to (alarmAt).
+  final DateTime occurrenceAt;
+
+  /// When the plugin was told to ring (may differ for lateRing / moves).
+  final DateTime scheduledFor;
+
+  final String courtId;
+  final double? volume;
+  final double? courtSpeedKmh;
+  final double? rawGustKmh;
+  final int? courtSpeedLimitKmh;
+  final double? rawGustLimitKmh;
+  final DateTime? lastCheckAt;
+
+  /// True once `_rollOn` has already run for this pending — finalize must not
+  /// roll again (replay / second isolate).
+  final bool rollOnDone;
+
+  PendingRing copyWith({
+    DateTime? scheduledFor,
+    bool? rollOnDone,
+  }) =>
+      PendingRing(
+        alarmId: alarmId,
+        pluginId: pluginId,
+        role: role,
+        occurrenceAt: occurrenceAt,
+        scheduledFor: scheduledFor ?? this.scheduledFor,
+        courtId: courtId,
+        volume: volume,
+        courtSpeedKmh: courtSpeedKmh,
+        rawGustKmh: rawGustKmh,
+        courtSpeedLimitKmh: courtSpeedLimitKmh,
+        rawGustLimitKmh: rawGustLimitKmh,
+        lastCheckAt: lastCheckAt,
+        rollOnDone: rollOnDone ?? this.rollOnDone,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'alarmId': alarmId,
+        'pluginId': pluginId,
+        'role': role.name,
+        'occurrenceAt': occurrenceAt.toIso8601String(),
+        'scheduledFor': scheduledFor.toIso8601String(),
+        'courtId': courtId,
+        'volume': volume,
+        'courtSpeedKmh': courtSpeedKmh,
+        'rawGustKmh': rawGustKmh,
+        'courtSpeedLimitKmh': courtSpeedLimitKmh,
+        'rawGustLimitKmh': rawGustLimitKmh,
+        'lastCheckAt': lastCheckAt?.toIso8601String(),
+        'rollOnDone': rollOnDone,
+      };
+
+  factory PendingRing.fromJson(Map<String, dynamic> j) => PendingRing(
+        alarmId: j['alarmId'] as int,
+        pluginId: j['pluginId'] as int,
+        role: RingLockerRole.values.byName(j['role'] as String),
+        occurrenceAt: DateTime.parse(j['occurrenceAt'] as String),
+        scheduledFor: DateTime.parse(j['scheduledFor'] as String),
+        courtId: j['courtId'] as String,
+        volume: (j['volume'] as num?)?.toDouble(),
+        courtSpeedKmh: (j['courtSpeedKmh'] as num?)?.toDouble(),
+        rawGustKmh: (j['rawGustKmh'] as num?)?.toDouble(),
+        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,
+        rawGustLimitKmh: (j['rawGustLimitKmh'] as num?)?.toDouble(),
+        lastCheckAt: switch (j['lastCheckAt']) {
+          final String s => DateTime.parse(s),
+          _ => null,
+        },
+        rollOnDone: j['rollOnDone'] as bool,
+      );
+}
+
 class NivaatStore {
   static const _courtsKey = 'nivaat.courts';
   static const _alarmsKey = 'nivaat.alarms';
   static const _alarmIdSeqKey = 'nivaat.alarmIdSeq';
   static const _historyKey = 'nivaat.history';
   static const _statePrefix = 'nivaat.checkstate.';
+  static const _pendingPrefix = 'nivaat.pendingRing.';
   static const _soundKey = 'nivaat.sound';
 
   /// Re-reads the on-disk prefs into THIS isolate's cache. SharedPreferences
@@ -327,7 +431,16 @@ class NivaatStore {
     await _saveList(_historyKey, kept.map((r) => r.toJson()));
   }
 
+  /// **Reads and writes reload first, exactly like the history rows and the
+  /// pending ring** (REVIEW #7's rule, extended here 2026-08-09).
+  ///
+  /// `CheckState` is the same shape of state as those two — written by
+  /// whichever isolate is awake, read by the other — and it carries
+  /// `ringScheduled`, which decides whether a morning is settled at all. A
+  /// foreground holding a snapshot from launch would re-save an old
+  /// `ringScheduled` over a background isolate that had just cleared it.
   Future<CheckState?> loadCheckState(int alarmId) async {
+    await refresh();
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('$_statePrefix$alarmId');
     if (raw == null) return null;
@@ -335,6 +448,7 @@ class NivaatStore {
   }
 
   Future<void> saveCheckState(CheckState state) async {
+    await refresh();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       '$_statePrefix${state.alarmId}',
@@ -343,8 +457,56 @@ class NivaatStore {
   }
 
   Future<void> clearCheckState(int alarmId) async {
+    await refresh();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_statePrefix$alarmId');
+  }
+
+  /// **Every pending-ring read and write reloads first** (the REVIEW #7 rule,
+  /// extended here 2026-08-09).
+  ///
+  /// This slot decides whether a morning reads `Rang` or `Couldn't confirm`,
+  /// and it is written by whichever isolate happened to be awake at T. Without
+  /// the reload the foreground, holding a snapshot from launch, sees no pending
+  /// for a ring the background check armed at 06:00 — and then settles the
+  /// morning as unconfirmed on evidence it simply could not see. Same split as
+  /// the history rows, on the state that now chooses the wording.
+  Future<PendingRing?> loadPendingRing(int alarmId) async {
+    await refresh();
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_pendingPrefix$alarmId');
+    if (raw == null) return null;
+    return PendingRing.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<void> savePendingRing(PendingRing pending) async {
+    await refresh();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      '$_pendingPrefix${pending.alarmId}',
+      jsonEncode(pending.toJson()),
+    );
+  }
+
+  Future<void> clearPendingRing(int alarmId) async {
+    await refresh();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_pendingPrefix$alarmId');
+  }
+
+  /// Every pending ring still on disk — used for ambiguous-B recovery and
+  /// host-event matching across alarms.
+  Future<List<PendingRing>> loadAllPendingRings() async {
+    await refresh();
+    final prefs = await SharedPreferences.getInstance();
+    final out = <PendingRing>[];
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(_pendingPrefix)) continue;
+      final raw = prefs.getString(key);
+      if (raw == null) continue;
+      out.add(PendingRing.fromJson(jsonDecode(raw) as Map<String, dynamic>));
+    }
+    return out;
   }
 
   static List<T> _decodeList<T>(

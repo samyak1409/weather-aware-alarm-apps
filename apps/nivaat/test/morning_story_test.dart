@@ -233,7 +233,15 @@ void main() {
         () async {
       await openWindyWindow();
       api.sample = wind(5.0, 5.0);
-      await runAt(alarmAt.add(const Duration(minutes: 7)));
+      final late = alarmAt.add(const Duration(minutes: 7));
+      await runAt(late);
+      await settleAudibleRing(
+        ring: ring,
+        engine: engine,
+        alarm: alarm,
+        courts: [court],
+        now: late.add(const Duration(seconds: 10)),
+      );
 
       expect(notifier.cancelled, contains(alarm.id),
           reason: 'the ring is that morning’s notification now');
@@ -251,6 +259,13 @@ void main() {
       api.sample = wind(5.0, 5.0);
       await runAt(alarmAt.subtract(const Duration(minutes: 1)));
       await runAt(alarmAt);
+      await settleAudibleRing(
+        ring: ring,
+        engine: engine,
+        alarm: alarm,
+        courts: [court],
+        now: alarmAt.add(const Duration(seconds: 10)),
+      );
 
       expect(notifier.pushes, isEmpty, reason: 'nothing to explain');
       expect(await story(), [
@@ -481,6 +496,13 @@ void main() {
               now: t),
           isTrue);
       await controller.lastEvaluation;
+      await settleAudibleRing(
+        ring: ring,
+        engine: engine,
+        alarm: alarm.copyWith(courtSpeedLimitKmh: 6),
+        courts: [court],
+        now: t.add(const Duration(seconds: 10)),
+      );
 
       expect((await rows()).last.outcome, CheckOutcome.rang,
           reason: 'the continue path kept today alive');

@@ -31,6 +31,8 @@
 /// erase the ring's own card and its Stop button.
 library;
 
+import 'package:core/core.dart';
+
 class NivaatIds {
   NivaatIds._();
 
@@ -108,6 +110,21 @@ class NivaatIds {
     for (final block in const [ringBlock, lateRingBlock, nextRingBlock]) {
       // Alarm ids start at 1, so `block` itself is never a valid ring.
       if (id > block && id <= block + maxAlarmId) return id - block;
+    }
+    return null;
+  }
+
+  /// Which locker [id] belongs to, or null when it is not a ring id at all.
+  static RingLockerRole? ringRoleOf(int id) {
+    if (alarmIdOfRing(id) == null) return null;
+    if (id > ringBlock && id <= ringBlock + maxAlarmId) {
+      return RingLockerRole.ring;
+    }
+    if (id > lateRingBlock && id <= lateRingBlock + maxAlarmId) {
+      return RingLockerRole.lateRing;
+    }
+    if (id > nextRingBlock && id <= nextRingBlock + maxAlarmId) {
+      return RingLockerRole.nextRing;
     }
     return null;
   }

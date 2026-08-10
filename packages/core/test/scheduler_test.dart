@@ -73,16 +73,15 @@ void main() {
       expect(ramped.volumeSettings.volumeEnforced, isTrue);
     });
 
-    test('the ring notification keeps the plugin\'s dismiss behaviour', () {
-      // Pinned so turning it off again has to be deliberate — and it IS meant
-      // to be turned off once #421 lands, when this flips to `isFalse` in the
-      // same change. The why is on `settingsFor`'s dartdoc.
+    test('the ring notification re-posts on dismiss while still ringing', () {
+      // alarm 5.9.0 / #421 / #423: false restores the notification on swipe
+      // instead of leaving a sounding alarm with no Stop control.
       final scheduler = AlarmPkgScheduler(soundAssetForVolume: (_) => 'r.wav');
       final settings = scheduler
           .settingsFor(
               id: 1, at: DateTime(2026), title: 'Wake', body: 'Dawn', volume: null)
           .notificationSettings;
-      expect(settings.androidStopAlarmOnDismiss, isTrue);
+      expect(settings.androidStopAlarmOnDismiss, isFalse);
       expect(settings.title, 'Wake');
       expect(settings.body, 'Dawn');
       expect(settings.stopButton, 'Stop');

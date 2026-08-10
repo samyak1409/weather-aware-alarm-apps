@@ -2,6 +2,7 @@ import 'package:alarm/alarm.dart';
 import 'package:alarm/utils/alarm_exception.dart';
 import 'package:flutter/foundation.dart';
 
+import 'host_alarm_events.dart';
 import 'scheduler.dart';
 
 /// The Android status-bar notification icon, by resource name (CLAUDE.md).
@@ -21,7 +22,19 @@ const String kNotificationIconRes = 'ic_notification';
 class AlarmPkgScheduler implements AlarmScheduler {
   AlarmPkgScheduler({
     required String Function(double volume) soundAssetForVolume,
-  }) : _soundAssetForVolume = soundAssetForVolume;
+    HostAlarmEventClaims? claims,
+    HostAlarmEventSource? eventSource,
+  })  : _soundAssetForVolume = soundAssetForVolume,
+        _bridge = HostAlarmEventBridge(
+          events: eventSource ?? _alarmEventsAsHost,
+          claims: claims ?? HostAlarmEventClaims(),
+          ensurePluginReady: () async {
+            if (!_initialized) {
+              await Alarm.init();
+              _initialized = true;
+            }
+          },
+        );
 
   /// Resolves the sound at schedule time (user-selectable tone). Receives the
   /// ring volume for parity with AlarmKit's loudness-variant mapping; this
@@ -29,6 +42,32 @@ class AlarmPkgScheduler implements AlarmScheduler {
   /// only through [ringAsset] — passing a ring volume here is the bug that
   /// getter exists to prevent.
   final String Function(double volume) _soundAssetForVolume;
+
+  final HostAlarmEventBridge _bridge;
+
+  /// Test seam: the claim store the bridge uses.
+  @visibleForTesting
+  HostAlarmEventClaims get hostEventClaims => _bridge.claims;
+
+  static Stream<HostAlarmEvent> _alarmEventsAsHost() => Alarm.events.map(_toHost);
+
+  static HostAlarmEvent _toHost(AlarmEvent e) => HostAlarmEvent(
+        id: e.id,
+        kind: switch (e) {
+          AlarmMoved() => HostAlarmEventKind.moved,
+          AlarmDropped() => HostAlarmEventKind.dropped,
+        },
+        cause: switch (e.cause) {
+          AlarmEventCause.snooze => HostAlarmEventCause.snooze,
+          AlarmEventCause.platformRefusal => HostAlarmEventCause.platformRefusal,
+          AlarmEventCause.staleAtBoot => HostAlarmEventCause.staleAtBoot,
+        },
+        recordedAt: e.recordedAt,
+        at: switch (e) {
+          AlarmMoved(:final nextRingAt) => nextRingAt,
+          AlarmDropped(:final scheduledFor) => scheduledFor,
+        },
+      );
 
   /// The tone to play, resolved at FULL volume whatever the ring volume is.
   ///
@@ -57,17 +96,17 @@ class AlarmPkgScheduler implements AlarmScheduler {
     if (_initialized) return;
     await Alarm.init();
     _initialized = true;
+    // Start the bridge after init so the replay buffer is already filled;
+    // handlers still run only when [applyHostAlarmEvents] is awaited.
+    await _bridge.start();
   }
 
   /// Arms the ring, and reports whether the plugin took it.
   ///
-  /// **Read `true` as "accepted", not "armed".** `Alarm.set` returns the
-  /// native result, and on Android that result is `true` even when the
-  /// platform scheduling failed — the plugin drops the failure and replies
-  /// success (upstream issue #420, ours). So this closes the half we own (an
-  /// `AlarmException`, which used to abort the whole cascade pass on its way
-  /// out) and cannot close the other; see REVIEW #2 for why no signal
-  /// available to Dart can.
+  /// **`true` means armed on Android from alarm 5.9.0** (upstream #420 / #422):
+  /// a failed native schedule unsaves and throws `AlarmException`, which this
+  /// method catches as `false`. Before 5.9.0 the plugin reported success even
+  /// when the platform scheduling failed; that half is closed upstream.
   @override
   Future<bool> scheduleRing({
     required int id,
@@ -101,30 +140,13 @@ class AlarmPkgScheduler implements AlarmScheduler {
   /// in here is testable off-device (the rest of [scheduleRing] is plugin
   /// calls), notification settings included.
   ///
-  /// **`androidStopAlarmOnDismiss` is deliberately left at the plugin's `true`**
-  /// (2026-08-05, after device testing), even though the opt-out is ours
-  /// (issue #413 / PR #414, shipped in 5.8.0). A swipe therefore stops the
-  /// alarm. The fear behind #413 — brushing the shade at 6am and silently
-  /// losing your alarm — turns out not to be reachable: the notification is
-  /// `setOngoing(true)`, and ongoing notifications are **not dismissible while
-  /// the phone is locked** (Android 14 behaviour changes), which is the state a
-  /// phone is in at 6am. What is left is a swipe on an unlocked phone, by
-  /// someone awake and holding it, where "stop" is a fair reading.
-  ///
-  /// Turning it off is worse, and that was measured, not guessed: the swipe
-  /// then does *nothing visible* and the alarm plays on with no Stop control
-  /// anywhere. Restoring the notification cannot be done app-side either —
-  /// `AlarmPlugin.alarmTriggerApi` is null with no engine attached, so with the
-  /// app closed Dart is never told the alarm is ringing at all.
-  ///
-  /// **So `true` here is INTERIM, not a preference.** Asked upstream as issue
-  /// #421, which would make the opt-out *restore* the notification rather than
-  /// ignore the swipe. **When a release contains that, set this to `false`**
-  /// (or to `restore`, if it ships as a third state) and flip
-  /// `scheduler_test` with it: the swipe then costs neither the alarm nor the
-  /// Stop button, which is better than either answer available today. If it is
-  /// rejected, `true` is the permanent answer and this paragraph should say
-  /// that instead. See CLAUDE.md's *Upstream* section.
+  /// **`androidStopAlarmOnDismiss: false`** (alarm 5.9.0 / #421 / #423). A
+  /// swipe on an unlocked phone re-posts the notification while the alarm is
+  /// still ringing, so the Stop control is never lost. Before 5.9.0 the
+  /// opt-out only ignored the swipe and left a sounding alarm with no on-screen
+  /// control — which is why this stayed at the plugin's `true` as an interim.
+  /// Locked phones already keep the notification pinned (`setOngoing`), so the
+  /// swipe case that matters is unlocked-only.
   @visibleForTesting
   AlarmSettings settingsFor({
     required int id,
@@ -181,10 +203,9 @@ class AlarmPkgScheduler implements AlarmScheduler {
           stopButton: 'Stop',
           // Android-only in the plugin; iOS ignores it and uses the app icon.
           icon: kNotificationIconRes,
-          // Spelled out rather than left to the plugin's default, so the
-          // decision above is visible in the code and a change to that default
-          // cannot flip our behaviour silently.
-          androidStopAlarmOnDismiss: true,
+          // Spelled out rather than left to the plugin's default, so a change
+          // to that default cannot flip our behaviour silently.
+          androidStopAlarmOnDismiss: false,
         ),
       );
 
@@ -195,15 +216,48 @@ class AlarmPkgScheduler implements AlarmScheduler {
   }
 
   @override
-  Future<Set<int>> scheduledIds() async {
-    await ensureInitialized();
-    final alarms = await Alarm.getAlarms();
-    return alarms.map((a) => a.id).toSet();
-  }
+  Future<Set<int>> scheduledIds() async => (await scheduledAlarms()).keys.toSet();
 
   @override
   Future<bool> isRinging(int id) async {
     await ensureInitialized();
     return Alarm.isRinging(id);
+  }
+
+  /// True — Android reports host moves and drops on `Alarm.events` from
+  /// `alarm 5.10.0`, so a ring that vanished with nothing said about it is a
+  /// genuine anomaly here and Nivaat may treat it as one.
+  @override
+  bool get reportsHostEvents => true;
+
+  @override
+  Future<void> applyHostAlarmEvents() => _bridge.apply();
+
+  /// One `Alarm.getAlarms()` for the whole set.
+  ///
+  /// Not an optimisation detail: the plugin's `Alarm.getAlarm(id)` is a linear
+  /// scan over `getAlarms()`, so asking per id repeated the same platform round
+  /// trip for every alarm in the window (and logged a plugin warning on each
+  /// miss). Arunoday's resync alone asked twenty-odd times.
+  ///
+  /// `Alarm.init()` drains the native pending events into `Alarm.events`, so
+  /// the app's handlers are awaited first — no caller may treat this snapshot
+  /// as authoritative while a drop for one of these ids is still unapplied.
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async {
+    await ensureInitialized();
+    await applyHostAlarmEvents();
+    final alarms = await Alarm.getAlarms();
+    return {
+      for (final a in alarms)
+        a.id: ScheduledAlarmInfo(id: a.id, dateTime: a.dateTime),
+    };
+  }
+
+  @override
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {
+    _bridge.setHandler(handler);
   }
 }

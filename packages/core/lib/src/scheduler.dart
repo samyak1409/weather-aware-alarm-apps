@@ -1,3 +1,5 @@
+import 'host_alarm_events.dart';
+
 /// Platform-alarm abstraction. Screens and engines talk to this interface
 /// only; the concrete impls (`AlarmPkgScheduler`, `AlarmKitScheduler`) live in
 /// core and are picked by `createAlarmScheduler` — AlarmKit on iOS (min
@@ -17,14 +19,17 @@ abstract class AlarmScheduler {
   ///
   /// **Returns whether the alarm is really armed, and a caller that records
   /// "scheduled" must check it.** `false` means no alarm exists: on iOS a
-  /// denied or unavailable AlarmKit, on Android a rejected `Alarm.set`.
-  /// Silently returning here was how Nivaat came to log `Rang` for a morning
-  /// nothing was ever armed for (REVIEW #2).
+  /// denied or unavailable AlarmKit, on Android a rejected `Alarm.set`
+  /// (`AlarmException` since alarm 5.9.0 / upstream #420). Silently returning
+  /// here was how Nivaat came to log `Rang` for a morning nothing was ever
+  /// armed for (REVIEW #2).
   ///
-  /// `true` means the platform accepted it — which on Android is not the same
-  /// as proof, because the plugin reports a failed native scheduling as
-  /// success (upstream issue #420). That half cannot be fixed from Dart; this
-  /// one can, and does.
+  /// `true` means the platform accepted and armed it. On Android that claim
+  /// was unreliable before 5.9.0 (the plugin reported success on a failed
+  /// native schedule); from 5.9.0 a failed arm unsaves and throws, so `true`
+  /// is proof again. **It is still not Rang proof** — a successful schedule
+  /// only means the ring is owed; audible / host-drop / ambiguous settle is
+  /// what finalises history (see host-event bridge / pending ring).
   Future<bool> scheduleRing({
     required int id,
     required DateTime at,
@@ -39,6 +44,71 @@ abstract class AlarmScheduler {
 
   /// True while the alarm with [id] is actively ringing.
   Future<bool> isRinging(int id);
+
+  /// **Whether this platform can tell the app an alarm was moved or dropped
+  /// without being asked.** Android can, from `alarm 5.10.0` (`Alarm.events`);
+  /// AlarmKit cannot, and neither can the harness scheduler.
+  ///
+  /// This is the difference between "the ring is gone, and nothing said why"
+  /// meaning *something went wrong* and it meaning *nothing at all*. Where
+  /// drops are reported, a vanished ring with no event is genuinely ambiguous
+  /// and Nivaat records `Couldn't confirm`; where they are not, a vanished
+  /// ring is just an alarm that fired and was dismissed — the ordinary case —
+  /// and reading it as a miss would label **every** iOS morning as unconfirmed.
+  /// Nivaat gates its ambiguous-B policy on this; see `_settleRingScheduled`.
+  bool get reportsHostEvents;
+
+  /// Drain buffered / queued host alarm events and await their handlers.
+  ///
+  /// Must be awaited before evaluate / orphan sweep / cancel / re-arm.
+  /// Subscribing to a stream is **not** a barrier — call this explicitly.
+  /// No-op for schedulers that have no host events (AlarmKit / NoOp).
+  Future<void> applyHostAlarmEvents() async {}
+
+  /// **Everything the platform currently has armed, in ONE round trip.**
+  ///
+  /// The batch shape is not a convenience: `Alarm.getAlarm(id)` fetches the
+  /// whole list over Pigeon anyway, so asking per id turned one resync into
+  /// twenty-odd platform calls. It also gives a caller a single consistent
+  /// snapshot to reason over, instead of a series that can shift underneath it.
+  ///
+  /// Bookkeeping for move recovery / cancel policy only — **never Rang proof**.
+  /// A time surviving in the plugin's storage does not mean the morning rang.
+  ///
+  /// **Throws if the platform cannot be asked.** An empty map means the
+  /// platform answered and holds nothing; it must never stand in for a failed
+  /// query, because callers read an absent id as "that ring is gone" and close
+  /// the occurrence on it. A caller that cannot tolerate the throw should soft
+  /// -fail the whole pass and retry, not guess.
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms();
+
+  /// Register the app handler for host drop/move events. Cleared with `null`.
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {}
+}
+
+/// What the plugin currently has stored for one id — never a ring proof.
+class ScheduledAlarmInfo {
+  const ScheduledAlarmInfo({
+    required this.id,
+    required this.dateTime,
+    this.handles = 1,
+  });
+
+  final int id;
+  final DateTime dateTime;
+
+  /// How many live platform alarms this id still resolves to.
+  ///
+  /// **Normally 1, and >1 is a state a caller must not ignore.** On iOS an id
+  /// maps to a LIST of AlarmKit UUIDs, because a cancel that was refused keeps
+  /// its handle rather than losing the alarm for good (REVIEW #6) — so an
+  /// extra handle is a real alarm that will really sound. [dateTime] describes
+  /// only the newest, so anything deciding "this id is already correct, leave
+  /// it alone" has to check this too, or the older one rings unnoticed and
+  /// nothing ever retries the cancel that failed.
+  final int handles;
 }
 
 /// Opt-in via `--dart-define=SCREENSHOT_HARNESS=true`. Capture builds use
@@ -83,4 +153,20 @@ class NoOpAlarmScheduler implements AlarmScheduler {
 
   @override
   Future<bool> isRinging(int id) async => false;
+
+  /// False, like AlarmKit: a harness build arms nothing, so nothing can ever
+  /// report a drop — and Nivaat must not read that silence as a missed ring.
+  @override
+  bool get reportsHostEvents => false;
+
+  @override
+  Future<void> applyHostAlarmEvents() async {}
+
+  @override
+  Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async => {};
+
+  @override
+  void setHostAlarmEventHandler(
+    Future<void> Function(HostAlarmEvent event)? handler,
+  ) {}
 }

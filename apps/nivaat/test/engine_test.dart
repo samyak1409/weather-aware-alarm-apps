@@ -82,10 +82,19 @@ void main() {
     expect(api.lastCallWasCurrent, isTrue, reason: 'within live window');
     // ...then the T-0 check runs.
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+    // Post-T schedule holds pending — settle when audible.
+    await settleAudibleRing(
+      ring: ring,
+      engine: engine,
+      alarm: alarm,
+      courts: [court],
+      now: alarmAt.add(const Duration(seconds: 10)),
+    );
 
     final history = await engine.store.loadHistory();
     expect(history, hasLength(1));
     expect(history.first.outcome, CheckOutcome.rang);
+    expect(history.first.ringDisposition, RingDisposition.rang);
     expect(history.first.volume, 0.85);
     // Finalising doesn't stop at the closed occurrence: the same pass
     // evaluates tomorrow — pre-arms it (still calm) and books its ladder —
@@ -147,6 +156,10 @@ void main() {
       courtSpeedLimitKmh: 4,
       retryMinutesAfter: 1,
     );
+    // Seeded into the store, not just handed to the engine: `_stillLive`
+    // compares the pass's snapshot against what is saved, so an alarm the
+    // store has never heard of is a fixture production cannot produce.
+    await engine.store.saveAlarms([short]);
     api.sample = wind(9.0, 10.0);
     // Pre-T check seeds CheckState for today's occurrence (evaluating at
     // exact T with no state would roll to tomorrow via nextOccurrence).
@@ -193,6 +206,10 @@ void main() {
       courtSpeedLimitKmh: 4,
       retryMinutesAfter: 60,
     );
+    // Seeded into the store, not just handed to the engine: `_stillLive`
+    // compares the pass's snapshot against what is saved, so an alarm the
+    // store has never heard of is a fixture production cannot produce.
+    await engine.store.saveAlarms([long]);
     api.sample = wind(9.0, 10.0);
     await engine.evaluateAlarm(long, [court],
         now: alarmAt.subtract(const Duration(minutes: 1)));
@@ -231,6 +248,13 @@ void main() {
     api.sample = wind(5.0, 5.0); // court 3.0 -> ring
     final late = alarmAt.add(const Duration(minutes: 7));
     await engine.evaluateAlarm(alarm, [court], now: late);
+    await settleAudibleRing(
+      ring: ring,
+      engine: engine,
+      alarm: alarm,
+      courts: [court],
+      now: late.add(const Duration(seconds: 10)),
+    );
 
     expect(
         ring.log.any((e) =>
@@ -340,6 +364,10 @@ void main() {
       courtSpeedLimitKmh: 4,
       retryMinutesAfter: 1,
     );
+    // Seeded into the store, not just handed to the engine: `_stillLive`
+    // compares the pass's snapshot against what is saved, so an alarm the
+    // store has never heard of is a fixture production cannot produce.
+    await engine.store.saveAlarms([short]);
     api.sample = wind(9.0, 10.0);
     await engine.evaluateAlarm(short, [court],
         now: alarmAt.subtract(const Duration(minutes: 1)));
@@ -406,6 +434,13 @@ void main() {
     api.sample = wind(2.0, 4.0);
     final lateNow = alarmAt.add(const Duration(minutes: 5));
     await engine.evaluateAlarm(alarm, [court], now: lateNow);
+    await settleAudibleRing(
+      ring: ring,
+      engine: engine,
+      alarm: alarm,
+      courts: [court],
+      now: lateNow.add(const Duration(seconds: 10)),
+    );
 
     // The LATE locker is where a post-T ring lands, and it is what this test
     // is about. (It used to read `todayRing`, which passed for the wrong
@@ -999,9 +1034,23 @@ void main() {
     // No exact T-0 check runs (iOS has none). The ring fired at T and the user
     // stopped it. The app is opened 5 min later and the wind has since risen
     // far past the limit — a naive re-check would call this a skip.
+    // Simulate stop: gone from the plugin, not ringing → ambiguous B unknown
+    // unless we still hear it. Here the user stopped after it sounded, so
+    // mark audible settle via the pending Rule 2 promotes on open.
     api.sample = wind(20.0, 24.0); // court 12 >> 4
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.add(const Duration(minutes: 5)));
+    // Still armed on the plugin → held as pending, not Rang from dateTime.
+    expect(await engine.store.loadPendingRing(7), isNotNull);
+    expect(await engine.store.loadHistory(), isEmpty,
+        reason: 'schedule alone is never Rang proof');
+    await settleAudibleRing(
+      ring: ring,
+      engine: engine,
+      alarm: alarm,
+      courts: [court],
+      now: alarmAt.add(const Duration(minutes: 5)),
+    );
 
     final history = await engine.store.loadHistory();
     expect(history, hasLength(1));
@@ -1028,6 +1077,13 @@ void main() {
     api.sample = wind(3.0, 6.0); // tomorrow's forecast, calm
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.add(const Duration(minutes: 45)));
+    await settleAudibleRing(
+      ring: ring,
+      engine: engine,
+      alarm: alarm,
+      courts: [court],
+      now: alarmAt.add(const Duration(minutes: 45)),
+    );
 
     final rangRows = (await engine.store.loadHistory())
         .where((h) => h.outcome == CheckOutcome.rang && h.at == alarmAt);
@@ -1175,6 +1231,12 @@ void main() {
 
     api.sample = wind(5.0, 5.0); // whatever tomorrow's forecast says
     await controller.upsertAlarm(alarm.copyWith(hour: 7));
+    // `upsertAlarm` publishes its evaluation rather than awaiting it, so
+    // without this the pass runs on into the NEXT test — past `setUp`, against
+    // a store it has already re-seeded — and writes that test's CheckState for
+    // an occurrence off the real clock. It only ever "passed" by winning a
+    // race with teardown.
+    await controller.lastEvaluation;
 
     final history = await engine.store.loadHistory();
     expect(history, hasLength(1),
@@ -1224,11 +1286,11 @@ void main() {
       // THE #1 regression guard. The ring for T and the T-0 wind check are two
       // exact alarms for the same instant, with no ordering between them. When
       // the check wins by a hair the ring has not sounded yet, so Rule 1 sees
-      // nothing audible and Rule 2 finalises the morning as "rang" — correct,
-      // it is about to. What must NOT follow is the roll-on writing tomorrow
-      // into the same locker: `Alarm.set` stops the id it is replacing, so the
-      // alarm went silent a heartbeat before it would have woken you, under a
-      // history row that said `Rang`.
+      // nothing audible and Rule 2 holds pending (not Rang from schedule) —
+      // correct, it is about to. What must NOT follow is the roll-on writing
+      // tomorrow into the same locker: `Alarm.set` stops the id it is
+      // replacing, so the alarm went silent a heartbeat before it would have
+      // woken you.
       api.sample = wind(5.0, 5.0); // calm — the ladder commits a ring for T
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(hours: 1)));
@@ -1245,9 +1307,10 @@ void main() {
           reason: 'and nothing cancelled it on the way past');
       expect(ring.scheduled[nextRing]!.at, alarmAt.add(const Duration(days: 1)),
           reason: 'tomorrow is pre-armed too, in a locker of its own');
-      // The row is honest once the ring survives: it really is about to sound.
-      expect((await engine.store.loadHistory()).single.outcome,
-          CheckOutcome.rang);
+      // Held pending — not Rang until audible / drop / ambiguous B.
+      expect(await engine.store.loadPendingRing(7), isNotNull);
+      expect(await engine.store.loadHistory(), isEmpty,
+          reason: 'schedule success is never Rang proof');
     });
 
     test('the next occurrence hands its pre-arm back to the normal locker',
@@ -1832,6 +1895,45 @@ void main() {
           'Skipped (no data)',
           reason: 'nothing was measured — no numbers to quote');
     });
+
+    test('ring disposition overrides the wind outcome axis (N4a / N4b)', () {
+      // Never reuse skippedNoData for a platform drop: that one means the
+      // wind could not be read, which is a different fact about a different
+      // thing.
+      expect(
+          nivaatHistoryLine(HistoryRecord(
+            alarmId: 7,
+            courtId: 'c1',
+            at: at,
+            outcome: CheckOutcome.rang,
+            ringDisposition: RingDisposition.missed,
+            courtSpeedKmh: 3,
+            rawGustKmh: 16,
+            courtSpeedLimitKmh: 4,
+            rawGustLimitKmh: 15,
+          )),
+          'Missed · wind 3 (≤4) · gusts 16 (≤15) km/h');
+      expect(
+          nivaatHistoryLine(HistoryRecord(
+            alarmId: 7,
+            courtId: 'c1',
+            at: at,
+            outcome: CheckOutcome.rang,
+            ringDisposition: RingDisposition.unknown,
+          )),
+          "Couldn't confirm");
+      // A row that never settled still reads off the wind axis, so the two are
+      // genuinely orthogonal rather than one shadowing the other.
+      expect(
+          nivaatHistoryLine(HistoryRecord(
+            alarmId: 7,
+            courtId: 'c1',
+            at: at,
+            outcome: CheckOutcome.rang,
+            volume: 0.85,
+          )),
+          'Rang (vol. 85%)');
+    });
   });
 
   /// In-flight cascade for [at] — what the home cue needs to treat a snapshot
@@ -2264,5 +2366,32 @@ void main() {
     await NivaatEngine.standard();
     expect(nivaatSelectedSound, isNull);
     expect(nivaatSoundForVolume(0.70), 'assets/sounds/nivaat_ring_70.wav');
+  });
+  test('an edit landing mid-fetch is not armed by the pass that missed it',
+      () async {
+    // REVIEW #23's race with the alarm still PRESENT. `_stillLive` re-reads the
+    // store at the point of no return, but existence alone said "fine" while
+    // the pass went on to arm 06:00 — a time the user had already moved away
+    // from, on a locker the new occurrence never looks at, so it fires for good.
+    final gated = GatedApi()..sample = wind(5.0, 5.0);
+    final e = NivaatEngine(
+      store: engine.store,
+      scheduler: ring,
+      api: gated,
+      checks: checks,
+      notifier: notifier,
+    );
+    final pass = e.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 30)));
+    await gated.parked.future;
+
+    // The user moves the alarm an hour later while the fetch is in flight.
+    await engine.store.saveAlarms([alarm.copyWith(hour: 7)]);
+    gated.gate.complete();
+    await pass;
+
+    expect(ring.scheduled.containsKey(todayRing), isFalse,
+        reason: 'the stale snapshot must not arm the time it was holding');
+    expect(ring.log.where((l) => l.at == alarmAt), isEmpty);
   });
 }

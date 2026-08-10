@@ -44,12 +44,12 @@ First iOS build is slow (CocoaPods + native compile) — a few minutes is normal
 
 ## First-run prompts & nudge banners (what asks what, and why)
 
-| Prompt / banner | Who shows it | Why it exists |
-| --- | --- | --- |
-| **Notification permission** (system dialog) | Both apps on Android; **Nivaat only on iOS** | Android: the ring's card + full-screen UI ride on it — denied means bare sound with no visible way to stop the alarm outside the app. Nivaat additionally needs it for its skip notifications ("why didn't it ring"), Arunoday for bedtime reminders. On iOS rings are AlarmKit's own full-screen alerts, so only Nivaat asks (skip notifications); Arunoday posts no iOS notifications and asks nothing there (2026-07-20). |
-| **"Allow Nivaat to always run in background?"** (battery-optimisation exemption, asked once at first launch) | **Nivaat, Android only** | The pre-alarm wind-check ladder runs as background wakeups with network; off-charger Doze throttles both (~1 wakeup per 9 min, network suspended), so checks would land late or not at all. **Arunoday deliberately never asks**: it does no background network work — its alarms are exact AlarmManager alarms that fire through Doze anyway. |
-| **AlarmKit permission** (system prompt at first schedule) | Both apps, iOS only | iOS 26's real system alarms; there is no fallback, so denied = nothing rings. |
-| Persistent **nudge banners** on the home screens | Both apps | Denying any of the above is never silently absorbed (2026-07-19): "Notifications are off" (both apps; Arunoday Android-only), "battery optimisation / Background App Refresh" (Nivaat; the Android one re-opens the system dialog — that one, unlike runtime permissions, may be re-asked forever), and "Alarms are turned off" (AlarmKit denied, iOS). Each re-checks on app resume, so fixing it in Settings hides the banner on return. **Armed-home only (2026-07-22):** banners stay hidden on the empty intro (Nivaat until ≥1 alarm; Arunoday until a location is set). |
+| Prompt / banner                                                                                              | Who shows it                                 | Why it exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Notification permission** (system dialog)                                                                  | Both apps on Android; **Nivaat only on iOS** | Android: the ring's card + full-screen UI ride on it — denied means bare sound with no visible way to stop the alarm outside the app. Nivaat additionally needs it for its skip notifications ("why didn't it ring"), Arunoday for bedtime reminders. On iOS rings are AlarmKit's own full-screen alerts, so only Nivaat asks (skip notifications); Arunoday posts no iOS notifications and asks nothing there (2026-07-20).                                                                                                                                                   |
+| **"Allow Nivaat to always run in background?"** (battery-optimisation exemption, asked once at first launch) | **Nivaat, Android only**                     | The pre-alarm wind-check ladder runs as background wakeups with network; off-charger Doze throttles both (~1 wakeup per 9 min, network suspended), so checks would land late or not at all. **Arunoday deliberately never asks**: it does no background network work — its alarms are exact AlarmManager alarms that fire through Doze anyway.                                                                                                                                                                                                                                 |
+| **AlarmKit permission** (system prompt at first schedule)                                                    | Both apps, iOS only                          | iOS 26's real system alarms; there is no fallback, so denied = nothing rings.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Persistent **nudge banners** on the home screens                                                             | Both apps                                    | Denying any of the above is never silently absorbed (2026-07-19): "Notifications are off" (both apps; Arunoday Android-only), "battery optimisation / Background App Refresh" (Nivaat; the Android one re-opens the system dialog — that one, unlike runtime permissions, may be re-asked forever), and "Alarms are turned off" (AlarmKit denied, iOS). Each re-checks on app resume, so fixing it in Settings hides the banner on return. **Armed-home only (2026-07-22):** banners stay hidden on the empty intro (Nivaat until ≥1 alarm; Arunoday until a location is set). |
 
 Deny-testing tip: Android lets an app re-show the notification dialog only once more after the first "Don't allow"; after the second deny only the Settings path works — which is exactly what the banner deep-links to.
 
@@ -88,8 +88,8 @@ Both apps share one permanent keystore under `android-signing/` (gitignored). Pa
 
 ```sh
 cd apps/arunoday   # or apps/nivaat
-flutter build apk --release --split-per-abi --target-platform android-arm64
-# → build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+flutter build apk --release
+# → build/app/outputs/flutter-apk/app-release.apk
 ```
 
 Install that release APK on a phone or emulator (this is **not** `flutter run` — it's the real minified build):
@@ -98,7 +98,7 @@ Install that release APK on a phone or emulator (this is **not** `flutter run` �
 adb devices
 # first column = serial; use -s when more than one device is connected
 
-adb -s <serial> install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+adb -s <serial> install build/app/outputs/flutter-apk/app-release.apk
 ```
 
 Add `-r` to replace an existing install (same signing key). Copied APKs for GitHub uploads live in `./dist/` (gitignored).

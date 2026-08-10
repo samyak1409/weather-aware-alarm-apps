@@ -242,6 +242,28 @@ class NivaatAlarm {
 
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
 
+/// How the ring itself resolved — a SEPARATE axis from what the wind was
+/// doing, and never folded into [CheckOutcome].
+///
+/// `skippedNoData` is "we couldn't read the wind", which is a decision the app
+/// made and can explain; a platform drop is the opposite — the app decided to
+/// ring and the host overruled it. Reusing one for the other would put a wind
+/// reason on a morning the wind had nothing to do with.
+///
+/// A premature post-T `Rang` is superseded in place by [missed] (a known
+/// `AlarmDropped`) or [unknown] (ambiguous: the owed ring vanished with no
+/// host event to explain it).
+enum RingDisposition {
+  /// Positive proof the ring was audible (or pending settled as rang).
+  rang,
+
+  /// Host dropped the alarm (known [AlarmDropped]).
+  missed,
+
+  /// Ambiguous: owed ring vanished with no host event (policy B).
+  unknown,
+}
+
 /// What a row *is*, as opposed to what the wind was doing.
 ///
 /// A morning's heads-up row and its outcome row share a reason (both "windy")
@@ -254,12 +276,16 @@ enum HistoryKind { stillChecking, outcome, cancelled }
 /// One line of Nivaat history: what happened and why. The trust mechanism —
 /// a skipped alarm must always be explainable.
 ///
-/// **Rows are immutable** (user decision 2026-07-26). Every card push appends
-/// one; nothing is ever rewritten, so a row always says what was true when it
-/// was written. A morning that changes its mind — Keep checking widened, then
-/// narrowed — leaves one row per push, and the reader follows the sequence.
-/// That is why there is no `copyWith`: reach for [NivaatStore.upsertHistory]
-/// with a fresh record instead.
+/// **Rows are immutable for card pushes** (user decision 2026-07-26), with one
+/// carve-out (2026-08-08): a premature `Rang` written before the ring settled
+/// is **overwritten in place** — same `alarmId + at + pushSeq`, so
+/// [NivaatStore.upsertHistory]'s dedup replaces it — by a
+/// [RingDisposition.missed] / [RingDisposition.unknown] correction. Rewriting
+/// rather than appending is the point: the sheet renders every row, so an
+/// appended correction would stack visible `Rang` above `Missed` for one
+/// morning. Ordinary Keep-checking edits still append; that is why there is
+/// still no general `copyWith` — reach for `upsertHistory` with a fresh
+/// record instead.
 ///
 /// [pushSeq] is what makes that safe. Two isolates racing on the same push
 /// both read the same counter from `CheckState`, so they write the same
@@ -282,6 +308,8 @@ class HistoryRecord {
     this.courtSpeedLimitKmh,
     this.rawGustLimitKmh,
     this.volume,
+    this.ringDisposition,
+    this.hostEventKey,
   })  : assert(
           watchedUntil == null || kind == HistoryKind.stillChecking,
           'only a still-checking row promises a deadline',
@@ -343,6 +371,17 @@ class HistoryRecord {
   final double? rawGustLimitKmh;
   final double? volume;
 
+  /// Ring settle result when this row is about the ring itself — orthogonal
+  /// to [outcome]'s wind reason. Null on pure wind skips / still-checking.
+  final RingDisposition? ringDisposition;
+
+  /// The host event's `(id, recordedAt)` claim key when this row came from
+  /// one, so a re-delivery finds its own row already written and stops rather
+  /// than appending a second. Host events are delivered at least once by
+  /// design — see `HostAlarmEventClaims` — so this is what makes the settle
+  /// path idempotent, not the claim store.
+  final String? hostEventKey;
+
   /// The wind-check time, defaulting to [at] when unrecorded. For a no-data
   /// skip this is the last *attempt* (there was no successful reading); for
   /// every other outcome it's the last successful check. Always surfaced (even
@@ -378,6 +417,8 @@ class HistoryRecord {
         'courtSpeedLimitKmh': courtSpeedLimitKmh,
         'rawGustLimitKmh': rawGustLimitKmh,
         'volume': volume,
+        'ringDisposition': ringDisposition?.name,
+        'hostEventKey': hostEventKey,
       };
 
   factory HistoryRecord.fromJson(Map<String, dynamic> j) => HistoryRecord(
@@ -404,5 +445,10 @@ class HistoryRecord {
         courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,
         rawGustLimitKmh: (j['rawGustLimitKmh'] as num?)?.toDouble(),
         volume: (j['volume'] as num?)?.toDouble(),
+        ringDisposition: switch (j['ringDisposition']) {
+          final String s => RingDisposition.values.byName(s),
+          _ => null,
+        },
+        hostEventKey: j['hostEventKey'] as String?,
       );
 }

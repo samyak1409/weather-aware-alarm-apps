@@ -1,3 +1,4 @@
+import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/ids.dart';
 
@@ -105,6 +106,17 @@ void main() {
           NivaatIds.alarmIdOfRing(
               NivaatIds.nextRingBlock + NivaatIds.maxAlarmId + 1),
           isNull);
+    });
+
+    test('ringRoleOf maps each locker and ignores non-rings', () {
+      expect(NivaatIds.ringRoleOf(NivaatIds.ring(7)), RingLockerRole.ring);
+      expect(
+          NivaatIds.ringRoleOf(NivaatIds.lateRing(7)), RingLockerRole.lateRing);
+      expect(
+          NivaatIds.ringRoleOf(NivaatIds.nextRing(7)), RingLockerRole.nextRing);
+      expect(NivaatIds.ringRoleOf(NivaatIds.check(7)), isNull);
+      expect(NivaatIds.ringRoleOf(NivaatIds.card(7)), isNull);
+      expect(NivaatIds.ringRoleOf(NivaatIds.ringBlock), isNull);
     });
 
     test('different alarms never share a locker', () {
