@@ -177,23 +177,42 @@ class ArunodayController extends ChangeNotifier {
       dawnOn(date)?.add(Duration(minutes: settings.wakeOffsetMinutes));
 
   /// Wake time for [date] including a matching one-time extra.
+  ///
+  /// `oneTimeExtraDate` keys on the **argument** date — the calendar day handed
+  /// to [dawnOn] — never on the date of the instant that comes back. The two
+  /// are not the same day: [dawnOn] computes dawn for the UTC date and converts
+  /// at the end, so on a device whose zone is far from the location's longitude
+  /// the instant lands on a neighbouring local date (a Tonk location on a New
+  /// York phone dawns at 20:20 the *previous* evening). Keying on the argument
+  /// is what lets [_clearExpiredOneTimers] hand the stored key straight back to
+  /// this method; keying on the instant made those two speak different
+  /// languages, and the extra was wiped inside the same `update()` that set it.
   DateTime? wakeOn(DateTime date) {
     final base = baseWakeOn(date);
     if (base == null) return null;
-    if (settings.oneTimeExtraDate == _dateKey(base)) {
+    if (settings.oneTimeExtraDate == _dateKey(date)) {
       return base.add(Duration(minutes: settings.oneTimeExtraMinutes));
     }
     return base;
   }
 
-  /// The first moment [on] produces in the window strictly after [now],
-  /// stepping by [calendarDay] like the resync that arms these (REVIEW #13).
-  /// **One walk for both callers**, so the countdown and "+2h tomorrow" can
-  /// never disagree about which morning is next.
-  DateTime? _firstFuture(DateTime now, DateTime? Function(DateTime) on) {
+  /// The first moment [on] produces in the window strictly after [now], with
+  /// the calendar day that produced it, stepping by [calendarDay] like the
+  /// resync that arms these (REVIEW #13). **One walk for all callers**, so the
+  /// countdown and "+2h tomorrow" can never disagree about which morning is
+  /// next.
+  ///
+  /// The `day` half is returned rather than re-derived from `at`, because
+  /// `at`'s own calendar date is not always the day that produced it — see
+  /// [wakeOn].
+  ({DateTime day, DateTime at})? _firstFuture(
+    DateTime now,
+    DateTime? Function(DateTime) on,
+  ) {
     for (var i = 0; i <= windowDays; i++) {
-      final w = on(calendarDay(now, i));
-      if (w != null && w.isAfter(now)) return w;
+      final day = calendarDay(now, i);
+      final w = on(day);
+      if (w != null && w.isAfter(now)) return (day: day, at: w);
     }
     return null;
   }
@@ -202,7 +221,7 @@ class ArunodayController extends ChangeNotifier {
   /// the same reason [nextDailyBedtime]'s is — it is the only way to pin this
   /// to a clock-change date.
   @visibleForTesting
-  DateTime? nextWakeAt(DateTime now) => _firstFuture(now, wakeOn);
+  DateTime? nextWakeAt(DateTime now) => _firstFuture(now, wakeOn)?.at;
 
   /// The next wake alarm moment strictly after now.
   DateTime? get nextWake => nextWakeAt(DateTime.now());
@@ -333,11 +352,15 @@ class ArunodayController extends ChangeNotifier {
     // Shares [nextWakeAt]'s walk (REVIEW #13) — and not display-only here:
     // this stamps `oneTimeExtraDate`, so a skipped date lands "+2h tomorrow"
     // on the wrong morning and leaves the intended one at its normal time.
+    //
+    // Stamps the `day` half, not the `at` half: the key names the calendar day
+    // [wakeOn] and [_clearExpiredOneTimers] will ask about, which is not the
+    // date of the wake instant on a device far from the location's longitude.
     final nextBase = _firstFuture(DateTime.now(), baseWakeOn);
     if (nextBase == null) return;
     await update(settings.copyWith(
       oneTimeExtraMinutes: minutes,
-      oneTimeExtraDate: () => minutes == 0 ? null : _dateKey(nextBase),
+      oneTimeExtraDate: () => minutes == 0 ? null : _dateKey(nextBase.day),
     ));
   }
 
@@ -358,6 +381,8 @@ class ArunodayController extends ChangeNotifier {
     var s = settings;
     final now = DateTime.now();
     if (s.oneTimeExtraDate != null) {
+      // The key is an argument day, so it goes straight back to [wakeOn] —
+      // which is only true because [setOneTimeExtra] stamps it that way.
       final parts = s.oneTimeExtraDate!.split('-').map(int.parse).toList();
       final wake = wakeOn(DateTime(parts[0], parts[1], parts[2]));
       if (wake == null || !wake.isAfter(now)) {

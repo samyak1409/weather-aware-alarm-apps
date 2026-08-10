@@ -324,20 +324,38 @@ void main() {
       locations: [tonk],
       activeLocationId: 'tonk',
     ));
-    final base = c.nextWake!;
+    // ONE clock sample for every read here. `nextWake` reads `DateTime.now()`
+    // per call, so `base` and `shifted` straddling the wake minute (05:32 for
+    // Tonk, where `_firstFuture` flips from today's morning to tomorrow's)
+    // would compare two different mornings and fail by a day rather than by
+    // the 120 minutes under test. `nextWakeAt` is the seam for exactly this.
+    // Not midnight: near it the stamp already sits on tomorrow, and a crossing
+    // re-bases the window walk onto that same day, so it stays in range.
+    final now = DateTime.now();
+    final base = c.nextWakeAt(now)!;
 
     await c.setOneTimeExtra(120);
-    final shifted = c.nextWake!;
+    final shifted = c.nextWakeAt(now)!;
     expect(shifted.difference(base).inMinutes, 120);
 
-    // Only the one dated wake moved; the day after is unshifted dawn+offset.
-    final dayAfter = calendarDay(shifted, 1);
-    final baseDayAfter = c.baseWakeOn(dayAfter)!;
-    expect(c.wakeOn(dayAfter), baseDayAfter);
+    // Only ONE morning moved — asserted across the whole window rather than on
+    // a hand-stepped "day after". `wakeOn`'s argument is a calendar DATE, but
+    // the instant it returns can land on a different one (dawn is computed in
+    // UTC and converted at the end), so on a device far from the location's
+    // longitude `calendarDay(shifted, 1)` is the argument day that produces
+    // `shifted` ITSELF and the old assertion read the extra as leaking onto a
+    // second morning. Same instant-vs-argument confusion as the bug in
+    // `_clearExpiredOneTimers` this test now covers.
+    final moved = [
+      for (var i = 0; i <= ArunodayController.windowDays; i++)
+        calendarDay(now, i),
+    ].where((d) => c.wakeOn(d) != c.baseWakeOn(d)).toList();
+    expect(moved, hasLength(1), reason: 'exactly one morning carries the extra');
+    expect(c.wakeOn(moved.single), shifted);
 
     // Clearing works via 0.
     await c.setOneTimeExtra(0);
-    expect(c.nextWake, base);
+    expect(c.nextWakeAt(now), base);
   });
 
   test('delayed bedtime schedules the re-ring reminder and expires', () async {

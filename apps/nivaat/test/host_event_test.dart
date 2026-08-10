@@ -115,6 +115,56 @@ void main() {
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
   }
 
+  /// An alarm armed AT T on the live clock, with a pending held for it.
+  ///
+  /// Any test whose host event is handled OUTSIDE an evaluate lane needs this
+  /// rather than the file's 2026-08-08 fixture, because there `_nowFor` falls
+  /// back to the wall clock. Two ways that bites. A move about a ring whose
+  /// time has passed is correctly ignored as a stale replay, so the test
+  /// exercises the rejection path and passes whether or not the rule under
+  /// test exists. And `_rollOn` prefers the later of that clock and just-past
+  /// `closed`, so a past-dated `closed` never reaches the `afterClosed` guard
+  /// — and whatever the wall clock made true the morning the test was written
+  /// stops being true a day later (H5 began failing on its own). Seconds are
+  /// stripped so `nextOccurrence` lands on the minute rather than rolling to
+  /// tomorrow.
+  Future<
+      ({
+        NivaatEngine engine,
+        NivaatStore store,
+        FakeRing ring,
+        NivaatAlarm alarm,
+        DateTime at,
+      })> armLiveAtT() async {
+    SharedPreferences.setMockInitialValues({});
+    final base = DateTime.now();
+    final at = DateTime(base.year, base.month, base.day, base.hour)
+        .add(Duration(minutes: base.minute + 5));
+    final live = NivaatAlarm(
+      id: 7,
+      hour: at.hour,
+      minute: at.minute,
+      courtId: 'c1',
+      courtSpeedLimitKmh: 4,
+    );
+    final store = NivaatStore();
+    await store.saveCourts([court]);
+    await store.saveAlarms([live]);
+    await store.saveAlarmIdSeq(8);
+    final sched = FakeRing();
+    final e = NivaatEngine(
+      store: store,
+      scheduler: sched,
+      api: FakeApi()..sample = wind(5.0, 5.0),
+      checks: FakeChecks(),
+      notifier: FakeNotifier(),
+    );
+    await e.evaluateAlarm(live, [court],
+        now: at.subtract(const Duration(minutes: 2)));
+    await e.evaluateAlarm(live, [court], now: at);
+    return (engine: e, store: store, ring: sched, alarm: live, at: at);
+  }
+
   test('post-T schedule success holds pending — no Rang until settle', () async {
     await armCalmAtT();
     final history = await engine.store.loadHistory();
@@ -340,11 +390,18 @@ void main() {
             r.ringDisposition == RingDisposition.missed && r.at == alarmAt),
         hasLength(1));
     expect(await engine.store.loadPendingRing(alarm.id), isNull);
-    // Post-T already rolled once (rollOnDone); drop must not roll again.
+    // Post-T already rolled once (rollOnDone); the drop must not roll again.
+    // Counted at ANY occurrence past `alarmAt`, not just `tomorrow`: this
+    // event is handled outside an evaluate lane, so a second `_rollOn` would
+    // take the wall clock and land on a date the 2026-08-08 fixture cannot
+    // name — pinning the count to `tomorrow` reads as a double-roll guard
+    // while being unable to see one.
     expect(
-      ring.log.where((e) => e.id == nextRing && e.at == tomorrow).length,
+      ring.log.where((e) => e.id == nextRing && e.at.isAfter(alarmAt)).length,
       1,
     );
+    expect(ring.log.where((e) => e.id == nextRing && e.at == tomorrow).length, 1,
+        reason: 'and the one roll is the in-lane one, at the next occurrence');
   });
 
   test('C1b: drop during wind fetch aborts outer evaluate', () async {
@@ -411,51 +468,64 @@ void main() {
 
   test('H5: nextRing drop while today pending held — close tomorrow, keep today',
       () async {
-    await armCalmAtT();
-    final todayPending = (await engine.store.loadPendingRing(alarm.id))!;
-    expect(todayPending.occurrenceAt, alarmAt);
-    final state = await engine.store.loadCheckState(alarm.id);
-    expect(state?.alarmAt, tomorrow);
+    // Live-clock fixture, and not merely to avoid a stale date. The drop is
+    // emitted OUTSIDE an evaluate lane, so `_nowFor` falls back to the wall
+    // clock — and `_rollOn` then picks the later of that clock and just-past
+    // `closed`. Dated 2026-08-08, `closed` is in the past, the wall clock
+    // wins, and the test never reaches the `afterClosed` guard it is cited
+    // for on `_rollOn`; worse, the answer it asserted was whatever the wall
+    // clock made true that morning, so it began failing on its own at
+    // 2026-08-10 06:00. Armed five minutes ahead, `closed` is genuinely in
+    // the future — the branch under test — and the expected roll is fixed.
+    final f = await armLiveAtT();
+    final tomorrowAt = f.at.add(const Duration(days: 1));
+    final dayAfterAt = f.at.add(const Duration(days: 2));
+
+    final todayPending = (await f.store.loadPendingRing(f.alarm.id))!;
+    expect(todayPending.occurrenceAt, f.at);
+    final state = await f.store.loadCheckState(f.alarm.id);
+    expect(state?.alarmAt, tomorrowAt);
     expect(state?.ringScheduled, isTrue);
-    expect(ring.scheduled.containsKey(nextRing), isTrue);
+    expect(f.ring.scheduled.containsKey(nextRing), isTrue);
 
     final dropNext = HostAlarmEvent(
       id: nextRing,
       kind: HostAlarmEventKind.dropped,
       cause: HostAlarmEventCause.platformRefusal,
-      recordedAt: tomorrow.add(const Duration(seconds: 1)),
-      at: tomorrow,
+      recordedAt: tomorrowAt.add(const Duration(seconds: 1)),
+      at: tomorrowAt,
     );
-    ring.scheduled.remove(nextRing);
-    await ring.emitHostEvent(dropNext);
+    f.ring.scheduled.remove(nextRing);
+    await f.ring.emitHostEvent(dropNext);
 
-    final visible = await engine.store.loadHistory();
+    final visible = await f.store.loadHistory();
     expect(
         visible.where((r) =>
-            r.ringDisposition == RingDisposition.missed && r.at == tomorrow),
+            r.ringDisposition == RingDisposition.missed && r.at == tomorrowAt),
         hasLength(1));
     // Today's held pending must survive settling tomorrow's nextRing.
-    final stillToday = await engine.store.loadPendingRing(alarm.id);
+    final stillToday = await f.store.loadPendingRing(f.alarm.id);
     expect(stillToday, isNotNull);
-    expect(stillToday!.occurrenceAt, alarmAt);
+    expect(stillToday!.occurrenceAt, f.at);
     expect(stillToday.pluginId, todayPending.pluginId);
 
-    final after = await engine.store.loadCheckState(alarm.id);
-    expect(after?.alarmAt, dayAfter,
-        reason: 'closing tomorrow rolls to the day after');
+    final after = await f.store.loadCheckState(f.alarm.id);
+    expect(after?.alarmAt, dayAfterAt,
+        reason: 'closing tomorrow rolls to the day after, never back to today');
 
     final dayAfterArms =
-        ring.log.where((e) => e.at == after!.alarmAt).length;
-    await ring.emitHostEvent(dropNext);
+        f.ring.log.where((e) => e.at == after!.alarmAt).length;
+    await f.ring.emitHostEvent(dropNext);
     expect(
-        (await engine.store.loadHistory())
+        (await f.store.loadHistory())
             .where((r) =>
-                r.ringDisposition == RingDisposition.missed && r.at == tomorrow)
+                r.ringDisposition == RingDisposition.missed &&
+                r.at == tomorrowAt)
             .length,
         1);
-    expect(ring.log.where((e) => e.at == after!.alarmAt).length, dayAfterArms);
-    expect((await engine.store.loadPendingRing(alarm.id))?.occurrenceAt,
-        alarmAt);
+    expect(f.ring.log.where((e) => e.at == after!.alarmAt).length, dayAfterArms);
+    expect(
+        (await f.store.loadPendingRing(f.alarm.id))?.occurrenceAt, f.at);
   });
 
   test('staleAtBoot drop settles as Missed (same as platformRefusal)', () async {
@@ -999,51 +1069,6 @@ void main() {
         reason: 'a move claimed with no pending leaves scheduledFor stale, and '
             'every later comparison keys on it');
   });
-  /// An alarm armed AT T on the live clock, with a pending held for it.
-  ///
-  /// Move tests cannot use the file's 2026-08-08 fixture: a move about a ring
-  /// whose time has passed is correctly ignored as a stale replay, and
-  /// `_nowFor` falls back to the wall clock for an event arriving outside an
-  /// evaluate lane — so a fixture-dated test exercises the rejection path and
-  /// passes whether or not the rule under test exists. Seconds are stripped so
-  /// `nextOccurrence` lands on the minute rather than rolling to tomorrow.
-  Future<
-      ({
-        NivaatEngine engine,
-        NivaatStore store,
-        FakeRing ring,
-        NivaatAlarm alarm,
-        DateTime at,
-      })> armLiveAtT() async {
-    SharedPreferences.setMockInitialValues({});
-    final base = DateTime.now();
-    final at = DateTime(base.year, base.month, base.day, base.hour)
-        .add(Duration(minutes: base.minute + 5));
-    final live = NivaatAlarm(
-      id: 7,
-      hour: at.hour,
-      minute: at.minute,
-      courtId: 'c1',
-      courtSpeedLimitKmh: 4,
-    );
-    final store = NivaatStore();
-    await store.saveCourts([court]);
-    await store.saveAlarms([live]);
-    await store.saveAlarmIdSeq(8);
-    final sched = FakeRing();
-    final e = NivaatEngine(
-      store: store,
-      scheduler: sched,
-      api: FakeApi()..sample = wind(5.0, 5.0),
-      checks: FakeChecks(),
-      notifier: FakeNotifier(),
-    );
-    await e.evaluateAlarm(live, [court],
-        now: at.subtract(const Duration(minutes: 2)));
-    await e.evaluateAlarm(live, [court], now: at);
-    return (engine: e, store: store, ring: sched, alarm: live, at: at);
-  }
-
   test('a move for another occurrence never takes the held pending slot',
       () async {
     // One slot per alarm. `_matchPendingForHostEvent` will synthesize a
