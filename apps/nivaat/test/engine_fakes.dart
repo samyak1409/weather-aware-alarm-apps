@@ -135,6 +135,14 @@ class FakeRing implements AlarmScheduler {
   /// so a failed create leaves the old alarm live). See [scheduleRing].
   bool destructiveOnFailure = true;
 
+  /// Makes [scheduleRing] THROW rather than decline.
+  ///
+  /// [accepts] models a booking the platform refuses, which the engine handles
+  /// by leaving the occurrence open; this models the plugin call itself
+  /// failing, which propagates. The two reach different code — an outbox
+  /// handler only retries what throws.
+  bool throwOnSchedule = false;
+
   @override
   Future<bool> scheduleRing({
     required int id,
@@ -143,6 +151,7 @@ class FakeRing implements AlarmScheduler {
     required String body,
     required double? volume,
   }) async {
+    if (throwOnSchedule) throw Exception('plugin call failed');
     if (!accepts) {
       // **The two platforms fail in OPPOSITE directions, and this fake must
       // not pretend otherwise.** On Android `Alarm.set` stops the same id
@@ -325,32 +334,18 @@ class UncancellableRing extends FakeRing {
   }
 }
 
-/// Models the per-isolate SharedPreferences cache: [loadAlarms] keeps
-/// answering with the list THIS isolate last saw, until [refresh] pulls in
-/// what another isolate wrote.
+/// **Deleted with the move to SQLite (2026-08-12).** It modelled the
+/// per-isolate SharedPreferences cache — `loadAlarms` answering with the list
+/// THIS isolate last saw until `refresh()` pulled in another isolate's writes —
+/// and was the only way to prove `_stillLive`'s `store.refresh()` was
+/// load-bearing rather than decorative (REVIEW #23).
 ///
-/// Without it a delete made in the UI isolate is simply invisible to a
-/// background check, and no same-isolate test can show that — both sides share
-/// one cache, so the delete is seen whether or not anything refreshed. This is
-/// the only way to prove `_stillLive`'s `store.refresh()` is load-bearing
-/// rather than decorative (REVIEW #23).
-class StaleUntilRefreshedStore extends NivaatStore {
-  StaleUntilRefreshedStore(this.staleView);
-
-  /// What this isolate believes, until someone refreshes.
-  final List<NivaatAlarm> staleView;
-  bool refreshed = false;
-
-  @override
-  Future<void> refresh() async {
-    refreshed = true;
-    return super.refresh();
-  }
-
-  @override
-  Future<List<NivaatAlarm>> loadAlarms() async =>
-      refreshed ? super.loadAlarms() : staleView;
-}
+/// There is no per-isolate cache to model any more: a store read is a read of
+/// the database file, so a delete the UI isolate committed is simply there.
+/// `refresh()` is gone with it. What the test it served now asserts is the half
+/// that survives — a pass holding a stale *snapshot* must re-read before it
+/// arms — and it needs no fake, because the snapshot is the argument the caller
+/// passes in.
 
 /// A wind API that parks its FIRST fetch on a completer, so a test can land a
 /// delete inside the exact window a real pass spends waiting on the network.
@@ -399,8 +394,18 @@ class FakeChecks implements CheckScheduler {
   @override
   Future<void> initialize() async {}
 
+  /// Makes [scheduleCheck] THROW rather than decline.
+  ///
+  /// [accepts] models a booking the platform refuses, which the engine
+  /// soft-fails and logs; this models the plugin call itself failing, which
+  /// propagates. Every roll-on books a wakeup, so this is the failure point a
+  /// roll always reaches — a ring pre-arm is only written near T, so a roll a
+  /// day out never gets as far as `scheduleRing`.
+  bool throwOnSchedule = false;
+
   @override
   Future<bool> scheduleCheck(int alarmId, DateTime at) async {
+    if (throwOnSchedule) throw Exception('check booking failed');
     if (!accepts) return false;
     booked[alarmId] = at;
     return true;
@@ -446,22 +451,23 @@ class FailingHistoryStore extends NivaatStore {
       throw Exception('history write failed');
 }
 
-/// Reads the persisted alarm-id counter at the instant the alarm list is
-/// written, which is the only place the two can be compared.
+/// Records what reached the disk each time the alarm list was written.
 ///
-/// `upsertAlarm` must burn the id BEFORE the alarm that spends it reaches the
-/// disk (REVIEW #9) — interrupted the other way round, an alarm exists with no
-/// counter past it and the next one created overwrites it. In memory both
-/// orders look the same, and nothing re-derives the counter from the alarms
-/// afterwards, so this hook is what holds the ordering.
+/// The counter and the alarm that spends it are ONE transaction now (REVIEW
+/// #9), so there is no longer an ordering to observe — the question changed
+/// from "which landed first" to "did they land together". This watches the pair
+/// after each write so a save that advanced one without the other would show.
 class SeqWatchingStore extends NivaatStore {
-  /// The counter on disk each time [saveAlarms] ran, oldest first.
-  final List<int?> seqWhenAlarmsSaved = [];
+  /// `(counter, alarm ids)` on disk after each [saveAlarms], oldest first.
+  final List<(int?, List<int>)> afterEachSave = [];
 
   @override
-  Future<void> saveAlarms(List<NivaatAlarm> alarms) async {
-    seqWhenAlarmsSaved.add(await loadAlarmIdSeq());
-    return super.saveAlarms(alarms);
+  Future<void> saveAlarms(List<NivaatAlarm> alarms, {int? alarmIdSeq}) async {
+    await super.saveAlarms(alarms, alarmIdSeq: alarmIdSeq);
+    afterEachSave.add((
+      await loadAlarmIdSeq(),
+      [for (final a in await loadAlarms()) a.id],
+    ));
   }
 }
 

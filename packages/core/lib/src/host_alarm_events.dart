@@ -1,7 +1,10 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import 'db/app_database.dart';
+import 'db/tables.dart';
 
 /// Why the host changed an alarm without the app asking.
 ///
@@ -17,11 +20,15 @@ enum HostAlarmEventKind { moved, dropped }
 
 /// A host-side change to a plugin alarm, delivered **at least once**.
 ///
-/// Key every irreversible side effect on `(id, recordedAt)`: SharedPreferences
-/// cannot compare-and-swap, so a second isolate may run the same handler, and
-/// a handler that ran but had not yet been marked done is deliberately re-run
-/// rather than dropped (see [HostAlarmEventClaims]). Idempotent on that pair
-/// is the contract, not a nicety.
+/// Key every irreversible side effect on `(id, recordedAt)`. **The reason
+/// changed with the move to SQLite (2026-08-12) and the requirement did not.**
+/// It used to be that SharedPreferences could not compare-and-swap, so two
+/// isolates could both run one handler; [HostAlarmEventClaims] is a real lock
+/// now. What survives is that the lease bounds how long a claim is RESPECTED,
+/// not how long a handler runs — a handler that outlives its own lease is
+/// legitimately taken over by the next barrier — and that a handler which ran
+/// but was not yet marked done is deliberately re-run rather than dropped.
+/// Idempotent on that pair is the contract, not a nicety.
 class HostAlarmEvent {
   const HostAlarmEvent({
     required this.id,
@@ -48,70 +55,174 @@ class HostAlarmEvent {
 String hostAlarmEventClaimKey(int id, DateTime recordedAt) =>
     'hostAlarmEvent.$id.${recordedAt.millisecondsSinceEpoch}';
 
-/// Persist that we have **finished** handling `(id, recordedAt)`.
+/// A claim taken out on one event, and the attempt number it is.
+class HostAlarmEventClaim {
+  const HostAlarmEventClaim({required this.attempts});
+
+  /// Including this one, and **counted on disk** rather than in memory: a
+  /// process that dies retrying gets a fourth go at an event it has already
+  /// failed three times, which is how a deterministically-broken handler used
+  /// to keep its budget refilled by every restart.
+  final int attempts;
+}
+
+/// Who is handling `(id, recordedAt)`, and how far it got.
 ///
-/// **The mark goes down after the handler, never before.** Claiming first
-/// looks safer and is not: a process death between the claim and the handler
-/// leaves the event marked done and never applied, and the plugin has already
-/// acknowledged it natively, so nothing will ever redeliver it — a dropped
-/// ring that no history row explains. Marking afterwards costs the mirror
-/// image, a second delivery of an event that already landed, and that one is
-/// harmless because every handler here is idempotent on `(id, recordedAt)`
-/// (Nivaat matches `hostEventKey` in its own history before writing).
+/// **This is the compare-and-swap SharedPreferences could never give.** The
+/// prefs version was a bool that could only say "done", so two isolates could
+/// both read absent and both run the handler, and convergence had to live in
+/// the handlers. A row with a state and a lease makes taking responsibility one
+/// atomic statement.
 ///
-/// **This is not a lock and cannot be made one.** SharedPreferences has no
-/// compare-and-swap, so two isolates can both read "absent" and both run.
-/// Convergence lives in the handlers, exactly as it does for history rows
-/// (CLAUDE.md, REVIEW #7) — this store only keeps the common case cheap.
+/// **A single-statement `INSERT … ON CONFLICT DO NOTHING` would not have been
+/// enough, and that is why there is a state rather than a flag.** Inserting a
+/// "handled" row and then running the handler is the prefs bug from the other
+/// side: the row says handled while the handler has not run, and a process
+/// death in between makes the event permanently invisible — the plugin
+/// acknowledged it natively long ago, so nothing will redeliver it. So [begin]
+/// writes [HostEventClaimState.processing] with a lease, [complete] writes
+/// `done`, and a `processing` row whose lease has expired is taken over by the
+/// next barrier. Re-running a handler is safe; losing one is not.
+///
+/// Every handler must still be idempotent on `(id, recordedAt)` — Nivaat
+/// matches `hostEventKey` in its own history before writing. The lease makes
+/// concurrent double-handling rare; it does not make it impossible, because a
+/// handler can outlive its own lease.
 class HostAlarmEventClaims {
-  HostAlarmEventClaims({
-    Future<SharedPreferences> Function()? prefs,
-  }) : _prefs = prefs ?? SharedPreferences.getInstance;
+  /// Resolved per call so a test swapping the database in `setUp` is seen.
+  AppDatabase get _db => appDb;
 
-  final Future<SharedPreferences> Function() _prefs;
-
-  /// Keys older than this are swept on [prune]. A host event is only
+  /// Rows older than this are swept on [prune]. A host event is only
   /// actionable for the morning it belongs to — the plugin's own markers are
-  /// capped the same way — and without a ceiling these bools accumulate in the
-  /// app's prefs blob for the life of the install.
+  /// capped the same way — and without a ceiling these accumulate for the life
+  /// of the install.
   static const Duration keyTtl = Duration(days: 7);
 
-  static const String keyPrefix = 'hostAlarmEvent.';
+  /// How long a [begin] holds an event before another pass may take it over.
+  ///
+  /// This is the crash window: too short and two isolates run one handler at
+  /// once, too long and an event a dead process was holding waits that long to
+  /// be retried. A handler here is a wind fetch plus a few writes.
+  static const Duration lease = Duration(minutes: 2);
 
+  /// True once [event] has been **applied** — not merely attempted.
+  ///
+  /// [HostEventClaimState.abandoned] reads false on purpose: an event whose
+  /// handler ran out of attempts was never applied, and calling that "claimed"
+  /// would hide a dropped ring behind a row that says it was dealt with.
   Future<bool> isClaimed(HostAlarmEvent event) async {
-    final prefs = await _prefs();
-    await prefs.reload();
-    return prefs.containsKey(event.claimKey);
+    final row = await _row(event);
+    return row?.state == HostEventClaimState.done;
   }
 
-  /// Marks [event] handled. Call only after the handler has succeeded.
-  Future<void> claim(HostAlarmEvent event) async {
-    final prefs = await _prefs();
-    await prefs.reload();
-    await prefs.setBool(event.claimKey, true);
+  /// Takes responsibility for [event], or returns null when there is nothing
+  /// to do — it is already applied, already abandoned, or someone else holds a
+  /// live lease on it.
+  ///
+  /// One transaction, so two isolates asking at once cannot both be told yes.
+  Future<HostAlarmEventClaim?> begin(
+    HostAlarmEvent event, {
+    DateTime? now,
+  }) =>
+      _db.transaction(() async {
+        final at = now ?? DateTime.now();
+        final row = await _row(event);
+        if (row != null) {
+          switch (row.state) {
+            case HostEventClaimState.done:
+            case HostEventClaimState.abandoned:
+              return null;
+            case HostEventClaimState.processing:
+              final held = row.leasedUntil;
+              if (held != null && held.isAfter(at)) return null;
+            case HostEventClaimState.pending:
+              break;
+          }
+        }
+        final attempts = (row?.attempts ?? 0) + 1;
+        await _db.into(_db.hostEventClaims).insertOnConflictUpdate(
+              HostEventClaimsCompanion(
+                claimKey: Value(event.claimKey),
+                state: const Value(HostEventClaimState.processing),
+                attempts: Value(attempts),
+                leasedUntil: Value(at.add(lease)),
+                recordedAt: Value(event.recordedAt),
+                updatedAt: Value(at),
+              ),
+            );
+        return HostAlarmEventClaim(attempts: attempts);
+      });
+
+  /// Marks [event] applied. Call only after the handler has succeeded, and
+  /// pass the [claim] [begin] handed back.
+  Future<void> complete(HostAlarmEvent event, HostAlarmEventClaim claim,
+          {DateTime? now}) =>
+      _settle(event, claim, HostEventClaimState.done, now: now);
+
+  /// Hands [event] back for a later barrier — a handler that failed but has
+  /// attempts left. The attempt count stays where it is, so the budget survives
+  /// a restart.
+  Future<void> release(HostAlarmEvent event, HostAlarmEventClaim claim,
+          {DateTime? now}) =>
+      _settle(event, claim, HostEventClaimState.pending, now: now);
+
+  /// Parks [event] for good: its handler failed its last attempt.
+  ///
+  /// Terminal so a deterministically-failing handler stops being re-run on
+  /// every barrier for the life of the install, and distinct from [complete]
+  /// so nothing can mistake it for an event that was actually applied.
+  Future<void> abandon(HostAlarmEvent event, HostAlarmEventClaim claim,
+          {DateTime? now}) =>
+      _settle(event, claim, HostEventClaimState.abandoned, now: now);
+
+  /// **Only the holder of the current claim may settle it** — `attempts` is the
+  /// fencing token, and matching on [claimKey] alone was a bug.
+  ///
+  /// The lease bounds how long a claim is respected, not how long a handler
+  /// runs, so a slow worker can still be inside its handler when the next
+  /// barrier retakes the event and bumps `attempts`. When that worker returns
+  /// and writes its verdict, a `claimKey`-only `WHERE` lands it on top of the
+  /// successor's live claim: `release` re-opens an event someone is actively
+  /// handling, and `abandon` parks one that has already been applied — leaving a
+  /// row that says a dropped ring was never dealt with when it was, or the
+  /// reverse. `attempts` only ever climbs, so a stale worker's write matches
+  /// nothing and is correctly a no-op.
+  Future<void> _settle(
+    HostAlarmEvent event,
+    HostAlarmEventClaim claim,
+    HostEventClaimState state, {
+    DateTime? now,
+  }) async {
+    final at = now ?? DateTime.now();
+    await (_db.update(_db.hostEventClaims)
+          ..where((t) =>
+              t.claimKey.equals(event.claimKey) &
+              t.attempts.equals(claim.attempts)))
+        .write(HostEventClaimsCompanion(
+      state: Value(state),
+      leasedUntil: const Value(null),
+      updatedAt: Value(at),
+    ));
   }
 
-  /// Removes the mark — for a handler that has since been undone.
-  Future<void> unclaim(HostAlarmEvent event) async {
-    final prefs = await _prefs();
-    await prefs.reload();
-    await prefs.remove(event.claimKey);
-  }
+  Future<HostEventClaim?> _row(HostAlarmEvent event) =>
+      (_db.select(_db.hostEventClaims)
+            ..where((t) => t.claimKey.equals(event.claimKey)))
+          .getSingleOrNull();
 
-  /// Drops claim keys older than [keyTtl], read back out of the key itself
-  /// (`hostAlarmEvent.<id>.<recordedAtMillis>`) so no second record is needed.
+  /// Drops rows whose event is older than [keyTtl].
+  ///
+  /// Swept on `recordedAt` — the event's own instant, which is also what the
+  /// key encodes — so a row that has sat [HostEventClaimState.pending] for a
+  /// week goes too. That is deliberate: an event nothing managed to apply in
+  /// seven days is about a morning long past.
   Future<void> prune({DateTime? now}) async {
-    final prefs = await _prefs();
-    await prefs.reload();
-    final cutoff = (now ?? DateTime.now()).subtract(keyTtl);
-    for (final key in prefs.getKeys().toList()) {
-      if (!key.startsWith(keyPrefix)) continue;
-      final millis = int.tryParse(key.split('.').last);
-      if (millis == null) continue;
-      if (DateTime.fromMillisecondsSinceEpoch(millis).isBefore(cutoff)) {
-        await prefs.remove(key);
-      }
-    }
+    final cutoff = (now ?? DateTime.now())
+        .subtract(keyTtl)
+        .microsecondsSinceEpoch;
+    await (_db.delete(_db.hostEventClaims)
+          ..where((t) => t.recordedAt.isSmallerThanValue(cutoff)))
+        .go();
   }
 }
 
@@ -167,8 +278,11 @@ class HostAlarmEventBridge {
   /// How many times one event's handler may fail before it is abandoned.
   /// Bounded because a handler that throws deterministically would otherwise
   /// re-run on every barrier for the life of the process.
+  ///
+  /// **The count lives in the claims table, not here.** It used to be an
+  /// in-memory map, which meant a restart handed a permanently-broken handler
+  /// a fresh budget — the ceiling only ever bounded one process's patience.
   static const int maxHandlerAttempts = 3;
-  final Map<String, int> _attempts = {};
 
   /// Events whose handler failed, waiting for the NEXT barrier.
   ///
@@ -234,23 +348,34 @@ class HostAlarmEventBridge {
     if (handler == null) return;
     _handlerDepth++;
     try {
-      if (await _claims.isClaimed(event)) return;
-      await handler(event);
-      // AFTER the handler, never before — see [HostAlarmEventClaims].
-      await _claims.claim(event);
-      _attempts.remove(event.claimKey);
-    } on Exception catch (e, st) {
-      final tries = (_attempts[event.claimKey] ?? 0) + 1;
-      _attempts[event.claimKey] = tries;
-      if (tries < maxHandlerAttempts) {
-        debugPrint('host alarm event handler failed for ${event.id} '
-            '(attempt $tries, will retry on the next barrier): $e');
-        _deferred.add(event);
-      } else {
-        _attempts.remove(event.claimKey);
-        debugPrint('host alarm event handler failed for ${event.id} '
-            '$maxHandlerAttempts times, giving up: $e\n$st');
+      // Takes the claim BEFORE the handler and only completes it after, which
+      // is the pair the old bool could not express: claiming first alone loses
+      // the event to a crash, marking done afterwards alone lets two isolates
+      // both run it. See [HostAlarmEventClaims].
+      final claim = await _claims.begin(event);
+      if (claim == null) return;
+      try {
+        await handler(event);
+      } on Exception catch (e, st) {
+        if (claim.attempts < maxHandlerAttempts) {
+          await _claims.release(event, claim);
+          debugPrint('host alarm event handler failed for ${event.id} '
+              '(attempt ${claim.attempts}, will retry on the next barrier): $e');
+          _deferred.add(event);
+        } else {
+          await _claims.abandon(event, claim);
+          debugPrint('host alarm event handler failed for ${event.id} '
+              '$maxHandlerAttempts times, giving up: $e\n$st');
+        }
+        return;
+      } catch (_) {
+        // A programming Error is not this event's fault and must not spend its
+        // budget; hand the claim back so the rethrow below reaches [apply] with
+        // the event still retryable.
+        await _claims.release(event, claim);
+        rethrow;
       }
+      await _claims.complete(event, claim);
     } finally {
       _handlerDepth--;
     }
@@ -345,7 +470,6 @@ class HostAlarmEventBridge {
     await _sub?.cancel();
     _sub = null;
     _listening = false;
-    _attempts.clear();
     _deferred.clear();
     _drainError = null;
     _drainStack = null;

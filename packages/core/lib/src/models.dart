@@ -217,27 +217,6 @@ class NivaatAlarm {
         enabled: enabled ?? this.enabled,
       );
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'hour': hour,
-        'minute': minute,
-        'courtId': courtId,
-        'courtSpeedLimitKmh': courtSpeedLimitKmh,
-        'retryMinutesAfter': retryMinutesAfter,
-        'weekdays': weekdays.toList(),
-        'enabled': enabled,
-      };
-
-  factory NivaatAlarm.fromJson(Map<String, dynamic> j) => NivaatAlarm(
-        id: j['id'] as int,
-        hour: j['hour'] as int,
-        minute: j['minute'] as int,
-        courtId: j['courtId'] as String,
-        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int,
-        retryMinutesAfter: j['retryMinutesAfter'] as int,
-        weekdays: (j['weekdays'] as List).cast<int>().toSet(),
-        enabled: j['enabled'] as bool,
-      );
 }
 
 enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
@@ -402,53 +381,4 @@ class HistoryRecord {
     return fmtWindGust(court, courtLimit, gust, gustLimit);
   }
 
-  Map<String, dynamic> toJson() => {
-        'alarmId': alarmId,
-        'courtId': courtId,
-        'at': at.toIso8601String(),
-        'outcome': outcome.name,
-        'kind': kind.name,
-        'pushSeq': pushSeq,
-        'checkedAt': checkedAt?.toIso8601String(),
-        'watchedUntil': watchedUntil?.toIso8601String(),
-        'checkingEndedAt': checkingEndedAt?.toIso8601String(),
-        'courtSpeedKmh': courtSpeedKmh,
-        'rawGustKmh': rawGustKmh,
-        'courtSpeedLimitKmh': courtSpeedLimitKmh,
-        'rawGustLimitKmh': rawGustLimitKmh,
-        'volume': volume,
-        'ringDisposition': ringDisposition?.name,
-        'hostEventKey': hostEventKey,
-      };
-
-  factory HistoryRecord.fromJson(Map<String, dynamic> j) => HistoryRecord(
-        alarmId: j['alarmId'] as int,
-        courtId: j['courtId'] as String,
-        at: DateTime.parse(j['at'] as String),
-        outcome: CheckOutcome.values.byName(j['outcome'] as String),
-        kind: HistoryKind.values.byName(j['kind'] as String),
-        pushSeq: j['pushSeq'] as int,
-        checkedAt: switch (j['checkedAt']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        watchedUntil: switch (j['watchedUntil']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        checkingEndedAt: switch (j['checkingEndedAt']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        courtSpeedKmh: (j['courtSpeedKmh'] as num?)?.toDouble(),
-        rawGustKmh: (j['rawGustKmh'] as num?)?.toDouble(),
-        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,
-        rawGustLimitKmh: (j['rawGustLimitKmh'] as num?)?.toDouble(),
-        volume: (j['volume'] as num?)?.toDouble(),
-        ringDisposition: switch (j['ringDisposition']) {
-          final String s => RingDisposition.values.byName(s),
-          _ => null,
-        },
-        hostEventKey: j['hostEventKey'] as String?,
-      );
 }

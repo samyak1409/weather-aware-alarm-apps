@@ -1,11 +1,14 @@
-import 'dart:convert';
-
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() async {
+    // Arunoday's settings blob stays on prefs; everything contended is in the
+    // database. Both backends are live in this suite, on purpose.
+    SharedPreferences.setMockInitialValues({});
+    await useInMemoryAppDatabase();
+  });
 
   group('ArunodayStore', () {
     test('load returns defaults when nothing saved', () async {
@@ -109,10 +112,90 @@ void main() {
       );
       final touched = full.copyWith(lastAttemptAt: DateTime(2026, 7, 13, 6, 1));
       expect(touched.lastAttemptAt, DateTime(2026, 7, 13, 6, 1));
-      // Everything else survives untouched (compare via JSON for one shot).
-      final a = full.toJson()..remove('lastAttemptAt');
-      final b = touched.toJson()..remove('lastAttemptAt');
-      expect(b, a);
+      // Everything else survives untouched. Compared field by field: there is
+      // no `toJson` to diff against any more, and listing them is what makes a
+      // newly-added field that copyWith forgets show up here.
+      expect(touched.alarmId, full.alarmId);
+      expect(touched.alarmAt, full.alarmAt);
+      expect(touched.ringScheduled, full.ringScheduled);
+      expect(touched.ringCourtSpeedKmh, full.ringCourtSpeedKmh);
+      expect(touched.ringRawGustKmh, full.ringRawGustKmh);
+      expect(touched.ringVolume, full.ringVolume);
+      expect(touched.cardShown, full.cardShown);
+      expect(touched.skipCourtSpeedKmh, full.skipCourtSpeedKmh);
+      expect(touched.skipRawGustKmh, full.skipRawGustKmh);
+      expect(touched.skipGusty, full.skipGusty);
+      expect(touched.lastCheckAt, full.lastCheckAt);
+      expect(touched.pushSeq, full.pushSeq);
+    });
+
+    test('check state round-trips every field through the columns', () async {
+      // Replaces the old `CheckState.fromJson(toJson())` test: the columns are
+      // the storage format now, so this is where a field that never reaches
+      // disk gets caught.
+      final full = CheckState(
+        alarmId: 7,
+        alarmAt: DateTime(2026, 7, 13, 6, 0),
+        ringScheduled: true,
+        ringCourtSpeedKmh: 3.0,
+        ringRawGustKmh: 12.0,
+        ringVolume: 0.875,
+        cardShown: true,
+        skipCourtSpeedKmh: 5.4,
+        skipRawGustKmh: 22.0,
+        skipGusty: true,
+        lastCheckAt: DateTime(2026, 7, 12, 22, 0),
+        lastAttemptAt: DateTime(2026, 7, 13, 6, 29),
+        pushSeq: 4,
+      );
+      await store.saveCheckState(full);
+      final back = (await store.loadCheckState(7))!;
+      expect(back.alarmAt, DateTime(2026, 7, 13, 6, 0));
+      expect(back.alarmAt.isUtc, isFalse,
+          reason: 'instants come back in local time, as DateTime.== requires');
+      expect(back.ringScheduled, isTrue);
+      expect(back.ringCourtSpeedKmh, 3.0);
+      expect(back.ringVolume, closeTo(0.875, 0.001));
+      expect(back.cardShown, isTrue);
+      expect(back.skipCourtSpeedKmh, 5.4);
+      expect(back.skipGusty, isTrue);
+      expect(back.lastCheckAt, DateTime(2026, 7, 12, 22, 0));
+      expect(back.lastAttemptAt, DateTime(2026, 7, 13, 6, 29));
+      expect(back.pushSeq, 4);
+    });
+
+    test('a pending ring round-trips every field through the columns',
+        () async {
+      final pending = PendingRing(
+        alarmId: 7,
+        pluginId: 10007,
+        role: RingLockerRole.lateRing,
+        occurrenceAt: DateTime(2026, 7, 13, 6, 0),
+        scheduledFor: DateTime(2026, 7, 13, 6, 0, 30),
+        courtId: 'c1',
+        volume: 0.7,
+        courtSpeedKmh: 2.2,
+        rawGustKmh: 8.8,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+        lastCheckAt: DateTime(2026, 7, 13, 5, 55),
+        rollOnDone: true,
+      );
+      await store.savePendingRing(pending);
+      final back = (await store.loadPendingRing(7))!;
+      expect(back.pluginId, 10007);
+      expect(back.role, RingLockerRole.lateRing);
+      expect(back.occurrenceAt, DateTime(2026, 7, 13, 6, 0));
+      expect(back.scheduledFor, DateTime(2026, 7, 13, 6, 0, 30));
+      expect(back.courtId, 'c1');
+      expect(back.volume, closeTo(0.7, 0.001));
+      expect(back.courtSpeedKmh, 2.2);
+      expect(back.rawGustKmh, 8.8);
+      expect(back.courtSpeedLimitKmh, 4);
+      expect(back.rawGustLimitKmh, closeTo(14.667, 0.001));
+      expect(back.lastCheckAt, DateTime(2026, 7, 13, 5, 55));
+      expect(back.rollOnDone, isTrue);
+      expect((await store.loadAllPendingRings()).single.pluginId, 10007);
     });
 
     test('upsertHistory: one row per push; a racing double-write converges',
@@ -157,15 +240,6 @@ void main() {
       await store.upsertHistory(push(1, when: at.add(const Duration(days: 1))));
       await store.upsertHistory(push(1, alarm: 8));
       expect(await store.loadHistory(), hasLength(5));
-    });
-
-    test('refresh() reloads prefs without disturbing stored data', () async {
-      // The real point of refresh() — seeing another isolate's writes — needs
-      // two isolates and is device territory; here we pin that a reload is
-      // non-destructive and safe to call at every resync.
-      await store.saveSoundPath('/tones/x.ogg');
-      await store.refresh();
-      expect(await store.loadSoundPath(), '/tones/x.ogg');
     });
 
     test('history prepends newest and is never trimmed', () async {
@@ -226,107 +300,155 @@ void main() {
     });
 
     group('a write survives the other isolate (REVIEW #7)', () {
-      // History is ONE JSON blob, read-modify-written, and this app's two
-      // isolates genuinely run at once — the app open at 06:00 while the
-      // AlarmManager wakeup fires is the DESIGNED case, not a corner. Both
-      // stores below write through to the real prefs, so what is asserted is
-      // what a second isolate would actually find on disk.
+      // **Both hazards this group used to reproduce are now unreachable by
+      // construction, so what it asserts changed.** History was ONE JSON blob,
+      // read-modify-written, and this app's two isolates genuinely run at once
+      // — the app open at 06:00 while the AlarmManager wakeup fires is the
+      // DESIGNED case. The old tests needed a `_StaleCacheStore` (a per-isolate
+      // prefs snapshot) and a `_ClobberedOnceStore` (the other isolate saving a
+      // whole blob built before ours). Neither has anything to model now: there
+      // is no per-isolate cache to go stale, and no writer that rewrites rows
+      // it did not author. These pin that.
       final at = DateTime(2026, 7, 13, 6, 0);
-      HistoryRecord row(int alarmId) => HistoryRecord(
+      HistoryRecord row(int alarmId, {int pushSeq = 0}) => HistoryRecord(
             alarmId: alarmId,
             courtId: 'c1',
             at: at,
+            pushSeq: pushSeq,
             outcome: CheckOutcome.rang,
           );
 
-      test('a stale prefs cache cannot delete the row it never saw', () async {
-        // The reported bug, and it needs no concurrency at all: a foreground
-        // that loaded prefs at startup holds a snapshot from before the
-        // background check's row existed, and rebuilding the blob from that
-        // snapshot deletes it. "A background check writes `Still checking`,
-        // you toggle the alarm off, and the row is gone."
+      test('an upsert touches its own row and no other', () async {
+        // The reported bug was the opposite: a foreground holding a snapshot
+        // from launch rebuilt the log from before the background check's row
+        // existed, and saving it back deleted that row. "A background check
+        // writes `Still checking`, you toggle the alarm off, and the row is
+        // gone." A statement that names one row cannot do that.
         await NivaatStore().upsertHistory(row(1)); // the background check
-        final stale = _StaleCacheStore(const []); // opened before that row
-        await stale.upsertHistory(row(2)); // the toggle-off
+        await NivaatStore().upsertHistory(row(2)); // the toggle-off
 
         expect(
-          (await NivaatStore().loadHistory()).map((r) => r.alarmId).toSet(),
+          (await store.loadHistory()).map((r) => r.alarmId).toSet(),
           {1, 2},
-          reason: 'the row we could not see must survive our write',
+          reason: 'the row we never read must survive our write',
         );
       });
 
-      test('a save landing on top of ours is noticed and written through',
+      test('the losing side of a same-key race is applied, not dropped',
           () async {
-        // The concurrent half. Once our save has landed, another isolate
-        // saving a blob built before it wipes our row outright — no reload can
-        // prevent that, because the damage happens after we have read. Reading
-        // back and re-applying converges instead of losing it.
-        final intruder = row(9);
-        final store = _ClobberedOnceStore([intruder]);
+        // The concurrent half. On prefs, another isolate saving a blob built
+        // before ours wiped our row outright, and no reload could prevent it —
+        // the damage happens after we have read. `INSERT … ON CONFLICT DO
+        // UPDATE` has no such window: whoever writes second updates the row
+        // rather than replacing a list it built from a stale read.
         await store.upsertHistory(row(2));
+        await store.upsertHistory(HistoryRecord(
+          alarmId: 2,
+          courtId: 'c1',
+          at: at,
+          pushSeq: 0,
+          outcome: CheckOutcome.rang,
+          ringDisposition: RingDisposition.missed,
+        ));
 
-        expect(store.struck, isTrue,
-            reason: 'without a read-back there is no window to strike in, and '
-                'this whole test would pass by doing nothing');
-        final disk = await NivaatStore().loadHistory();
-        expect(disk.map((r) => r.alarmId).toSet(), {2, 9},
-            reason: 'ours came back, and theirs — which proves the competing '
-                'write really did land on the same blob');
+        final disk = await store.loadHistory();
+        expect(disk, hasLength(1), reason: 'same push key converges');
+        expect(disk.single.ringDisposition, RingDisposition.missed,
+            reason: 'the second write was applied, not discarded');
+      });
+
+      test('a corrected row keeps its place in the log', () async {
+        // The sheet renders every row in order, so a supersession that jumped
+        // to the top would read as a second, later event. The conflict update
+        // deliberately leaves `rowSeq` alone.
+        await store.upsertHistory(row(1));
+        await store.upsertHistory(row(2));
+        await store.upsertHistory(HistoryRecord(
+          alarmId: 1,
+          courtId: 'c1',
+          at: at,
+          pushSeq: 0,
+          outcome: CheckOutcome.rang,
+          ringDisposition: RingDisposition.unknown,
+        ));
+
+        final ids = (await store.loadHistory()).map((r) => r.alarmId).toList();
+        expect(ids, [2, 1], reason: 'the correction did not reorder the log');
+      });
+    });
+
+    group('transactions', () {
+      test('nothing lands when the transaction does not commit', () async {
+        // The whole point of the migration in one assertion: a failure part way
+        // through leaves no half-written state. On prefs each `setString` was
+        // its own commit, so an interrupted sequence left exactly the shapes
+        // the engine then had to recover from.
+        await expectLater(
+          store.transaction(() async {
+            await store.saveAlarmIdSeq(9);
+            await store.upsertHistory(
+              HistoryRecord(
+                alarmId: 1,
+                courtId: 'c1',
+                at: DateTime(2026, 7, 13, 6, 0),
+                outcome: CheckOutcome.rang,
+              ),
+            );
+            throw Exception('interrupted');
+          }),
+          throwsException,
+        );
+
+        expect(await store.loadAlarmIdSeq(), isNull);
+        expect(await store.loadHistory(), isEmpty);
+      });
+
+      test('the id counter and the alarm that spends it land together',
+          () async {
+        // REVIEW #9's guarantee, structural now. It used to be two writes
+        // ordered counter-first, because interrupted between them it is better
+        // to skip a number than to leave an alarm with no counter past it —
+        // the next alarm created would take its number and inherit its ring,
+        // late ring, check, card and cascade state.
+        const a = NivaatAlarm(id: 4, hour: 6, minute: 0, courtId: 'c1');
+        await store.saveAlarms([a], alarmIdSeq: 5);
+        expect(await store.loadAlarmIdSeq(), 5);
+        expect((await store.loadAlarms()).single.id, 4);
+
+        // An edit passes no counter, and must leave it exactly where it was.
+        await store.saveAlarms([a.copyWith(enabled: false)]);
+        expect(await store.loadAlarmIdSeq(), 5);
+        expect((await store.loadAlarms()).single.enabled, isFalse);
+      });
+
+      test('clearing by occurrence ignores a slot that has moved on', () async {
+        // This replaced a load-compare-delete, and the gap in that older shape
+        // is exactly where a roll-on writes the NEXT occurrence's state — which
+        // the delete would then throw away.
+        final today = DateTime(2026, 7, 13, 6, 0);
+        final tomorrow = DateTime(2026, 7, 14, 6, 0);
+        await store.saveCheckState(
+            CheckState(alarmId: 7, alarmAt: tomorrow, ringScheduled: true));
+        await store.savePendingRing(PendingRing(
+          alarmId: 7,
+          pluginId: 10007,
+          role: RingLockerRole.ring,
+          occurrenceAt: tomorrow,
+          scheduledFor: tomorrow,
+          courtId: 'c1',
+        ));
+
+        await store.clearCheckStateForOccurrence(7, today);
+        await store.clearPendingRingForOccurrence(7, today);
+        expect((await store.loadCheckState(7))!.alarmAt, tomorrow,
+            reason: "today's settle must not delete tomorrow's state");
+        expect((await store.loadPendingRing(7))!.occurrenceAt, tomorrow);
+
+        await store.clearCheckStateForOccurrence(7, tomorrow);
+        await store.clearPendingRingForOccurrence(7, tomorrow);
+        expect(await store.loadCheckState(7), isNull);
+        expect(await store.loadPendingRing(7), isNull);
       });
     });
   });
-}
-
-/// A store whose prefs cache is a SNAPSHOT until something reloads it, which
-/// is what SharedPreferences really does per isolate. Every other test shares
-/// one cache, so without this a reload-before-read is indistinguishable from
-/// no reload at all.
-class _StaleCacheStore extends NivaatStore {
-  _StaleCacheStore(this._cached);
-
-  List<HistoryRecord>? _cached;
-
-  @override
-  Future<void> refresh() async {
-    await super.refresh();
-    _cached = null; // the reload drops the snapshot; the next read hits disk
-  }
-
-  @override
-  Future<List<HistoryRecord>> loadHistory() async =>
-      _cached ?? super.loadHistory();
-}
-
-/// The other isolate, saving a blob built before our row existed — landing it
-/// the moment ours reaches disk, which is the interleaving no reload can close.
-///
-/// The trigger is the STATE of the log, not a count of calls: it strikes the
-/// first time it can see our own write, whenever that happens. So a
-/// `upsertHistory` that never re-reads after saving never gives it a chance to
-/// fire, and `struck` stays false — which is the assertion above.
-class _ClobberedOnceStore extends NivaatStore {
-  _ClobberedOnceStore(this.otherIsolateRows);
-
-  final List<HistoryRecord> otherIsolateRows;
-  bool struck = false;
-  int _before = -1;
-
-  @override
-  Future<void> refresh() async {
-    await super.refresh();
-    if (struck) return;
-    final rows = await super.loadHistory();
-    if (_before < 0) {
-      _before = rows.length;
-      return;
-    }
-    if (rows.length <= _before) return; // our save has not landed yet
-    struck = true;
-    // Written raw rather than through upsertHistory, because that is what the
-    // other isolate does: it saves its OWN list, and ours is simply not in it.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('nivaat.history',
-        jsonEncode([for (final r in otherIsolateRows) r.toJson()]));
-  }
 }

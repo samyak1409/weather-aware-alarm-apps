@@ -1,11 +1,11 @@
-import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/drift.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_alarmkit/flutter_alarmkit.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'alarm_pkg_scheduler.dart';
+import 'db/app_database.dart';
 import 'host_alarm_events.dart';
 import 'scheduler.dart';
 
@@ -32,8 +32,10 @@ class AlarmKitScheduler implements AlarmScheduler {
   final String tintColor;
 
   final FlutterAlarmkit _ak = FlutterAlarmkit();
-  static const String _mapKey = 'alarmkit.idmap';
   bool _authRequested = false;
+
+  /// Resolved per call so a test swapping the database in `setUp` is seen.
+  AppDatabase get _db => appDb;
 
   @override
   Future<void> ensureInitialized() async {
@@ -45,47 +47,70 @@ class AlarmKitScheduler implements AlarmScheduler {
     _authRequested = true;
   }
 
-  /// Reads the id -> UUIDs map from DISK, not from this isolate's cache.
+  /// The whole id -> UUIDs map, each id's handles **newest first**.
   ///
-  /// Without the reload a background isolate never sees what the UI isolate
-  /// wrote, so its read-modify-write saves the other side's entries away
-  /// (REVIEW #7). This narrows that to the gap between reload and save — there
-  /// is still no cross-isolate lock, and SharedPreferences offers none — which
-  /// is also why [scheduledIds] only writes when something actually changed.
+  /// **One row per handle, not one blob for the whole map** — that is what
+  /// moving to SQLite bought here. The prefs version was a read-edit-save over
+  /// every id at once, so a background isolate writing one id's entry saved the
+  /// UI isolate's other ids away with it (REVIEW #7); reloading first narrowed
+  /// that window but could not close it, because prefs has no compare-and-swap.
+  /// Two ids can no longer contend at all, and an add or a remove is one
+  /// statement.
   ///
-  /// **Each id maps to a LIST, newest first** (REVIEW #4 · #5 · #6): the live
-  /// UUID plus any whose cancel was not confirmed. One slot per id could not
-  /// hold "keep the old handle when its cancel fails" and "create the
-  /// replacement before destroying what it replaces" at once — both want it —
-  /// so every operation here treats the whole list alike: cancel them all, ask
-  /// them all whether one is ringing, prune what AlarmKit has forgotten.
+  /// **The create -> save window is NOT closed by any of this.** AlarmKit mints
+  /// the UUID, so there is still nothing to write down until
+  /// `scheduleOneShotAlarm` returns, and dying in that gap still leaves an
+  /// armed alarm no row names. Do not read "we moved it to SQLite" as "that one
+  /// is fixed" — only the concurrent half is. See [scheduleRing].
   ///
-  /// Only [_saveMap] writes this key, so the shape on disk is always current;
-  /// an older build's blob is a cleared-data problem, not a parsing one (see
-  /// CLAUDE.md on the no-migration policy).
+  /// **Each id holds a LIST** (REVIEW #4 · #5 · #6): the live UUID plus any
+  /// whose cancel was not confirmed. One slot per id could not hold "keep the
+  /// old handle when its cancel fails" and "create the replacement before
+  /// destroying what it replaces" at once — both want it — so every operation
+  /// here treats the whole list alike: cancel them all, ask them all whether one
+  /// is ringing, prune what AlarmKit has forgotten.
   Future<Map<String, List<String>>> _loadMap() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final raw = prefs.getString(_mapKey);
-    if (raw == null) return {};
-    return {
-      for (final e in (jsonDecode(raw) as Map<String, dynamic>).entries)
-        e.key: (e.value as List<dynamic>).cast<String>(),
-    };
+    final rows = await (_db.select(_db.alarmKitHandles)
+          ..orderBy([(t) => OrderingTerm.desc(t.seq)]))
+        .get();
+    final out = <String, List<String>>{};
+    for (final row in rows) {
+      (out['${row.alarmId}'] ??= <String>[]).add(row.uuid);
+    }
+    return out;
   }
 
-  /// Persists [map], dropping ids with nothing left in them — an id we hold no
-  /// UUID for is an id we know nothing about, and letting an empty list through
-  /// would make [scheduledIds] report a handle on no alarm at all.
-  Future<void> _saveMap(Map<String, List<String>> map) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _mapKey,
-      jsonEncode({
-        for (final e in map.entries)
-          if (e.value.isNotEmpty) e.key: e.value,
-      }),
-    );
+  /// Records [uuid] as [id]'s newest handle.
+  ///
+  /// One transaction so the sequence number cannot be handed out twice, and
+  /// scoped to this id: another alarm's handles are untouched, which is the
+  /// whole difference from the blob.
+  Future<void> _addHandle(int id, String uuid) => _db.transaction(() async {
+        final seq = await _db
+            .customSelect(
+              'SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM alarm_kit_handles '
+              'WHERE alarm_id = ?',
+              variables: [Variable.withInt(id)],
+            )
+            .getSingle();
+        await _db.into(_db.alarmKitHandles).insertOnConflictUpdate(
+              AlarmKitHandlesCompanion(
+                alarmId: Value(id),
+                uuid: Value(uuid),
+                seq: Value(seq.read<int>('next')),
+                createdAt: Value(DateTime.now()),
+              ),
+            );
+      });
+
+  /// Forgets [uuids] under [id]. An id with nothing left simply has no rows,
+  /// which is what "we hold no handle on it" means — there is no empty-list
+  /// case to filter out any more.
+  Future<void> _removeHandles(int id, Set<String> uuids) async {
+    if (uuids.isEmpty) return;
+    await (_db.delete(_db.alarmKitHandles)
+          ..where((t) => t.alarmId.equals(id) & t.uuid.isIn(uuids)))
+        .go();
   }
 
   @override
@@ -124,20 +149,22 @@ class AlarmKitScheduler implements AlarmScheduler {
       // that never made a sound (REVIEW #2).
       return false;
     }
-    final map = await _loadMap();
-    final superseded = map['$id'] ?? const <String>[];
+    final superseded = (await _loadMap())['$id'] ?? const <String>[];
     // Record the new handle BEFORE cancelling anything, so a crash in the gap
     // leaves an alarm we can still name.
     //
     // **The create→save window above is the one leak left, and it cannot be
     // closed here:** AlarmKit mints the UUID, so nothing can be written down
     // until the create returns, and dying in between (iOS killing a background
-    // task at expiry) arms an alarm no map names — so nothing can cancel it and
+    // task at expiry) arms an alarm no row names — so nothing can cancel it and
     // it rings even on a morning the wind says to skip. Sweeping alarms this
     // map does not name is the only fix and is NOT a drive-by: in that same
     // window a new alarm looks exactly like an orphan. CLAUDE.md.
-    map['$id'] = [uuid, ...superseded];
-    await _saveMap(map);
+    //
+    // Moving the map into SQLite did not change any of that. It closed the
+    // *concurrent* half — two isolates clobbering each other's entries — and
+    // left this crash window exactly where it was.
+    await _addHandle(id, uuid);
     await _cancelEach(id, superseded);
     return true;
   }
@@ -175,13 +202,12 @@ class AlarmKitScheduler implements AlarmScheduler {
       }
       if (cancelled) gone.add(uuid);
     }
-    if (gone.isEmpty) return;
-    // Re-read: the cancels above took real time, and this entry is a
-    // read-modify-write with no cross-isolate lock (REVIEW #7).
-    final map = await _loadMap();
-    map['$id'] =
-        (map['$id'] ?? const <String>[]).where((u) => !gone.contains(u)).toList();
-    await _saveMap(map);
+    // A targeted DELETE of exactly what AlarmKit confirmed is gone. The prefs
+    // version had to re-read the whole map here and write it back, because the
+    // cancels above take real time and it was rebuilding a blob it might have
+    // read before another isolate wrote it (REVIEW #7). Naming the rows removes
+    // both the re-read and the race.
+    await _removeHandles(id, gone);
   }
 
   /// The int ids AlarmKit still holds something for, pruned by [_livingMap].
@@ -217,21 +243,32 @@ class AlarmKitScheduler implements AlarmScheduler {
   /// on the first resync.
   Future<({Map<String, List<String>> map, Map<String, Alarm> byUuid})>
       _livingMap() async {
-    final map = await _loadMap();
+    // **Taken BEFORE the query, and that ordering is the whole guard.** What
+    // comes back is a snapshot, and deleting "everything AlarmKit did not
+    // mention" against a snapshot destroys any handle another isolate recorded
+    // in the meantime — an armed alarm no row names, which `cancel`,
+    // `isRinging` and the orphan sweep all work off, so it rings on a morning
+    // the wind says to skip. `scheduleRing` records its row only after
+    // `scheduleOneShotAlarm` has returned, so a row older than this instant was
+    // already known to AlarmKit when it was asked; anything newer is not this
+    // snapshot's business and is left alone until the next prune.
+    final asOf = DateTime.now().microsecondsSinceEpoch;
+    // Ask AlarmKit FIRST: a failure here must throw before anything is deleted,
+    // or a transient hiccup would prune the whole map as "forgotten".
     final alarms = await _ak.getAlarms();
     final byUuid = {for (final a in alarms) a.id: a};
-    var changed = false;
-    final kept = <String, List<String>>{};
-    for (final e in map.entries) {
-      final live = e.value.where(byUuid.containsKey).toList();
-      if (live.length != e.value.length) changed = true;
-      if (live.isNotEmpty) kept[e.key] = live;
-    }
-    // Only write when something actually went. This map is a read-modify-write
-    // blob with no cross-isolate lock (REVIEW #7), so every needless save is
-    // another chance for two isolates to overwrite each other.
-    if (changed) await _saveMap(kept);
-    return (map: kept, byUuid: byUuid);
+    final live = byUuid.keys.toList();
+    // `NOT IN ()` is a syntax error in SQLite, so the empty case is spelled
+    // out: AlarmKit holding nothing means every handle we have is dead.
+    final prune = _db.delete(_db.alarmKitHandles)
+      ..where((t) => t.createdAt.isSmallerThanValue(asOf));
+    if (live.isNotEmpty) prune.where((t) => t.uuid.isNotIn(live));
+    await prune.go();
+    // The prefs version wrote only when something had actually gone, because
+    // every save of that blob was another chance for two isolates to overwrite
+    // each other. A DELETE that names the rows it removes cannot catch a
+    // bystander, so there is nothing left for that guard to protect.
+    return (map: await _loadMap(), byUuid: byUuid);
   }
 
   @override

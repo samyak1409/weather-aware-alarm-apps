@@ -49,22 +49,24 @@ class NivaatController extends ChangeNotifier {
   /// can be mid-check with a stale courts list and land its row just after
   /// that sweep (the store's `upsertHistory` exists because these isolates do
   /// race). The leftover renders as a court-less entry, so every load prunes
-  /// (2026-07-22). Called after `store.refresh()` in [resync], which is
-  /// exactly when a background write first becomes visible here.
+  /// (2026-07-22). It used to say this ran after `store.refresh()` in [resync],
+  /// "exactly when a background write first becomes visible here" — that call
+  /// went with the move to SQLite (2026-08-12), and a background write is
+  /// visible to any read now.
   ///
   /// An EMPTY court list prunes too, and that's deliberate: deleting the last
   /// court already takes its history with it, so with no courts every
   /// surviving row is by definition an orphan. Safe only once [loaded] — before
   /// [init] the in-memory `courts` default is also `[]` even when the store
   /// still has courts, so [resync] must not call this until then (2026-07-23).
-  /// Store-side, `[]` can only mean "nothing saved": `_decodeList` returns it
-  /// for an absent key and *throws* on corrupt JSON.
+  /// Store-side, `[]` can only mean "nothing saved": it is an empty table, and
+  /// there is no half-read blob that could present as one.
   Future<List<HistoryRecord>> _loadHistory() async {
-    // From disk, not this isolate's cache. [resync] refreshed before the
-    // engine ran, but delete / court-removal / save reach here on their own,
-    // and this method PRUNES — deciding what to throw away from a stale read
-    // is the same mistake as writing over one (REVIEW #7).
-    await store.refresh();
+    // This reads the database, so a row a background check committed a moment
+    // ago is simply here. It used to need `store.refresh()` first, because
+    // SharedPreferences caches per isolate and this method PRUNES — deciding
+    // what to throw away from a stale read is the same mistake as writing over
+    // one (REVIEW #7).
     final rows = await store.loadHistory();
     final live = {for (final c in courts) c.id};
     final orphans = {
@@ -153,10 +155,6 @@ class NivaatController extends ChangeNotifier {
     // once courts are loaded, so dropping these is safe (2026-07-23).
     if (!loaded) return;
     try {
-      // First pull in what background isolates wrote (rows, check state) —
-      // this isolate's SharedPreferences cache doesn't see them otherwise, and
-      // the engine would re-decide from stale state.
-      await store.refresh();
       await engine.evaluateAll();
       history = await _loadHistory();
       await _reloadCheckStates();
@@ -269,20 +267,21 @@ class NivaatController extends ChangeNotifier {
     } else {
       alarms.add(alarm);
     }
-    // **Burn the id BEFORE the alarm that spends it reaches the disk** (REVIEW
-    // #9). The order is the whole guarantee: interrupted here, one number is
-    // skipped and nothing is lost; the other way round leaves an alarm with no
-    // counter past it, and the next one created overwrites it. Nothing
-    // re-derives the counter afterwards to paper over that (see [_reload]).
+    // **The id and the alarm that spends it are now ONE write** (REVIEW #9).
+    // They used to be two, deliberately ordered counter-first: interrupted
+    // between them, one number is skipped and nothing is lost, where the other
+    // order leaves an alarm with no counter past it and the next alarm created
+    // takes its number — inheriting its ring, late ring, check, card and
+    // cascade state. There is no "between" any more; both land or neither does.
+    // Nothing re-derives the counter afterwards to paper over it either (see
+    // [_reload]) — "highest + 1" IS the bug, whatever it is spelled as.
     //
     // Guarded because most calls here are EDITS (every toggle is one), which
     // must leave the counter alone. `>=` not `>`: the id being handed out right
     // now is `_alarmIdSeq` itself.
-    if (alarm.id >= _alarmIdSeq) {
-      _alarmIdSeq = alarm.id + 1;
-      await store.saveAlarmIdSeq(_alarmIdSeq);
-    }
-    await store.saveAlarms(alarms);
+    final burnsId = alarm.id >= _alarmIdSeq;
+    if (burnsId) _alarmIdSeq = alarm.id + 1;
+    await store.saveAlarms(alarms, alarmIdSeq: burnsId ? _alarmIdSeq : null);
     // Mid-window: limit / Keep checking / add-only weekdays KEEP flying under
     // the new settings. Time, court, drop-today and toggle-off ABANDON — the
     // card is rewritten to `Cancelled` and a matching row appended, because

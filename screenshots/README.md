@@ -34,12 +34,19 @@ Seed prefs, then launch. **Both platforms store Flutter prefs under the
 `flutter.` key prefix.** iOS: write the container plist while the simulator
 is shut down.
 
-**A seeded blob must carry every key the model writes** (2026-08-05). The
-parsers supply no defaults for keys `toJson` always writes — this repo runs no
-data migrations, so a hand-written `arunoday.settings` / `nivaat.alarms` with
-fields left out now throws a cast error on load instead of quietly filling
-them in. Easiest safe route: build the object in a throwaway test, print its
-`toJson()`, and seed that.
+**Nivaat is no longer seedable through prefs at all** (2026-08-12). Its courts,
+alarms, check state, pending rings and history moved to SQLite — `app.sqlite`
+in the app's documents directory — so a plist carrying `nivaat.alarms` is read
+by nothing. Seed that database instead (open it with any sqlite3 client and
+insert rows, or drive `NivaatController` once in a throwaway harness run and
+copy the file out). `nivaat.sound` and the two "asked" flags are still prefs.
+
+**A seeded `arunoday.settings` blob must carry every key the model writes**
+(2026-08-05). Its parser supplies no defaults for keys `toJson` always writes —
+this repo runs no data migrations, so a hand-written blob with fields left out
+throws a cast error on load instead of quietly filling them in. Easiest safe
+route: build the object in a throwaway test, print its `toJson()`, and seed
+that.
 
 For Nivaat screenshots: leave `nivaat.notifPermissionAsked` **false** (harness
 skips the prompt — marking it asked without a grant would make the home

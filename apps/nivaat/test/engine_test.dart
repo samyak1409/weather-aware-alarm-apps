@@ -667,28 +667,20 @@ void main() {
           reason: 'no court, no ring — for either alarm');
     });
 
-    test('a delete made in ANOTHER isolate is seen, not cached past', () async {
-      // The same-isolate tests above share one SharedPreferences cache, so
-      // they pass whether or not anything refreshes. This one models the real
-      // split: the pass is holding the list this isolate last read, while the
-      // store on disk has already lost the alarm.
+    test('a pass holding a deleted alarm re-reads before it arms', () async {
+      // The cross-isolate delete. This used to need a fake that modelled the
+      // per-isolate SharedPreferences cache, because both sides shared one map
+      // and the delete was visible whether or not anything refreshed — so the
+      // test could only be written by simulating the cache. A store read is a
+      // read of the database now, so the stale half is just the argument: the
+      // caller hands over the alarm it last saw, and the store no longer has it.
       await engine.store.saveAlarms([alarm]); // the UI isolate deleted `other`
-      final stale = StaleUntilRefreshedStore([alarm, other]);
-      final backgroundPass = NivaatEngine(
-        store: stale,
-        scheduler: ring,
-        api: api,
-        checks: checks,
-        notifier: notifier,
-      );
       api.sample = wind(5.0, 5.0); // calm — it would arm if it got that far
 
-      await backgroundPass.evaluateAlarm(other, [court], now: beforeBoth);
+      await engine.evaluateAlarm(other, [court], now: beforeBoth);
 
       expect(ring.scheduled.containsKey(NivaatIds.ring(other.id)), isFalse,
           reason: 'an alarm deleted in another isolate must not be armed here');
-      expect(stale.refreshed, isTrue,
-          reason: 'and the reason it was seen is that the store was re-read');
     });
 
     test('an already-armed orphan is swept on the next pass', () async {
@@ -832,15 +824,16 @@ void main() {
       expect(restarted.nextAlarmId(), 2, reason: 'read back from the store');
     });
 
-    test('the counter is burned BEFORE the alarm that spends it', () async {
-      // The ordering IS the fix (REVIEW #9). Nothing re-derives the counter
-      // from the alarm list any more, so if the alarm reached the disk first
-      // and the process died in between, the next alarm created would take a
-      // live alarm's number and overwrite it — along with every `block + id`
-      // notification and cascade slot hanging off that number.
+    test('the counter and the alarm that spends it land together', () async {
+      // This used to assert an ORDER — counter first (REVIEW #9) — because they
+      // were two writes and a crash could land between them, leaving an alarm
+      // with no counter past it so the next one created would overwrite it,
+      // along with every `block + id` notification and cascade slot hanging off
+      // that number. They are one transaction now, so there is no between; what
+      // is left to check is that a save never advances one without the other.
       //
-      // Asserted on the STORE, not the controller: in memory both orders look
-      // identical, and a crash can only land between the two writes.
+      // Asserted on the STORE, not the controller: in memory the controller
+      // holds both in fields and would agree with itself either way.
       final store = SeqWatchingStore();
       await store.saveCourts([court]);
       final watched = NivaatController(
@@ -856,8 +849,21 @@ void main() {
 
       await watched.upsertAlarm(
           const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
-      expect(store.seqWhenAlarmsSaved, [2],
-          reason: 'the counter was already past 1 when alarm 1 was written');
+      // Compared field by field: a record holding a List does not compare by
+      // value, so `expect(saves, [(2, [1])])` would fail on list identity even
+      // when the contents match.
+      expect(store.afterEachSave, hasLength(1));
+      expect(store.afterEachSave.single.$1, 2,
+          reason: 'the counter is already past alarm 1');
+      expect(store.afterEachSave.single.$2, [1],
+          reason: 'and alarm 1 is on disk in the same write');
+
+      // An edit writes the alarms and must leave the counter exactly where it
+      // was — most calls here are edits, and one that burned a number every
+      // time would walk the counter to the block ceiling.
+      await watched.toggleAlarm(1, false);
+      expect(store.afterEachSave.last.$1, 2);
+      expect(store.afterEachSave.last.$2, [1]);
     });
 
     test('a counter standing on a live alarm never overwrites it', () async {

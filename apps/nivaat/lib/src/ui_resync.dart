@@ -9,8 +9,13 @@ import 'controller.dart';
 /// Cross-isolate poke so a background wind check can refresh the open UI
 /// the moment it writes history / posts a skip card (2026-07-22).
 ///
-/// SharedPreferences is per-isolate-cached: without this, home + History stay
-/// stale until resume/nav even though the notification already fired.
+/// **Still needed after the SQLite move (2026-08-12), for a different reason
+/// than it was written for.** It used to say prefs is per-isolate-cached, so
+/// the open UI could not see a background write at all; the database has no
+/// such cache and a re-read would see it. What is missing is the re-read —
+/// nothing tells the UI isolate that anything happened, so home + History sit
+/// on what they last loaded until resume or navigation even though the
+/// notification has already fired. This is the poke, not a cache flush.
 const String kNivaatUiResyncPort = 'nivaat.ui_resync';
 
 ReceivePort? _uiPort;

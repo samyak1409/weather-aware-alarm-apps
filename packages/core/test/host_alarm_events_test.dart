@@ -2,12 +2,22 @@ import 'dart:async';
 
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('HostAlarmEventClaims', () {
+    setUp(useInMemoryAppDatabase);
+
+    HostAlarmEvent eventAt(DateTime recordedAt, {int id = 10001}) =>
+        HostAlarmEvent(
+          id: id,
+          kind: HostAlarmEventKind.dropped,
+          cause: HostAlarmEventCause.platformRefusal,
+          recordedAt: recordedAt,
+          at: recordedAt,
+        );
+
     test('unique keys are per (id, recordedAt)', () {
       final a = DateTime.utc(2026, 8, 8, 6);
       final b = DateTime.utc(2026, 8, 8, 6, 0, 1);
@@ -15,81 +25,135 @@ void main() {
       expect(hostAlarmEventClaimKey(1, a), isNot(hostAlarmEventClaimKey(2, a)));
     });
 
-    test(
-        'two caches + one backend share claims after reload '
-        '(host mock cannot hold two truly stale unflushed caches)', () async {
-      // Honest limit (H4): SharedPreferences.setMockInitialValues gives one
-      // in-memory map. Two Claims objects both reload that same map — this
-      // proves the write is visible after reload, NOT a true dual-isolate race
-      // where each cache holds a stale snapshot across an awaited gap. Real
-      // isolates still need idempotent handlers (history hostEventKey +
-      // clearPending) because prefs cannot CAS.
-      SharedPreferences.setMockInitialValues({});
-      final backend = await SharedPreferences.getInstance();
+    test('begin is a real compare-and-swap — only one caller gets the event',
+        () async {
+      // The thing SharedPreferences could not do. Two isolates could both read
+      // "absent" and both run the handler, so convergence had to live in the
+      // handlers; the whole of that claim was one bool. Now taking
+      // responsibility is one transaction, and the loser is told so.
+      final a = HostAlarmEventClaims();
+      final b = HostAlarmEventClaims();
+      final event = eventAt(DateTime.utc(2026, 8, 8, 6, 0, 30));
 
-      Future<SharedPreferences> prefsA() async {
-        await backend.reload();
-        return backend;
-      }
+      expect(await a.isClaimed(event), isFalse);
+      final claimA = await a.begin(event);
+      expect(claimA, isNotNull);
+      expect(claimA!.attempts, 1);
+      expect(await b.begin(event), isNull,
+          reason: 'A holds a live lease on it');
 
-      Future<SharedPreferences> prefsB() async {
-        await backend.reload();
-        return backend;
-      }
-
-      final claimsA = HostAlarmEventClaims(prefs: prefsA);
-      final claimsB = HostAlarmEventClaims(prefs: prefsB);
-      final event = HostAlarmEvent(
-        id: 10001,
-        kind: HostAlarmEventKind.dropped,
-        cause: HostAlarmEventCause.platformRefusal,
-        recordedAt: DateTime.utc(2026, 8, 8, 6, 0, 30),
-        at: DateTime.utc(2026, 8, 8, 6),
-      );
-
-      expect(await claimsA.isClaimed(event), isFalse);
-      await claimsA.claim(event);
-      expect(await claimsB.isClaimed(event), isTrue,
-          reason: 'B must see A\'s claim after reload');
+      await a.complete(event, claimA);
+      expect(await b.isClaimed(event), isTrue);
+      expect(await b.begin(event), isNull, reason: 'already applied');
     });
 
-    test('prune drops keys past the TTL and keeps the rest', () async {
-      SharedPreferences.setMockInitialValues({});
+    test('a claim whose holder died is retaken once its lease expires',
+        () async {
+      // The crash recovery a boolean cannot express. A row that says "handled"
+      // before the handler ran loses the event for good — the plugin
+      // acknowledged it natively long ago, so nothing redelivers it. Marking
+      // `processing` with a lease is what makes the dead holder recoverable.
+      final claims = HostAlarmEventClaims();
+      final event = eventAt(DateTime.utc(2026, 8, 8, 6, 0, 30));
+      final t = DateTime.utc(2026, 8, 8, 6, 1);
+
+      expect(await claims.begin(event, now: t), isNotNull);
+      // Still inside the lease: nobody else may touch it.
+      expect(
+        await claims.begin(event,
+            now: t.add(HostAlarmEventClaims.lease - const Duration(seconds: 1))),
+        isNull,
+      );
+
+      final retaken = await claims.begin(event,
+          now: t.add(HostAlarmEventClaims.lease + const Duration(seconds: 1)));
+      expect(retaken, isNotNull);
+      expect(retaken!.attempts, 2, reason: 'the count is on disk, not in RAM');
+      expect(await claims.isClaimed(event), isFalse,
+          reason: 'processing is not done');
+    });
+
+    test('an abandoned event is never re-run, and never reads as applied',
+        () async {
+      // `abandoned` has to be distinct from `done` in both directions: it must
+      // stop the retries, and it must not let a dropped ring look like an event
+      // that was dealt with.
+      final claims = HostAlarmEventClaims();
+      final event = eventAt(DateTime.utc(2026, 8, 8, 6, 0, 30));
+      final first = await claims.begin(event);
+      expect(first, isNotNull);
+      await claims.abandon(event, first!);
+
+      expect(await claims.begin(event), isNull);
+      expect(await claims.isClaimed(event), isFalse);
+    });
+
+    test('release hands the event back with its attempt count intact',
+        () async {
+      final claims = HostAlarmEventClaims();
+      final event = eventAt(DateTime.utc(2026, 8, 8, 6, 0, 30));
+      final first = (await claims.begin(event))!;
+      expect(first.attempts, 1);
+      await claims.release(event, first);
+      // Immediately retakeable — `release` drops the lease rather than waiting
+      // it out, because the caller has already decided to try again later.
+      expect((await claims.begin(event))!.attempts, 2);
+    });
+
+    test('a worker that lost its lease cannot settle its successor\'s claim',
+        () async {
+      // The lease bounds how long a claim is RESPECTED, not how long a handler
+      // runs. A slow worker can still be inside its handler when the next
+      // barrier retakes the event, and its verdict must then land on nothing —
+      // `abandon` from a stale worker would park an event the successor is
+      // about to apply, leaving a row saying a dropped ring was never dealt
+      // with, and `release` would re-open one someone is actively handling.
+      final claims = HostAlarmEventClaims();
+      final event = eventAt(DateTime.utc(2026, 8, 8, 6, 0, 30));
+      final t = DateTime.utc(2026, 8, 8, 6, 1);
+
+      final stale = (await claims.begin(event, now: t))!;
+      final later = t.add(HostAlarmEventClaims.lease + const Duration(minutes: 1));
+      final holder = (await claims.begin(event, now: later))!;
+      expect(holder.attempts, 2);
+
+      // The overtaken worker finally returns, both ways round.
+      await claims.abandon(event, stale, now: later);
+      expect(await claims.begin(event, now: later.add(const Duration(hours: 1))),
+          isNotNull,
+          reason: 'a stale abandon must not park a live claim');
+
+      // And the real holder still settles it. (Its own attempts moved on with
+      // the begin above, so re-read rather than reusing `holder`.)
+      final current = (await claims.begin(
+          event, now: later.add(const Duration(hours: 2))))!;
+      await claims.complete(event, current);
+      expect(await claims.isClaimed(event), isTrue);
+    });
+
+    test('prune drops rows past the TTL and keeps the rest', () async {
       final now = DateTime.utc(2026, 8, 9, 12);
       final claims = HostAlarmEventClaims();
-      HostAlarmEvent at(DateTime recordedAt) => HostAlarmEvent(
-            id: 10001,
-            kind: HostAlarmEventKind.dropped,
-            cause: HostAlarmEventCause.staleAtBoot,
-            recordedAt: recordedAt,
-            at: recordedAt,
-          );
-      final old = at(now.subtract(const Duration(days: 8)));
-      final recent = at(now.subtract(const Duration(days: 1)));
-      await claims.claim(old);
-      await claims.claim(recent);
+      final old = eventAt(now.subtract(const Duration(days: 8)));
+      final recent = eventAt(now.subtract(const Duration(days: 1)), id: 10002);
+      final oldClaim = await claims.begin(old);
+      await claims.complete(old, oldClaim!);
+      final recentClaim = await claims.begin(recent);
+      await claims.complete(recent, recentClaim!);
 
       await claims.prune(now: now);
 
-      // Without a ceiling these bools live as long as the install — one per
-      // host event, in the same prefs blob the history log sits in.
+      // Without a ceiling these rows live as long as the install — one per host
+      // event ever delivered.
       expect(await claims.isClaimed(old), isFalse);
       expect(await claims.isClaimed(recent), isTrue);
-    });
-
-    test('an unrelated key is never pruned', () async {
-      SharedPreferences.setMockInitialValues({'nivaat.history': '[]'});
-      final prefs = await SharedPreferences.getInstance();
-      await HostAlarmEventClaims().prune(now: DateTime.utc(2030));
-      await prefs.reload();
-      expect(prefs.getString('nivaat.history'), '[]');
     });
   });
 
   group('HostAlarmEventBridge', () {
     test('apply awaits handlers before returning — listen is not a barrier',
         () async {
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       final claims = HostAlarmEventClaims();
       final bridge = HostAlarmEventBridge(
@@ -140,7 +204,7 @@ void main() {
       // The net must not take down what it protects: draining a batch, one
       // throwing handler used to discard every event queued beside it — they
       // were already off the queue — while apply() returned as if all was well.
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       final claims = HostAlarmEventClaims();
       final bridge = HostAlarmEventBridge(
@@ -189,7 +253,7 @@ void main() {
     });
 
     test('a handler that never succeeds is never marked handled', () async {
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       final claims = HostAlarmEventClaims();
       final bridge = HostAlarmEventBridge(
@@ -230,7 +294,7 @@ void main() {
       // `_started = true` used to go up before `Alarm.init()` ran, so one
       // plugin hiccup left every later barrier returning instantly having
       // subscribed to nothing at all.
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       var readyCalls = 0;
       final bridge = HostAlarmEventBridge(
@@ -272,11 +336,20 @@ void main() {
       await controller.close();
     });
 
-    test('injected identical events into two bridges are both delivered',
+    test('one event delivered to two bridges runs exactly one handler',
         () async {
-      // Native won't re-emit after ack; apps must still tolerate injected
-      // duplicates via idempotent handlers (matrix #5).
-      SharedPreferences.setMockInitialValues({});
+      // **This assertion changed direction with the move to SQLite, and the new
+      // one is the fix.** Two bridges model two isolates. On prefs both could
+      // read "absent" and both run the handler, because a bool cannot
+      // compare-and-swap — so this test used to assert that BOTH ran, which was
+      // recording the defect rather than a requirement. `begin` is a
+      // transaction now, so the second one is told no.
+      //
+      // Handlers must still be idempotent on `(id, recordedAt)`. The claim
+      // makes concurrent double-handling rare, not impossible: a handler can
+      // outlive its own lease, and then a second isolate legitimately takes the
+      // event over.
+      await useInMemoryAppDatabase();
       final event = HostAlarmEvent(
         id: 42,
         kind: HostAlarmEventKind.dropped,
@@ -303,16 +376,16 @@ void main() {
       source.add(event);
       await bridgeA.apply();
       await bridgeB.apply();
-      expect(seenA, hasLength(1));
-      expect(seenB, hasLength(1));
-      expect(seenA.single.claimKey, event.claimKey);
+      expect([...seenA, ...seenB], hasLength(1),
+          reason: 'the claim is a lock now, so the duplicate is suppressed');
+      expect([...seenA, ...seenB].single.claimKey, event.claimKey);
       await bridgeA.dispose();
       await bridgeB.dispose();
       await source.close();
     });
     test('apply is re-entrant during a handler — no deadlock with nested apply',
         () async {
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       final bridge = HostAlarmEventBridge(
         events: () => controller.stream,
@@ -349,7 +422,7 @@ void main() {
       // used to mean an unhandled zone error while `apply()` returned normally
       // with the rest of the batch eaten. It has to come out of the barrier the
       // caller actually awaits.
-      SharedPreferences.setMockInitialValues({});
+      await useInMemoryAppDatabase();
       final controller = StreamController<HostAlarmEvent>.broadcast();
       final claims = HostAlarmEventClaims();
       final bridge = HostAlarmEventBridge(

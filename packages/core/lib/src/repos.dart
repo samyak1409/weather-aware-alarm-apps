@@ -1,13 +1,18 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:drift/drift.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'db/app_database.dart';
+import 'db/tables.dart';
 import 'models.dart';
 
-/// SharedPreferences-backed stores. Everything is small JSON blobs; both
-/// apps are single-user, low-write. Background isolates re-read from disk.
-
+/// Arunoday's settings: one writer (the UI isolate), so they stay on
+/// SharedPreferences.
+///
+/// The two-backend split and why it is the design rather than a half-finished
+/// migration is on `AppDatabase`; the inventory of what sits on which side is
+/// on `tables.dart`.
 class ArunodayStore {
   static const _key = 'arunoday.settings';
 
@@ -123,43 +128,6 @@ class CheckState {
         pushSeq: pushSeq ?? this.pushSeq,
       );
 
-  Map<String, dynamic> toJson() => {
-        'alarmId': alarmId,
-        'alarmAt': alarmAt.toIso8601String(),
-        'ringScheduled': ringScheduled,
-        'ringCourtSpeedKmh': ringCourtSpeedKmh,
-        'ringRawGustKmh': ringRawGustKmh,
-        'ringVolume': ringVolume,
-        'cardShown': cardShown,
-        'skipCourtSpeedKmh': skipCourtSpeedKmh,
-        'skipRawGustKmh': skipRawGustKmh,
-        'skipGusty': skipGusty,
-        'lastCheckAt': lastCheckAt?.toIso8601String(),
-        'lastAttemptAt': lastAttemptAt?.toIso8601String(),
-        'pushSeq': pushSeq,
-      };
-
-  factory CheckState.fromJson(Map<String, dynamic> j) => CheckState(
-        alarmId: j['alarmId'] as int,
-        alarmAt: DateTime.parse(j['alarmAt'] as String),
-        ringScheduled: j['ringScheduled'] as bool,
-        ringCourtSpeedKmh: (j['ringCourtSpeedKmh'] as num?)?.toDouble(),
-        ringRawGustKmh: (j['ringRawGustKmh'] as num?)?.toDouble(),
-        ringVolume: (j['ringVolume'] as num?)?.toDouble(),
-        cardShown: j['cardShown'] as bool,
-        skipCourtSpeedKmh: (j['skipCourtSpeedKmh'] as num?)?.toDouble(),
-        skipRawGustKmh: (j['skipRawGustKmh'] as num?)?.toDouble(),
-        skipGusty: j['skipGusty'] as bool,
-        lastCheckAt: switch (j['lastCheckAt']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        lastAttemptAt: switch (j['lastAttemptAt']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        pushSeq: j['pushSeq'] as int,
-      );
 }
 
 /// Which of Nivaat's three ring lockers held the pending ring.
@@ -229,60 +197,49 @@ class PendingRing {
         rollOnDone: rollOnDone ?? this.rollOnDone,
       );
 
-  Map<String, dynamic> toJson() => {
-        'alarmId': alarmId,
-        'pluginId': pluginId,
-        'role': role.name,
-        'occurrenceAt': occurrenceAt.toIso8601String(),
-        'scheduledFor': scheduledFor.toIso8601String(),
-        'courtId': courtId,
-        'volume': volume,
-        'courtSpeedKmh': courtSpeedKmh,
-        'rawGustKmh': rawGustKmh,
-        'courtSpeedLimitKmh': courtSpeedLimitKmh,
-        'rawGustLimitKmh': rawGustLimitKmh,
-        'lastCheckAt': lastCheckAt?.toIso8601String(),
-        'rollOnDone': rollOnDone,
-      };
-
-  factory PendingRing.fromJson(Map<String, dynamic> j) => PendingRing(
-        alarmId: j['alarmId'] as int,
-        pluginId: j['pluginId'] as int,
-        role: RingLockerRole.values.byName(j['role'] as String),
-        occurrenceAt: DateTime.parse(j['occurrenceAt'] as String),
-        scheduledFor: DateTime.parse(j['scheduledFor'] as String),
-        courtId: j['courtId'] as String,
-        volume: (j['volume'] as num?)?.toDouble(),
-        courtSpeedKmh: (j['courtSpeedKmh'] as num?)?.toDouble(),
-        rawGustKmh: (j['rawGustKmh'] as num?)?.toDouble(),
-        courtSpeedLimitKmh: j['courtSpeedLimitKmh'] as int?,
-        rawGustLimitKmh: (j['rawGustLimitKmh'] as num?)?.toDouble(),
-        lastCheckAt: switch (j['lastCheckAt']) {
-          final String s => DateTime.parse(s),
-          _ => null,
-        },
-        rollOnDone: j['rollOnDone'] as bool,
-      );
 }
 
+
+/// Nivaat's contended state, on SQLite.
+///
+/// **Every method keeps the signature it had on SharedPreferences**, so the
+/// call sites did not move — which is what makes this diff reviewable. What
+/// changed is underneath: each read-modify-write that two isolates could
+/// interleave is now either a single statement or a [transaction].
+///
+/// **`refresh()` is gone, and its absence is the point.** It existed because
+/// SharedPreferences caches per isolate, so a background wind check's write was
+/// invisible to the already-running app until a cold start; every read here had
+/// to reload first or risk deciding on state it simply could not see. SQLite
+/// reads the file, so there is no per-isolate cache to defeat and nothing to
+/// remember to call. The reads that used to reload are ordinary reads now.
 class NivaatStore {
-  static const _courtsKey = 'nivaat.courts';
-  static const _alarmsKey = 'nivaat.alarms';
-  static const _alarmIdSeqKey = 'nivaat.alarmIdSeq';
-  static const _historyKey = 'nivaat.history';
-  static const _statePrefix = 'nivaat.checkstate.';
-  static const _pendingPrefix = 'nivaat.pendingRing.';
+  /// Resolved per call rather than captured in a field: tests swap the database
+  /// in `setUp`, and a store built before that would otherwise go on writing to
+  /// the one the previous test closed.
+  AppDatabase get _db => appDb;
+
+  /// The alarm tone stays on SharedPreferences — one writer (the UI), no
+  /// contention, nothing to make atomic.
   static const _soundKey = 'nivaat.sound';
 
-  /// Re-reads the on-disk prefs into THIS isolate's cache. SharedPreferences
-  /// caches per isolate, so history/check-state written by a background wind
-  /// check stays invisible to the already-running app until a cold start —
-  /// the foreground app must call this at the top of every resync. (Fresh
-  /// background isolates read from disk anyway and don't need it.)
-  Future<void> refresh() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-  }
+  /// Row name for the alarm-id counter in [Counters].
+  static const _alarmIdSeqCounter = 'nivaat.alarmIdSeq';
+
+  /// Runs [action] as one atomic unit — everything inside lands or nothing
+  /// does, even against another isolate holding its own connection to the same
+  /// file.
+  ///
+  /// Drift's native executor opens these with `BEGIN IMMEDIATE`, so the write
+  /// lock is taken up front rather than upgraded mid-transaction, which is what
+  /// makes it safe for two connections to contend on one file.
+  ///
+  /// **A transaction may not contain a platform call.** It covers the database
+  /// and nothing else: an alarm armed inside one is still armed after a
+  /// rollback, and no `ROLLBACK` can un-arm it. Intents that need a platform
+  /// call go through [OutboxStore] instead.
+  Future<T> transaction<T>(Future<T> Function() action) =>
+      _db.transaction(action);
 
   /// Selected alarm tone path; null = default (Court Call).
   Future<String?> loadSoundPath() async {
@@ -300,40 +257,122 @@ class NivaatStore {
   }
 
   Future<List<SavedLocation>> loadCourts() async {
-    final prefs = await SharedPreferences.getInstance();
-    return _decodeList(prefs.getString(_courtsKey), SavedLocation.fromJson);
+    final rows = await (_db.select(_db.courts)
+          ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+        .get();
+    return [
+      for (final r in rows)
+        SavedLocation(id: r.id, name: r.name, lat: r.lat, lon: r.lon),
+    ];
   }
 
+  /// Replaces the whole court list in one transaction.
+  ///
+  /// Whole-list replace rather than a per-row diff because that is what the
+  /// callers mean — they hand over the list they want stored. A reader on
+  /// another connection sees the old list or the new one, never the empty gap
+  /// in between, which the prefs blob also gave but only by accident of being
+  /// one key.
   Future<void> saveCourts(List<SavedLocation> courts) =>
-      _saveList(_courtsKey, courts.map((c) => c.toJson()));
+      _db.transaction(() async {
+        await _db.delete(_db.courts).go();
+        await _db.batch((b) => b.insertAll(_db.courts, [
+              for (var i = 0; i < courts.length; i++)
+                CourtsCompanion(
+                  id: Value(courts[i].id),
+                  name: Value(courts[i].name),
+                  lat: Value(courts[i].lat),
+                  lon: Value(courts[i].lon),
+                  position: Value(i),
+                ),
+            ]));
+      });
 
   Future<List<NivaatAlarm>> loadAlarms() async {
-    final prefs = await SharedPreferences.getInstance();
-    return _decodeList(prefs.getString(_alarmsKey), NivaatAlarm.fromJson);
+    final rows = await (_db.select(_db.nivaatAlarms)
+          ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+        .get();
+    return [
+      for (final r in rows)
+        NivaatAlarm(
+          id: r.id,
+          hour: r.hour,
+          minute: r.minute,
+          courtId: r.courtId,
+          courtSpeedLimitKmh: r.courtSpeedLimitKmh,
+          retryMinutesAfter: r.retryMinutesAfter,
+          weekdays: r.weekdays,
+          enabled: r.enabled,
+        ),
+    ];
   }
 
-  Future<void> saveAlarms(List<NivaatAlarm> alarms) =>
-      _saveList(_alarmsKey, alarms.map((a) => a.toJson()));
+  /// Replaces the alarm list, optionally advancing the id counter **in the same
+  /// transaction**.
+  ///
+  /// That pairing is the whole of REVIEW #9's guarantee, and it is now
+  /// structural rather than a rule to remember. The old code saved the counter
+  /// first and the alarms second, deliberately, because interrupted between the
+  /// two writes it is better to skip a number than to leave an alarm with no
+  /// counter past it — the next alarm created would take that number and
+  /// inherit its ring, late ring, check, card and cascade state. There is no
+  /// "between the two writes" any more: pass [alarmIdSeq] and both land or
+  /// neither does.
+  ///
+  /// The counter is still written first inside the transaction. That is now
+  /// redundant and kept on purpose, so the ordering rule stays visible to
+  /// anyone who ever splits this apart again.
+  Future<void> saveAlarms(List<NivaatAlarm> alarms, {int? alarmIdSeq}) =>
+      _db.transaction(() async {
+        if (alarmIdSeq != null) await saveAlarmIdSeq(alarmIdSeq);
+        await _db.delete(_db.nivaatAlarms).go();
+        await _db.batch((b) => b.insertAll(_db.nivaatAlarms, [
+              for (var i = 0; i < alarms.length; i++)
+                NivaatAlarmsCompanion(
+                  id: Value(alarms[i].id),
+                  hour: Value(alarms[i].hour),
+                  minute: Value(alarms[i].minute),
+                  courtId: Value(alarms[i].courtId),
+                  courtSpeedLimitKmh: Value(alarms[i].courtSpeedLimitKmh),
+                  retryMinutesAfter: Value(alarms[i].retryMinutesAfter),
+                  weekdays: Value(alarms[i].weekdays),
+                  enabled: Value(alarms[i].enabled),
+                  position: Value(i),
+                ),
+            ]));
+      });
 
   /// The next alarm id to hand out, or null before the first alarm has ever
   /// been saved (REVIEW #9). **Null means 1, never "work it out from the
   /// alarms"** — deriving it is the original bug wearing a recovery hat, since
   /// ids are `block + alarmId` and a reissued number inherits the old alarm's
   /// ring, check and card. `NivaatController.upsertAlarm` keeps this ahead of
-  /// every stored id by saving it first.
+  /// every stored id by writing it in the same transaction as the alarms.
   Future<int?> loadAlarmIdSeq() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_alarmIdSeqKey);
+    final row = await (_db.select(_db.counters)
+          ..where((t) => t.name.equals(_alarmIdSeqCounter)))
+        .getSingleOrNull();
+    return row?.value;
   }
 
-  Future<void> saveAlarmIdSeq(int next) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_alarmIdSeqKey, next);
-  }
+  Future<void> saveAlarmIdSeq(int next) => _db
+      .into(_db.counters)
+      .insertOnConflictUpdate(CountersCompanion(
+        name: const Value(_alarmIdSeqCounter),
+        value: Value(next),
+      ));
 
+  /// The whole log, newest first.
+  ///
+  /// Ordered by [HistoryEntries.rowSeq] descending, which is insertion order —
+  /// the prefs version got the same thing by prepending onto a list. Callers
+  /// depend on it: `nivaatLatestRowPerOccurrence` breaks a `pushSeq` tie by
+  /// list order and documents that callers pass newest-first.
   Future<List<HistoryRecord>> loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    return _decodeList(prefs.getString(_historyKey), HistoryRecord.fromJson);
+    final rows = await (_db.select(_db.historyEntries)
+          ..orderBy([(t) => OrderingTerm.desc(t.rowSeq)]))
+        .get();
+    return rows.map(_historyFromRow).toList();
   }
 
   /// Inserts [record], REPLACING any existing row for the same PUSH — same
@@ -348,183 +387,214 @@ class NivaatStore {
   /// which is why the key can't be the row's content: widening Keep checking
   /// 30→60→30 leaves two byte-identical rows that must both stay.
   ///
-  /// New rows prepend (newest first).
+  /// **The log is unbounded (2026-07-31, Samyak)** — deleting a court is the
+  /// only thing that removes rows ([removeHistoryForCourt]). The size worry
+  /// that argument was had with is gone: this writes one row rather than
+  /// re-encoding the whole log.
   ///
-  /// **The log is unbounded (2026-07-31, Samyak).** It used to keep only the
-  /// newest 60 rows, which contradicted SPEC's "history is immediate,
-  /// *permanent*, and append-only" — and 60 is not the long log it sounds
-  /// like: one morning writes a row per card push, so two alarms retiring
-  /// their promise-then-outcome pair spend it in a fortnight. The only thing
-  /// that ever explains a morning the alarm didn't ring was being deleted on a
-  /// schedule nobody chose. Deleting a court still wipes that court's rows
-  /// ([removeHistoryForCourt]) — an explicit act, not a silent ceiling.
+  /// **This is one atomic statement now, and the retry loop it replaces is
+  /// deleted.** The old version reloaded, rebuilt the list, saved, read back
+  /// and re-applied up to three times — convergence, not a lock, and an unlucky
+  /// interleaving could still drop a row, which is exactly what a database was
+  /// wanted for. `INSERT … ON CONFLICT DO UPDATE` cannot lose a concurrent
+  /// row: a competing writer either loses the race and updates ours, or wins it
+  /// and has ours applied on top. Nothing to retry, nothing to converge.
   ///
-  /// Cost, accepted: the whole log is one JSON string, decoded and re-encoded
-  /// on every write, so a write is O(rows). A fully-populated row measures
-  /// **330 bytes**, and a two-alarm day writes about four, so a year lands
-  /// near half a megabyte — fine for the prefs store, and the writes run in a
-  /// background isolate. It is still the reason a future version that wants
-  /// years of history wants a real database rather than a bigger blob.
-  ///
-  /// **Surviving the other isolate (REVIEW #7).** One blob, read-modify-write,
-  /// two isolates that genuinely run at once — the app open at 06:00 while the
-  /// AlarmManager wakeup fires is the DESIGNED case, not a corner. Two things
-  /// keep a row from being written straight over:
-  ///
-  /// 1. **[refresh] first**, so the read is of the disk and not of this
-  ///    isolate's cache. Without it the whole hazard needs no concurrency at
-  ///    all: a foreground that loaded prefs at startup rebuilds the log from a
-  ///    snapshot taken before the background check's row existed, and saving it
-  ///    back deletes that row. That was the reported bug — a background `Still
-  ///    checking` losing to a foreground `Cancelled`.
-  /// 2. **Read back and re-apply.** If a concurrent isolate's save landed
-  ///    between our read and our write, our row is simply gone; writing it
-  ///    again on top of the now-fresher list keeps BOTH. This converges rather
-  ///    than livelocking — each retry reads the other side's row and preserves
-  ///    it — and it is bounded, because a row that cannot be re-applied twice
-  ///    is losing to something we cannot outrun anyway.
-  ///
-  /// **This is convergence, not a lock:** SharedPreferences offers none, the
-  /// read-modify-write is still not atomic, and an unlucky interleaving can
-  /// still drop a row. The real answer is a database, not more retries here.
+  /// The conflict update deliberately leaves `rowSeq` alone, so a row corrected
+  /// in place keeps its position in the log rather than jumping to the top.
   Future<void> upsertHistory(HistoryRecord record) async {
-    bool isSamePush(HistoryRecord r) =>
-        r.alarmId == record.alarmId &&
-        r.at == record.at &&
-        r.pushSeq == record.pushSeq;
-    for (var attempt = 0; attempt < 3; attempt++) {
-      await refresh();
-      final all = await loadHistory();
-      final i = all.indexWhere(isSamePush);
-      final rows = [...all];
-      if (i >= 0) {
-        rows[i] = record;
-      } else {
-        rows.insert(0, record);
-      }
-      await _saveList(_historyKey, rows.map((r) => r.toJson()));
-      await refresh();
-      // By KEY, not by content: a foreground/background double-write of the
-      // same push is meant to converge onto one row, so finding the other
-      // side's copy of it is success, not a reason to write again.
-      if ((await loadHistory()).any(isSamePush)) return;
-    }
-    // Logged rather than swallowed: this is the log that explains a morning the
-    // alarm didn't ring, so a row lost here is worth a trace even though there
-    // is nothing left to do about it.
-    debugPrint('nivaat history row (alarm ${record.alarmId}, ${record.at}, '
-        'push ${record.pushSeq}) lost to a concurrent write after 3 tries');
+    final row = _historyCompanion(record);
+    await _db.into(_db.historyEntries).insert(
+          row,
+          onConflict: DoUpdate(
+            (_) => row,
+            target: [
+              _db.historyEntries.alarmId,
+              _db.historyEntries.at,
+              _db.historyEntries.pushSeq,
+            ],
+          ),
+        );
   }
 
   /// Drops every history row for [courtId] — used when a court is deleted, so
   /// its whole skip/ring log goes with it. Keyed by court, so this reaches
   /// *every* row for the court, including those from alarms deleted earlier.
   ///
-  /// [refresh] first for the same reason as [upsertHistory]: this rebuilds the
-  /// whole blob from what it reads, so reading a stale cache would resurrect
-  /// every row a background check has written since. No read-back here — a
-  /// removal that loses the race leaves court-less rows, and
-  /// `NivaatController._loadHistory` already prunes those on every load.
-  Future<void> removeHistoryForCourt(String courtId) async {
-    await refresh();
-    final kept = (await loadHistory()).where((r) => r.courtId != courtId);
-    await _saveList(_historyKey, kept.map((r) => r.toJson()));
-  }
+  /// One `DELETE`, so a row another isolate writes while this runs is either
+  /// deleted with the rest or lands after and survives as an orphan —
+  /// `NivaatController._loadHistory` already prunes those on every load. The
+  /// prefs version rebuilt the whole blob from what it read, which is why it
+  /// had to reload first or resurrect everything written since.
+  Future<void> removeHistoryForCourt(String courtId) =>
+      (_db.delete(_db.historyEntries)..where((t) => t.courtId.equals(courtId)))
+          .go();
 
-  /// **Reads and writes reload first, exactly like the history rows and the
-  /// pending ring** (REVIEW #7's rule, extended here 2026-08-09).
-  ///
-  /// `CheckState` is the same shape of state as those two — written by
-  /// whichever isolate is awake, read by the other — and it carries
-  /// `ringScheduled`, which decides whether a morning is settled at all. A
-  /// foreground holding a snapshot from launch would re-save an old
-  /// `ringScheduled` over a background isolate that had just cleared it.
   Future<CheckState?> loadCheckState(int alarmId) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$_statePrefix$alarmId');
-    if (raw == null) return null;
-    return CheckState.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-  }
-
-  Future<void> saveCheckState(CheckState state) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      '$_statePrefix${state.alarmId}',
-      jsonEncode(state.toJson()),
+    final row = await (_db.select(_db.checkStates)
+          ..where((t) => t.alarmId.equals(alarmId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    return CheckState(
+      alarmId: row.alarmId,
+      alarmAt: row.alarmAt,
+      ringScheduled: row.ringScheduled,
+      ringCourtSpeedKmh: row.ringCourtSpeedKmh,
+      ringRawGustKmh: row.ringRawGustKmh,
+      ringVolume: row.ringVolume,
+      cardShown: row.cardShown,
+      skipCourtSpeedKmh: row.skipCourtSpeedKmh,
+      skipRawGustKmh: row.skipRawGustKmh,
+      skipGusty: row.skipGusty,
+      lastCheckAt: row.lastCheckAt,
+      lastAttemptAt: row.lastAttemptAt,
+      pushSeq: row.pushSeq,
     );
   }
 
-  Future<void> clearCheckState(int alarmId) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_statePrefix$alarmId');
-  }
+  Future<void> saveCheckState(CheckState state) =>
+      _db.into(_db.checkStates).insertOnConflictUpdate(CheckStatesCompanion(
+            alarmId: Value(state.alarmId),
+            alarmAt: Value(state.alarmAt),
+            ringScheduled: Value(state.ringScheduled),
+            ringCourtSpeedKmh: Value(state.ringCourtSpeedKmh),
+            ringRawGustKmh: Value(state.ringRawGustKmh),
+            ringVolume: Value(state.ringVolume),
+            cardShown: Value(state.cardShown),
+            skipCourtSpeedKmh: Value(state.skipCourtSpeedKmh),
+            skipRawGustKmh: Value(state.skipRawGustKmh),
+            skipGusty: Value(state.skipGusty),
+            lastCheckAt: Value(state.lastCheckAt),
+            lastAttemptAt: Value(state.lastAttemptAt),
+            pushSeq: Value(state.pushSeq),
+          ));
 
-  /// **Every pending-ring read and write reloads first** (the REVIEW #7 rule,
-  /// extended here 2026-08-09).
+  Future<void> clearCheckState(int alarmId) =>
+      (_db.delete(_db.checkStates)..where((t) => t.alarmId.equals(alarmId)))
+          .go();
+
+  /// Clears [alarmId]'s state **only if it still describes [occurrenceAt]**.
   ///
-  /// This slot decides whether a morning reads `Rang` or `Couldn't confirm`,
-  /// and it is written by whichever isolate happened to be awake at T. Without
-  /// the reload the foreground, holding a snapshot from launch, sees no pending
-  /// for a ring the background check armed at 06:00 — and then settles the
-  /// morning as unconfirmed on evidence it simply could not see. Same split as
-  /// the history rows, on the state that now chooses the wording.
+  /// One statement, replacing a load-compare-delete: the old shape read the
+  /// state, checked its `alarmAt`, and deleted — and a roll-on landing in that
+  /// gap writes the NEXT occurrence's state into the same slot, which the
+  /// delete would then throw away. The occurrence goes into the `WHERE` clause
+  /// so there is no gap to land in.
+  Future<void> clearCheckStateForOccurrence(
+    int alarmId,
+    DateTime occurrenceAt,
+  ) =>
+      (_db.delete(_db.checkStates)
+            ..where((t) =>
+                t.alarmId.equals(alarmId) & t.alarmAt.equalsValue(occurrenceAt)))
+          .go();
+
   Future<PendingRing?> loadPendingRing(int alarmId) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$_pendingPrefix$alarmId');
-    if (raw == null) return null;
-    return PendingRing.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    final row = await (_db.select(_db.pendingRings)
+          ..where((t) => t.alarmId.equals(alarmId)))
+        .getSingleOrNull();
+    return row == null ? null : _pendingFromRow(row);
   }
 
-  Future<void> savePendingRing(PendingRing pending) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      '$_pendingPrefix${pending.alarmId}',
-      jsonEncode(pending.toJson()),
-    );
-  }
+  Future<void> savePendingRing(PendingRing pending) =>
+      _db.into(_db.pendingRings).insertOnConflictUpdate(PendingRingsCompanion(
+            alarmId: Value(pending.alarmId),
+            pluginId: Value(pending.pluginId),
+            role: Value(pending.role),
+            occurrenceAt: Value(pending.occurrenceAt),
+            scheduledFor: Value(pending.scheduledFor),
+            courtId: Value(pending.courtId),
+            volume: Value(pending.volume),
+            courtSpeedKmh: Value(pending.courtSpeedKmh),
+            rawGustKmh: Value(pending.rawGustKmh),
+            courtSpeedLimitKmh: Value(pending.courtSpeedLimitKmh),
+            rawGustLimitKmh: Value(pending.rawGustLimitKmh),
+            lastCheckAt: Value(pending.lastCheckAt),
+            rollOnDone: Value(pending.rollOnDone),
+          ));
 
-  Future<void> clearPendingRing(int alarmId) async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_pendingPrefix$alarmId');
-  }
+  Future<void> clearPendingRing(int alarmId) =>
+      (_db.delete(_db.pendingRings)..where((t) => t.alarmId.equals(alarmId)))
+          .go();
 
-  /// Every pending ring still on disk — used for ambiguous-B recovery and
+  /// Clears [alarmId]'s pending ring **only if it still describes
+  /// [occurrenceAt]**.
+  ///
+  /// Same shape and same reason as [clearCheckStateForOccurrence], on the state
+  /// where it matters most: a settle rolls on before clearing, the roll is a
+  /// whole evaluation, and it is exactly where the next occurrence's pending
+  /// gets written. Reading first and deleting after would drop a ring that had
+  /// only just been armed. Ring ids repeat daily, so the occurrence — never the
+  /// plugin id — is what ownership is matched on.
+  Future<void> clearPendingRingForOccurrence(
+    int alarmId,
+    DateTime occurrenceAt,
+  ) =>
+      (_db.delete(_db.pendingRings)
+            ..where((t) =>
+                t.alarmId.equals(alarmId) &
+                t.occurrenceAt.equalsValue(occurrenceAt)))
+          .go();
+
+  /// Every pending ring still stored — used for ambiguous-B recovery and
   /// host-event matching across alarms.
   Future<List<PendingRing>> loadAllPendingRings() async {
-    await refresh();
-    final prefs = await SharedPreferences.getInstance();
-    final out = <PendingRing>[];
-    for (final key in prefs.getKeys()) {
-      if (!key.startsWith(_pendingPrefix)) continue;
-      final raw = prefs.getString(key);
-      if (raw == null) continue;
-      out.add(PendingRing.fromJson(jsonDecode(raw) as Map<String, dynamic>));
-    }
-    return out;
+    final rows = await _db.select(_db.pendingRings).get();
+    return rows.map(_pendingFromRow).toList();
   }
 
-  static List<T> _decodeList<T>(
-    String? raw,
-    T Function(Map<String, dynamic>) fromJson,
-  ) {
-    if (raw == null) return [];
-    return (jsonDecode(raw) as List)
-        .cast<Map<String, dynamic>>()
-        .map(fromJson)
-        .toList();
-  }
+  static PendingRing _pendingFromRow(PendingRingRow row) => PendingRing(
+        alarmId: row.alarmId,
+        pluginId: row.pluginId,
+        role: row.role,
+        occurrenceAt: row.occurrenceAt,
+        scheduledFor: row.scheduledFor,
+        courtId: row.courtId,
+        volume: row.volume,
+        courtSpeedKmh: row.courtSpeedKmh,
+        rawGustKmh: row.rawGustKmh,
+        courtSpeedLimitKmh: row.courtSpeedLimitKmh,
+        rawGustLimitKmh: row.rawGustLimitKmh,
+        lastCheckAt: row.lastCheckAt,
+        rollOnDone: row.rollOnDone,
+      );
 
-  static Future<void> _saveList(
-    String key,
-    Iterable<Map<String, dynamic>> items,
-  ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, jsonEncode(items.toList()));
-  }
+  static HistoryRecord _historyFromRow(HistoryEntry row) => HistoryRecord(
+        alarmId: row.alarmId,
+        courtId: row.courtId,
+        at: row.at,
+        outcome: row.outcome,
+        kind: row.kind,
+        pushSeq: row.pushSeq,
+        checkedAt: row.checkedAt,
+        watchedUntil: row.watchedUntil,
+        checkingEndedAt: row.checkingEndedAt,
+        courtSpeedKmh: row.courtSpeedKmh,
+        rawGustKmh: row.rawGustKmh,
+        courtSpeedLimitKmh: row.courtSpeedLimitKmh,
+        rawGustLimitKmh: row.rawGustLimitKmh,
+        volume: row.volume,
+        ringDisposition: row.ringDisposition,
+        hostEventKey: row.hostEventKey,
+      );
+
+  static HistoryEntriesCompanion _historyCompanion(HistoryRecord r) =>
+      HistoryEntriesCompanion(
+        alarmId: Value(r.alarmId),
+        at: Value(r.at),
+        pushSeq: Value(r.pushSeq),
+        courtId: Value(r.courtId),
+        outcome: Value(r.outcome),
+        kind: Value(r.kind),
+        checkedAt: Value(r.checkedAt),
+        watchedUntil: Value(r.watchedUntil),
+        checkingEndedAt: Value(r.checkingEndedAt),
+        courtSpeedKmh: Value(r.courtSpeedKmh),
+        rawGustKmh: Value(r.rawGustKmh),
+        courtSpeedLimitKmh: Value(r.courtSpeedLimitKmh),
+        rawGustLimitKmh: Value(r.rawGustLimitKmh),
+        volume: Value(r.volume),
+        ringDisposition: Value(r.ringDisposition),
+        hostEventKey: Value(r.hostEventKey),
+      );
 }

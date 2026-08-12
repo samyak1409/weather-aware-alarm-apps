@@ -412,7 +412,8 @@ class NivaatEngine {
     required this.api,
     required this.checks,
     this.notifier,
-  }) {
+    OutboxStore? outbox,
+  }) : outbox = outbox ?? OutboxStore() {
     scheduler.setHostAlarmEventHandler(_onHostAlarmEvent);
   }
 
@@ -443,6 +444,41 @@ class NivaatEngine {
   final OpenMeteo api;
   final CheckScheduler checks;
   final SkipNotifier? notifier;
+
+  /// Where "this occurrence closed and the next one still needs arming" lives
+  /// between the transaction that decides it and the platform call that does
+  /// it. See [_rollOn].
+  final OutboxStore outbox;
+
+  /// Kind string for a roll-on intent. Stored in rows, so renaming it strands
+  /// whatever is in flight — the dispatcher parks a row it has no handler for.
+  static const String rollOnKind = 'nivaat.rollOn';
+
+  /// The intent to open the occurrence after [closed] for [alarmId].
+  ///
+  /// **Keyed by occurrence, never by clock time.** That is what makes a repeat
+  /// settle of one morning — which host events make routine, since they arrive
+  /// at least once and two isolates can both be told — find the roll already
+  /// recorded instead of booking a second one.
+  static OutboxIntent _rollOnIntent(int alarmId, DateTime closed) => OutboxIntent(
+        kind: rollOnKind,
+        dedupKey: '$rollOnKind:$alarmId:${closed.microsecondsSinceEpoch}',
+        payload: {
+          'alarmId': alarmId,
+          'closedMicros': closed.microsecondsSinceEpoch,
+        },
+      );
+
+  /// Handlers bound to the clock of the pass dispatching them.
+  ///
+  /// [t] is threaded rather than re-derived because **a settle uses the clock
+  /// of the pass it runs inside**, and reaching for the wall clock instead once
+  /// rolled the cascade past a whole occurrence. Null only at a barrier, where
+  /// the row is being recovered on its own and there is no pass clock to
+  /// inherit — [_nowFor] then answers, exactly as it does for a host event that
+  /// arrives outside a lane.
+  Map<String, OutboxHandler> _outboxHandlersAt(DateTime? t) =>
+      {rollOnKind: (job) => _runRollOnJob(job, t)};
 
   /// Take this alarm's card down. Only for a card that can never be corrected
   /// into truth: the alarm (or its court) is gone, or a late ring has taken
@@ -526,6 +562,26 @@ class NivaatEngine {
     final t = now ?? DateTime.now();
     // Host events before any Rang / cancel / re-arm decision.
     await scheduler.applyHostAlarmEvents();
+    // **The barrier where an abandoned intent is picked up.** A process that
+    // died between closing an occurrence and arming the next one left its
+    // roll-on row leased; the lease has expired by now, so this is where the
+    // next morning finally gets booked. Unscoped on purpose — this is the one
+    // place with no alarm's lane to break, and each job takes its own.
+    //
+    // Never throws (the dispatcher logs and retries), so a stuck intent cannot
+    // stop the pass that would otherwise still evaluate every alarm. The pass
+    // clock is threaded in like every other call here — a recovered roll must
+    // not silently reach for `DateTime.now()`.
+    await outbox.dispatch(_outboxHandlersAt(t), now: t);
+    // Housekeeping, not correctness — the same shape (and the same guard) as
+    // the host-event claim sweep. Without a caller the `done` rows the outbox
+    // keeps as its "already rolled" record would accumulate for the life of
+    // the install.
+    try {
+      await outbox.prune(now: t);
+    } on Exception catch (e) {
+      debugPrint('nivaat outbox prune failed (non-fatal): $e');
+    }
     await _recoverAmbiguousPending(now: t);
     final alarms = await store.loadAlarms();
     final courts = await store.loadCourts();
@@ -544,11 +600,16 @@ class NivaatEngine {
   /// The recovery half of the delete race. [_stillLive] stops this isolate
   /// from creating an orphan, but it cannot undo one that already exists —
   /// armed by a build without that guard, or by a background isolate whose
-  /// snapshot went stale inside the gap any check-then-act leaves open (there
-  /// is no cross-isolate lock; SharedPreferences offers none). And an orphan
-  /// is **permanent** without this: [evaluateAll] only ever visits alarms that
-  /// are in the store, so a deleted id is never looked at again and its ring
-  /// keeps firing on schedule for good.
+  /// snapshot went stale inside the gap any check-then-act leaves open.
+  ///
+  /// **The gap is not the store's any more, and this is still needed.** It used
+  /// to be blamed on SharedPreferences having no cross-isolate lock; SQLite has
+  /// one, and the store reads are atomic now. The gap that remains is the one
+  /// no database can close: the read and the ARMING are separate acts, and no
+  /// transaction reaches AlarmManager or AlarmKit. And an orphan is
+  /// **permanent** without this: [evaluateAll] only ever visits alarms that are
+  /// in the store, so a deleted id is never looked at again and its ring keeps
+  /// firing on schedule for good.
   ///
   /// `scheduledIds()` over-reporting — on Android it is the plugin's own
   /// bookkeeping, not the OS's — is harmless *here and only here*: a sweep
@@ -594,13 +655,17 @@ class NivaatEngine {
   /// not fire. Read from the STORE's copy of the alarm, never the snapshot's —
   /// an edit may have moved it to a different court in the meantime.
   Future<bool> _stillLive(NivaatAlarm alarm) async {
-    // Read from disk, not from this isolate's cache. SharedPreferences caches
-    // per isolate, so a background check would otherwise never see a delete
-    // the UI made while it was fetching — the exact split #23 is about, and
-    // the case where an orphan ring is hardest to notice. This narrows the
-    // window to the gap below rather than closing it; nothing here is a CAS,
-    // which is why [_sweepOrphanRings] exists.
-    await store.refresh();
+    // No reload needed any more: this reads the database, so a delete the UI
+    // isolate committed while this pass was fetching wind is simply there. It
+    // used to require `store.refresh()` because SharedPreferences caches per
+    // isolate and a background check would otherwise never see that delete —
+    // the exact split REVIEW #23 is about.
+    //
+    // **What this still is not is a lock.** The read and the arming below are
+    // separate acts, and nothing here makes the platform call part of the
+    // transaction, so a delete landing between them still leaves an orphan.
+    // That is what [_sweepOrphanRings] is for, and moving to a database did not
+    // retire it.
     for (final a in await store.loadAlarms()) {
       if (a.id != alarm.id) continue;
       // **`enabled` is re-read too, not just existence.** A toggle-off is the
@@ -1076,6 +1141,13 @@ class NivaatEngine {
         if (!settled) {
           // Still owed on the plugin — promote to pending so this pass can
           // open the next occurrence without cancelling today's pre-arm.
+          //
+          // **`rollOnDone: true` here is not a claim about a roll that ran**,
+          // unlike every other write of it — `rollOn: false` above means none
+          // was even attempted. It says the roll is UNNECESSARY: this pass is
+          // already evaluating `next`, which is the occurrence a roll from
+          // `stored` would have opened, and it goes on to do exactly that
+          // below. So there is no failure to ask about.
           final held = await _holdPendingFromState(alarm, stored);
           await store.savePendingRing(held.copyWith(rollOnDone: true));
         }
@@ -1114,7 +1186,13 @@ class NivaatEngine {
       // cancel the pre-arm about to sound — REVIEW #1(a)).
       final held = await _holdPendingFromState(alarm, state);
       await store.clearCheckState(alarm.id);
-      await _rollOn(alarm, courts, t, next);
+      // **Only claim the roll once it is a fact** — the same rule as the post-T
+      // hold below, and the third site of this shape. `rollOnDone: true` makes
+      // `_settlePending.owesRoll` false for this occurrence for good, so
+      // stamping it after a roll that failed retires the pending slot's own
+      // recovery path and leaves the outbox row as the only thing still owed.
+      // The dispatcher swallows the failure, so it has to be asked about.
+      if (!await _rollOn(alarm, t, next)) return;
       final still = await store.loadPendingRing(alarm.id);
       if (still != null &&
           still.occurrenceAt == held.occurrenceAt &&
@@ -1360,8 +1438,22 @@ class NivaatEngine {
         armedPluginId != null &&
         armedRole != null &&
         armedFor != null) {
+      // A settle closed this occurrence during one of the awaits above — the
+      // wind fetch, or `scheduleRing` itself. Reachable at exactly T and
+      // nowhere else: `atOrPastAlarm` is `t >= next` (the wake grace is zero)
+      // while Rule 2 needs `t > next`, so T is the one instant that arrives
+      // here with a ring already committed.
+      //
+      // The card comes down on this exit too. The line that does it for the
+      // straight-through path sits below, placed there so a mid-await settle
+      // could not return past it — and this exit, added later, returned past
+      // it anyway, leaving `Still checking` up for a morning recorded as
+      // missed. No pending is saved on this branch (the settle owns the
+      // record), so there is no durable-write-first ordering to respect.
       if (_hostClosedOccurrence(alarm.id, next)) {
-        return _rollOnUnlessHostDid(alarm, courts, t, next);
+        if (state.cardShown) await _cancelCard(alarm.id);
+        await _finishHostClosed(alarm, t, next);
+        return;
       }
       final ringing = state;
       final ringDecision = armedWith;
@@ -1374,8 +1466,11 @@ class NivaatEngine {
       // on the next pass, which is a no-op. Same trade `_settlePending` makes,
       // and the two must agree or one of them is wrong.
       //
-      // A drop settling mid-await cannot roll twice either way, because it
-      // marks `_hostRolledOccurrences` and [_rollOnUnlessHostDid] reads it.
+      // A drop settling mid-await cannot roll twice either way, because a
+      // settle whose roll SUCCEEDED marks `_hostRolledOccurrences` and
+      // [_rollOnUnlessHostDid] reads it. One whose roll failed leaves the mark
+      // unset on purpose, so this pass tries again rather than inheriting a
+      // claim that was never earned.
       final pendingRing = PendingRing(
         alarmId: alarm.id,
         pluginId: armedPluginId,
@@ -1392,25 +1487,34 @@ class NivaatEngine {
         rollOnDone: false,
       );
       await _savePendingKeepingHostMove(pendingRing);
-      // The morning's card comes down on EVERY exit from here, not just the
-      // straight-through one: a drop settling mid-await used to return past
+      // The morning's card comes down on EVERY exit from this branch, not just
+      // the straight-through one: a drop settling mid-await used to return past
       // this line and leave `Still checking` in the shade for a ring that was
-      // already recorded as missed.
+      // already recorded as missed. **Both host-closed exits do it** — the
+      // early one has its own copy, because it returns before reaching here.
       if (ringing.cardShown) await _cancelCard(alarm.id);
       // The writes above are awaits, so a drop can settle this occurrence
       // during them — and `savePendingRing` would then put a cleared slot back.
       // Take it away again rather than leaving a pending nobody owes, then
       // finish whichever half the settle left to us.
       if (_hostClosedOccurrence(alarm.id, next)) {
-        await store.clearPendingRing(alarm.id);
-        return _rollOnUnlessHostDid(alarm, courts, t, next);
+        await _finishHostClosed(alarm, t, next);
+        return;
       }
       await store.clearCheckState(alarm.id);
-      await _rollOnUnlessHostDid(alarm, courts, t, next);
-      // Now the roll is a fact, record that it happened — but only onto a slot
-      // that is still this occurrence's. A settle during the roll may have
-      // finalised and cleared it, and resurrecting it would leave a pending
-      // ring nothing is waiting for.
+      final rolled = await _rollOnUnlessHostDid(alarm, t, next);
+      // **Only once the roll is a FACT.** `rollOnDone` is the claim that the
+      // next occurrence is open, and the comment above explains why it is
+      // written after the roll rather than before: recovery that reads "already
+      // rolled" when nothing rolled closes the occurrence with nothing
+      // following it, and on Android nothing else books one. Stamping it after
+      // a roll that FAILED is the same lie by a quieter route — the dispatcher
+      // swallows the failure, so it has to be asked about.
+      //
+      // And only onto a slot that is still this occurrence's: a settle during
+      // the roll may have finalised and cleared it, and resurrecting it would
+      // leave a pending ring nothing is waiting for.
+      if (!rolled) return;
       final held = await store.loadPendingRing(alarm.id);
       if (held != null && held.occurrenceAt == next && !held.rollOnDone) {
         await store.savePendingRing(held.copyWith(rollOnDone: true));
@@ -1432,7 +1536,12 @@ class NivaatEngine {
         (n, r) => n.showSkipped(r, courtName),
       );
       await store.clearCheckState(alarm.id);
-      return _rollOn(alarm, courts, t, next);
+      // Whether the roll landed is only `_settlePending`'s business — it is the
+      // one caller holding a pending slot that must not be dropped on a roll
+      // that never happened. Here there is no slot, and a failed roll is
+      // already owed in the outbox for the next barrier.
+      await _rollOn(alarm, t, next);
+      return;
     }
 
     // Before T (ladder), or a provisional post-T skip → keep the cascade going.
@@ -1690,7 +1799,12 @@ class NivaatEngine {
         null,
       );
       await store.clearCheckState(alarm.id);
-      if (rollOn) await _rollOn(alarm, courts, now, state.alarmAt);
+      // The morning is closed either way — the ring was audible. A roll that
+      // failed is owed in the outbox and retried at the next barrier; nothing
+      // here holds a pending slot whose loss would be the debt's only record,
+      // which is what makes this site different from Rule 2's and the post-T
+      // hold's. Same at the vanished-ring exit below.
+      if (rollOn) await _rollOn(alarm, now, state.alarmAt);
       return true;
     }
 
@@ -1710,7 +1824,7 @@ class NivaatEngine {
       null,
     );
     await store.clearCheckState(alarm.id);
-    if (rollOn) await _rollOn(alarm, courts, now, state.alarmAt);
+    if (rollOn) await _rollOn(alarm, now, state.alarmAt);
     return true;
   }
 
@@ -1791,77 +1905,132 @@ class NivaatEngine {
     bool rollOn = true,
     String? hostEventKey,
   }) async {
-    // **Each question re-reads the log, and that is not waste.** Sharing one
-    // snapshot across all three looks like an obvious saving — a settle runs
-    // twice a day, so the two extra decodes cost nothing — but it removes the
-    // last chance to notice a row another isolate wrote mid-settle. With a
-    // stale snapshot, `_nextHistoryPushSeq` re-derives a number that is already
-    // taken, and `upsertHistory` keys on it: a `Couldn't confirm` then REPLACES
-    // a `Missed` the other isolate had just written, which is precisely the
-    // downgrade `_canReplaceVerdict` exists to forbid. The narrow read is the
-    // point; do not "optimise" it back.
-    final alreadyRecorded = await _dispositionAlreadyRecorded(
-        pending, disposition, hostEventKey);
-    if (!alreadyRecorded) {
-      final superseded = await _supersedeRangWithDisposition(
-        pending: pending,
-        disposition: disposition,
-        hostEventKey: hostEventKey,
-      );
-      if (!superseded) {
-        final seq =
-            await _nextHistoryPushSeq(pending.alarmId, pending.occurrenceAt);
-        await store.upsertHistory(_dispositionRecordFromPending(
-          pending,
-          pushSeq: seq,
-          disposition: disposition,
-          hostEventKey: hostEventKey,
-        ));
-      }
-    }
-
-    // Synthesized pending (from CheckState) never lived in the pending store —
-    // still clear the matching CheckState so Rule 2 cannot re-settle it.
-    final state = await store.loadCheckState(pending.alarmId);
-    if (state != null && state.alarmAt == pending.occurrenceAt) {
-      await store.clearCheckState(pending.alarmId);
-    }
-
-    // Signal the outer evaluate (if any) to abort before re-arming.
-    _markHostClosedOccurrence(pending.alarmId, pending.occurrenceAt);
-
     // Whether the roll is still owed is read from DISK where the slot still
-    // describes this occurrence: the post-T hold claims ownership by persisting
-    // `rollOnDone` before it rolls, so a drop landing mid-flight sees that
-    // claim and leaves the roll alone.
+    // describes this occurrence. **The claim it reads is written AFTER a roll
+    // that succeeded, never before one** — the sentence here used to say the
+    // opposite, and it was describing a design this file had already moved
+    // away from. Marking first prevents a double roll and buys it with the
+    // worse failure: a drop landing mid-flight reads "already rolled", leaves
+    // the roll alone, and the occurrence closes with nothing following it.
+    // A double roll is a no-op, because the intent is keyed on the occurrence.
     final stored = await store.loadPendingRing(pending.alarmId);
     final rolledAlready = stored != null &&
             stored.occurrenceAt == pending.occurrenceAt
         ? stored.rollOnDone
         : pending.rollOnDone;
+    final owesRoll = rollOn && !rolledAlready;
 
-    if (rollOn && !rolledAlready) {
+    // **One transaction: the row that records the verdict, the CheckState that
+    // said the occurrence was open, and the intent to open the next one.**
+    //
+    // Those three are one fact — this morning is finished and tomorrow is
+    // owed — and splitting them is what left the state that has to be recovered
+    // from. It stops short of the roll itself, which is a platform call and
+    // cannot be inside a transaction (an alarm armed in one stays armed through
+    // a `ROLLBACK`). That is exactly the seam the outbox row covers: recorded
+    // here, carried out below.
+    //
+    // The pending slot is deliberately NOT cleared here. It is the durable
+    // record that this occurrence is unfinished, and it must outlive the roll —
+    // see the clear at the bottom.
+    await store.transaction(() async {
+      // **The three log reads below stay separate calls, and the reason they
+      // do has changed.** They used to be kept apart so each had a last chance
+      // to notice a row another isolate had written mid-settle: with a shared
+      // snapshot, `_nextHistoryPushSeq` re-derives a number already taken, and
+      // `upsertHistory` keys on it, so a `Couldn't confirm` REPLACES a `Missed`
+      // the other isolate had just written — exactly the downgrade
+      // `_canReplaceVerdict` forbids. Inside a transaction no other isolate can
+      // write here at all, so that hazard is gone and what is left is a
+      // consistent snapshot by construction. They are still separate because
+      // each answers a different question, not because the narrowness is doing
+      // any work.
+      final alreadyRecorded = await _dispositionAlreadyRecorded(
+          pending, disposition, hostEventKey);
+      if (!alreadyRecorded) {
+        final superseded = await _supersedeRangWithDisposition(
+          pending: pending,
+          disposition: disposition,
+          hostEventKey: hostEventKey,
+        );
+        if (!superseded) {
+          final seq =
+              await _nextHistoryPushSeq(pending.alarmId, pending.occurrenceAt);
+          await store.upsertHistory(_dispositionRecordFromPending(
+            pending,
+            pushSeq: seq,
+            disposition: disposition,
+            hostEventKey: hostEventKey,
+          ));
+        }
+      }
+
+      // Synthesized pending (from CheckState) never lived in the pending store
+      // — still clear the matching CheckState so Rule 2 cannot re-settle it.
+      // Matched on the occurrence inside the DELETE rather than loaded, checked
+      // and deleted: the gap in that older shape is where a roll-on writes the
+      // NEXT occurrence's state, which the delete would then throw away.
+      await store.clearCheckStateForOccurrence(
+          pending.alarmId, pending.occurrenceAt);
+
+      if (owesRoll) {
+        await outbox.enqueue(
+          _rollOnIntent(pending.alarmId, pending.occurrenceAt),
+          now: now,
+        );
+      }
+    });
+
+    // Signal the outer evaluate (if any) to abort before re-arming.
+    _markHostClosedOccurrence(pending.alarmId, pending.occurrenceAt);
+
+    // **Whether the roll HAPPENED, not whether it was attempted.** The
+    // dispatcher swallows a failed handler by design, so without asking, a roll
+    // whose arming threw would look exactly like one that worked — and the
+    // clear below would then drop the pending slot, which is the durable record
+    // that this occurrence is unfinished.
+    var rolled = true;
+    if (owesRoll) {
       final alarm = await _alarmById(pending.alarmId);
       if (alarm != null) {
-        final locs = courts ?? await store.loadCourts();
         // A nextRing drop closes THAT occurrence, then rolls to the one after.
-        _hostRolledOccurrences
-            .add(_occurrenceKey(pending.alarmId, pending.occurrenceAt));
-        await _rollOn(alarm, locs, now, pending.occurrenceAt);
+        rolled = await _rollOn(alarm, now, pending.occurrenceAt);
+        // **Claimed only once it is a fact.** Marking before the roll stops a
+        // double roll and buys it with the worse failure, which is the same
+        // trade `rollOnDone` refuses to make: the outer pass reads the mark,
+        // skips its own roll, and the occurrence closes with nothing following
+        // it. `_rollOn` is keyed on the occurrence, so a second attempt is a
+        // no-op rather than a second morning — the mark is an optimisation, and
+        // it must not outrank the truth.
+        if (rolled) {
+          _hostRolledOccurrences
+              .add(_occurrenceKey(pending.alarmId, pending.occurrenceAt));
+        }
       }
       // A deleted alarm has nothing to roll on to — but its slot must still go,
-      // or every later pass re-settles a morning nobody is waiting for.
+      // or every later pass re-settles a morning nobody is waiting for. That is
+      // `rolled` staying true: nothing is owed, so nothing is being abandoned.
     }
 
     // **Only this occurrence's own slot may be cleared, matched on the
     // occurrence and never on the plugin id** — ring ids repeat daily, so last
-    // Tuesday's lateRing wears tomorrow's number. Re-read rather than reusing
-    // the answer from above: the roll is a whole evaluation, and it is exactly
-    // where the NEXT occurrence's pending gets written, so the older answer
-    // would delete a ring that had only just been armed.
-    final onDisk = await store.loadPendingRing(pending.alarmId);
-    if (onDisk != null && onDisk.occurrenceAt == pending.occurrenceAt) {
-      await store.clearPendingRing(pending.alarmId);
+    // Tuesday's lateRing wears tomorrow's number.
+    //
+    // Still last, and still the point: the roll is a whole evaluation, and it
+    // is exactly where the NEXT occurrence's pending gets written. The older
+    // shape re-read the slot and compared before deleting, which was a
+    // check-then-act around that very write; the occurrence is in the `WHERE`
+    // clause now, so there is no gap for the new ring to land in.
+    //
+    // **And it does not happen at all when the roll is still owed.** Before the
+    // outbox this was enforced by accident — the roll threw and execution never
+    // reached here — and routing it through a dispatcher that swallows turned
+    // that into a silent clear. Keeping the slot means the next pass re-settles
+    // (idempotently) and tries again, so there are two records of the debt
+    // rather than none.
+    if (rolled) {
+      await store.clearPendingRingForOccurrence(
+          pending.alarmId, pending.occurrenceAt);
     }
   }
 
@@ -2182,16 +2351,50 @@ class NivaatEngine {
   /// settle that did not — because this pass had claimed `rollOnDone` before
   /// the drop landed — leaves a closed occurrence and nothing following it,
   /// and on Android nothing else ever books one.
-  Future<void> _rollOnUnlessHostDid(
+  /// Finishes an occurrence a settle closed underneath this pass: complete the
+  /// roll it may have left owed, then drop its slot — **and only once the roll
+  /// is a fact**.
+  ///
+  /// One body for both host-closed exits, because keeping two is exactly how
+  /// the earlier one drifted out of step with the later for three review rounds
+  /// running. Every clause here was a separate defect:
+  ///
+  /// - Roll BEFORE clearing, the same order `_settlePending` uses. Clearing
+  ///   first dropped the debt record a settle deliberately preserves when its
+  ///   own roll failed, leaving the outbox row as the only thing still owed.
+  /// - Only if the roll LANDED. The dispatcher swallows a failed handler by
+  ///   design, so a roll that never happened is otherwise indistinguishable
+  ///   from one that did.
+  /// - Matched on the OCCURRENCE. The roll is where the next occurrence's
+  ///   pending gets written, and an unqualified clear takes that away instead.
+  Future<void> _finishHostClosed(
     NivaatAlarm alarm,
-    List<SavedLocation> courts,
+    DateTime t,
+    DateTime next,
+  ) async {
+    if (await _rollOnUnlessHostDid(alarm, t, next)) {
+      await store.clearPendingRingForOccurrence(alarm.id, next);
+    }
+  }
+
+  /// Returns whether the next occurrence is now open — either because an inline
+  /// settle already rolled it, or because this call did.
+  ///
+  /// **False means the roll is still owed**, and every caller that is about to
+  /// drop a durable record of that debt has to check. The dispatcher swallows a
+  /// failed handler by design, so a roll that never happened is otherwise
+  /// indistinguishable from one that did.
+  Future<bool> _rollOnUnlessHostDid(
+    NivaatAlarm alarm,
     DateTime t,
     DateTime closed,
   ) async {
+    // The mark is only ever set by a settle whose roll SUCCEEDED, so finding it
+    // here really does mean the occurrence after `closed` is open.
     if (_hostRolledOccurrences.contains(_occurrenceKey(alarm.id, closed))) {
-      return;
+      return true;
     }
-    await _rollOn(alarm, courts, t, closed);
+    return _rollOn(alarm, t, closed);
   }
 
   /// After finalising [closed], immediately evaluate the alarm's NEXT
@@ -2206,20 +2409,72 @@ class NivaatEngine {
   /// `rolledOn: true` is what keeps the next occurrence's pre-arm off
   /// [closed]'s own ring locker, which may still be holding a live alarm —
   /// see [_evaluate] for why that mattered.
-  Future<void> _rollOn(
-    NivaatAlarm alarm,
-    List<SavedLocation> courts,
-    DateTime t,
-    DateTime closed,
-  ) async {
+  /// **Records the intent before carrying it out**, so a crash cannot lose the
+  /// next morning.
+  ///
+  /// This is the one place a database transaction genuinely could not reach.
+  /// Rolling on arms a real alarm, and no `ROLLBACK` un-arms one — so the
+  /// closing work commits with an outbox row beside it, and the platform call
+  /// happens after. Die in between and the row is still there: the next barrier
+  /// finds its lease expired and rolls on then. Before this, a process death
+  /// after the settle wrote its history row and before `_evaluate` returned
+  /// left the occurrence closed with nothing booked after it — and on Android
+  /// nothing else ever books one, so the alarm waited for a manual app open.
+  ///
+  /// Dispatched **scoped to this intent** (`only:`), because this runs inside
+  /// the alarm's lane: an unscoped dispatch would carry out other alarms'
+  /// intents here too, and their evaluates would run outside their own lanes.
+  /// Returns whether the roll actually happened.
+  ///
+  /// **The dispatcher never throws** — a failed handler is logged, left owed and
+  /// retried on a later barrier — so a caller that needs to know cannot find out
+  /// by catching. It has to ask, and `_settlePending` does: it may not drop the
+  /// pending slot on the strength of a roll that did not occur.
+  Future<bool> _rollOn(NivaatAlarm alarm, DateTime t, DateTime closed) async {
+    final intent = _rollOnIntent(alarm.id, closed);
+    await outbox.enqueue(intent, now: t);
+    await outbox.dispatch(_outboxHandlersAt(t), now: t, only: intent.dedupKey);
+    return await outbox.stateOf(intent.dedupKey) == OutboxState.done;
+  }
+
+  /// Carries out a roll-on intent, in the alarm's own lane.
+  ///
+  /// Same shape as [_onHostAlarmEvent]: inline when that lane is already
+  /// running — which is the case for every [_rollOn], since it is reached from
+  /// inside a pass — and queued when it is not, which is how a row recovered at
+  /// a barrier gets in.
+  Future<void> _runRollOnJob(OutboxJob job, DateTime? t) async {
+    final alarmId = job.payload['alarmId'] as int;
+    if (_activeAlarmIds.contains(alarmId)) return _rollOnFromJob(job, t);
+    return _enqueue(alarmId, () => _rollOnFromJob(job, t), now: t);
+  }
+
+  Future<void> _rollOnFromJob(OutboxJob job, DateTime? t) async {
+    final alarmId = job.payload['alarmId'] as int;
+    final closed = DateTime.fromMicrosecondsSinceEpoch(
+        job.payload['closedMicros'] as int);
+    final alarm = await _alarmById(alarmId);
+    // A deleted alarm has nothing to roll on to. That is DONE, not failed:
+    // returning normally retires the row, where throwing would spend the retry
+    // budget rediscovering that the alarm is still gone.
+    if (alarm == null) return;
+    // Read rather than carried: this can run at a barrier with no snapshot in
+    // hand, and a court deleted since the intent was recorded should be seen.
+    final courts = await store.loadCourts();
     // Always open the occurrence *after* [closed]. A nextRing drop can close a
     // morning that is still in the future relative to wall clock; using only
-    // `t` then hits `nextOccurrence(t) == closed` and would skip the cascade
-    // (H5). Prefer the later of wall clock and just-past-closed so a roll that
-    // already runs after T keeps its own evaluate clock for wind bookkeeping.
+    // the pass clock then hits `nextOccurrence(t) == closed` and would skip the
+    // cascade (H5). Prefer the later of wall clock and just-past-closed so a
+    // roll that already runs after T keeps its own evaluate clock for wind
+    // bookkeeping.
     final afterClosed = closed.add(const Duration(milliseconds: 1));
-    final now = t.isAfter(afterClosed) ? t : afterClosed;
-    await _evaluate(alarm, courts, now: now, rolledOn: true);
+    final at = t ?? _nowFor(alarmId);
+    await _evaluate(
+      alarm,
+      courts,
+      now: at.isAfter(afterClosed) ? at : afterClosed,
+      rolledOn: true,
+    );
   }
 
   /// A row for [alarm]'s occurrence [at], built from the last known skip

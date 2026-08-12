@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:core/core.dart';
+import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 /// The id -> UUIDs map is the ONLY handle this app has on an AlarmKit alarm:
 /// the plugin assigns the UUIDs, so an entry lost is an alarm that can never be
@@ -18,28 +16,30 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const channel = MethodChannel('flutter_alarmkit');
-  const mapKey = 'alarmkit.idmap';
 
+  late AppDatabase db;
   late List<MethodCall> calls;
   late List<Map<String, Object?>> alarms; // what AlarmKit reports it holds
   late bool cancelSucceeds;
   late bool cancelThrows;
   late bool scheduleThrows;
 
-  /// The persisted map, in its on-disk shape: a LIST of UUIDs per id.
+  /// The persisted map, rebuilt from the handle rows: a LIST of UUIDs per id,
+  /// newest first. One row per handle since 2026-08-12 — the whole-map blob it
+  /// replaced was a read-edit-save that two isolates could interleave.
   Future<Map<String, List<String>>> savedMap() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
-    final raw = prefs.getString(mapKey);
-    if (raw == null) return {};
-    return {
-      for (final e in (jsonDecode(raw) as Map<String, dynamic>).entries)
-        e.key: (e.value as List).cast<String>(),
-    };
+    final rows = await (db.select(db.alarmKitHandles)
+          ..orderBy([(t) => OrderingTerm.desc(t.seq)]))
+        .get();
+    final out = <String, List<String>>{};
+    for (final row in rows) {
+      (out['${row.alarmId}'] ??= <String>[]).add(row.uuid);
+    }
+    return out;
   }
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({});
+  setUp(() async {
+    db = await useInMemoryAppDatabase();
     calls = [];
     alarms = [];
     cancelSucceeds = true;
@@ -284,15 +284,72 @@ void main() {
     expect(await s.isRinging(1), isFalse);
   });
 
-  test('the map on disk is read as the shape this build writes', () async {
-    // No migration (CLAUDE.md): builds before REVIEW #5 stored one bare UUID
-    // per id, and that reader is gone rather than kept forever. A blob in the
-    // old shape is a clear-data problem, and it fails where you can see it —
-    // silently reading it as "no alarms" is what would orphan an armed one.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(mapKey, jsonEncode({'1': 'bare-uuid'}));
-
+  test('pruning never deletes a handle recorded after it looked', () async {
+    // `getAlarms()` is a SNAPSHOT. Another isolate arming an alarm in the gap
+    // between that snapshot and the DELETE has a brand-new handle that AlarmKit
+    // did mention — just not in this answer — so a prune that deletes
+    // "everything AlarmKit did not mention" would remove it. The row is then
+    // the only handle on an armed alarm, and `cancel`, `isRinging` and the
+    // orphan sweep all work off it: the alarm rings on a morning the wind says
+    // to skip, and nothing can reach it.
     final s = scheduler();
-    await expectLater(s.scheduledIds(), throwsA(isA<TypeError>()));
+    await arm(s, 1);
+    final existing = (await savedMap())['1']!.single;
+
+    // Arm alarm 2 from "another isolate" DURING the prune: the mock answers
+    // getAlarms with the pre-existing alarm only, then a second handle appears
+    // before the delete runs.
+    var armedDuringPrune = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'getAlarms') {
+        final answer = [
+          for (final a in alarms)
+            if (a['id'] == existing) a
+        ];
+        if (!armedDuringPrune) {
+          armedDuringPrune = true;
+          // AlarmKit knows about it; our snapshot simply predates it.
+          alarms.add({'id': 'raced-uuid', 'state': 'scheduled'});
+          // Raw SQL because the generated companions are deliberately not
+          // exported from `core` — app code must go through the stores.
+          await db.customStatement(
+            'INSERT INTO alarm_kit_handles (alarm_id, uuid, seq, created_at) '
+            'VALUES (2, ?, 1, ?)',
+            ['raced-uuid', DateTime.now().microsecondsSinceEpoch],
+          );
+        }
+        return answer;
+      }
+      return null;
+    });
+
+    await s.scheduledIds();
+
+    expect((await savedMap())['2'], ['raced-uuid'],
+        reason: 'a handle recorded after the snapshot is not this prune\'s to '
+            'delete');
+    expect((await savedMap())['1'], [existing]);
+  });
+
+  test('one id\'s handles are untouched by another id\'s writes', () async {
+    // The reason this is rows rather than one blob. The prefs map was a
+    // read-edit-save over EVERY id at once, so a background isolate writing
+    // alarm 2's entry saved alarm 1's away with it (REVIEW #7) — reloading
+    // first narrowed that window and could not close it, because prefs has no
+    // compare-and-swap. Now a write names its own rows and nothing else can be
+    // caught by it.
+    final s = scheduler();
+    await arm(s, 1);
+    final first = (await savedMap())['1'];
+    await arm(s, 2);
+    // A refused cancel on 2 forces a second handle under it — the write that
+    // used to rewrite the whole map.
+    cancelSucceeds = false;
+    await arm(s, 2);
+
+    expect((await savedMap())['2'], hasLength(2));
+    expect((await savedMap())['1'], first,
+        reason: 'alarm 1 was never mentioned by any of that');
   });
 }

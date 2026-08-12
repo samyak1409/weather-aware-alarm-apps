@@ -128,14 +128,30 @@ void main() {
   /// stops being true a day later (H5 began failing on its own). Seconds are
   /// stripped so `nextOccurrence` lands on the minute rather than rolling to
   /// tomorrow.
+  /// Everything a live-clock test needs, built but NOT yet evaluated.
+  ///
+  /// **Dated on the live clock, five minutes ahead, seconds stripped.** Any
+  /// test whose host event is handled OUTSIDE an evaluate lane needs this
+  /// rather than a fixture date, because that is exactly when `_nowFor` falls
+  /// back to the wall clock. Two ways it bites. A move about a ring whose time
+  /// has passed is correctly ignored as a stale replay, so a fixture-dated test
+  /// exercises the rejection path and passes whether or not the rule under test
+  /// exists. And `_rollOn` prefers the later of that clock and just-past
+  /// `closed`, so a past-dated `closed` never reaches the `afterClosed` guard —
+  /// and the answer asserted is only whatever the wall clock made true the
+  /// morning it was written (the nextRing H5 began failing on its own two days
+  /// later). Seconds are stripped so `nextOccurrence` lands on the minute
+  /// rather than rolling to tomorrow.
   Future<
       ({
         NivaatEngine engine,
         NivaatStore store,
         FakeRing ring,
+        FakeChecks checks,
+        FakeNotifier notifier,
         NivaatAlarm alarm,
         DateTime at,
-      })> armLiveAtT() async {
+      })> liveRig({FakeRing? scheduler}) async {
     SharedPreferences.setMockInitialValues({});
     final base = DateTime.now();
     final at = DateTime(base.year, base.month, base.day, base.hour)
@@ -151,19 +167,45 @@ void main() {
     await store.saveCourts([court]);
     await store.saveAlarms([live]);
     await store.saveAlarmIdSeq(8);
-    final sched = FakeRing();
-    final e = NivaatEngine(
+    final sched = scheduler ?? FakeRing();
+    final liveChecks = FakeChecks();
+    final liveNotifier = FakeNotifier();
+    return (
+      engine: NivaatEngine(
+        store: store,
+        scheduler: sched,
+        api: FakeApi()..sample = wind(5.0, 5.0),
+        checks: liveChecks,
+        notifier: liveNotifier,
+      ),
       store: store,
-      scheduler: sched,
-      api: FakeApi()..sample = wind(5.0, 5.0),
-      checks: FakeChecks(),
-      notifier: FakeNotifier(),
+      ring: sched,
+      checks: liveChecks,
+      notifier: liveNotifier,
+      alarm: live,
+      at: at,
     );
-    await e.evaluateAlarm(live, [court],
-        now: at.subtract(const Duration(minutes: 2)));
-    await e.evaluateAlarm(live, [court], now: at);
-    return (engine: e, store: store, ring: sched, alarm: live, at: at);
   }
+
+  /// [liveRig] with the pre-T and post-T passes already run, so the alarm is
+  /// armed at T with a pending held for it.
+  Future<
+      ({
+        NivaatEngine engine,
+        NivaatStore store,
+        FakeRing ring,
+        FakeChecks checks,
+        FakeNotifier notifier,
+        NivaatAlarm alarm,
+        DateTime at,
+      })> armLiveAtT() async {
+    final r = await liveRig();
+    await r.engine.evaluateAlarm(r.alarm, [court],
+        now: r.at.subtract(const Duration(minutes: 2)));
+    await r.engine.evaluateAlarm(r.alarm, [court], now: r.at);
+    return r;
+  }
+
 
   test('post-T schedule success holds pending — no Rang until settle', () async {
     await armCalmAtT();
@@ -1118,5 +1160,248 @@ void main() {
 
     expect((await f.store.loadPendingRing(f.alarm.id))!.scheduledFor, newer,
         reason: 'the older replay must not win');
+  });
+
+  test('the early host-closed exit still takes the morning\'s card down',
+      () async {
+    // **Reachable at exactly T, and only there.** `atOrPastAlarm` is
+    // `t >= next` (the wake grace is zero) while Rule 2 needs `t > next`, so
+    // the one instant that reaches the post-T hold with a ring already
+    // committed is T itself — which is precisely where this app keeps getting
+    // bitten, because on Android the ring and the T-0 check are exact alarms
+    // for the same moment.
+    //
+    // The card-cancel line lives after this exit, and it is placed where it is
+    // so a mid-await settle cannot return past it. This exit was added later
+    // and returned past it anyway, leaving `Still checking` in the shade for a
+    // morning already recorded as missed.
+    final sched = _EmitsDuringSchedule();
+    final f = await liveRig(scheduler: sched);
+    final (store, live, at) = (f.store, f.alarm, f.at);
+    // A committed ring with the morning's card already up: the card went out at
+    // T when the wind was still being watched, and a ring was committed for the
+    // same occurrence. `ringScheduled` is what lets the drop match at all.
+    await store.saveCheckState(CheckState(
+      alarmId: live.id,
+      alarmAt: at,
+      ringScheduled: true,
+      cardShown: true,
+    ));
+    sched.emitOnSchedule = (id, armedAt) => HostAlarmEvent(
+          id: id,
+          kind: HostAlarmEventKind.dropped,
+          cause: HostAlarmEventCause.platformRefusal,
+          recordedAt: armedAt.add(const Duration(seconds: 1)),
+          at: armedAt,
+        );
+
+    await f.engine.evaluateAlarm(live, [court], now: at);
+
+    expect(
+        (await store.loadHistory()).where((r) =>
+            r.ringDisposition == RingDisposition.missed && r.at == at),
+        hasLength(1),
+        reason: 'the settle really did close this occurrence mid-pass');
+    expect(f.notifier.cancelled, contains(live.id),
+        reason: 'and the card it contradicts came down');
+  });
+
+  test('Rule 2 does not claim rollOnDone when the roll failed', () async {
+    // The THIRD site of this shape, and the one a review had to point out after
+    // the other two were fixed — the class, not the instance. Rule 2 is the
+    // committed ring whose time has passed while the plugin still holds it: it
+    // promotes to pending, rolls on, and stamps `rollOnDone`. That stamp makes
+    // `_settlePending.owesRoll` false for this occurrence for good, so writing
+    // it after a roll that failed retires the pending slot's own recovery path
+    // and leaves the outbox row as the only thing still owed.
+    final f = await liveRig();
+    final (store, live, at) = (f.store, f.alarm, f.at);
+    final e = f.engine;
+    final liveChecks = f.checks;
+
+    // Pre-T arm: commits the ring, so `ringScheduled` is true and the plugin
+    // still holds it — which is what sends the next pass down Rule 2 rather
+    // than settling the morning.
+    await e.evaluateAlarm(live, [court],
+        now: at.subtract(const Duration(minutes: 2)));
+    expect((await store.loadCheckState(live.id))?.ringScheduled, isTrue);
+
+    liveChecks.throwOnSchedule = true;
+    await e.evaluateAlarm(live, [court], now: at.add(const Duration(minutes: 1)));
+
+    final held = await store.loadPendingRing(live.id);
+    expect(held, isNotNull, reason: 'the owed ring was promoted to pending');
+    expect(held!.occurrenceAt, at);
+    expect(held.rollOnDone, isFalse,
+        reason: 'nothing rolled, so nothing may claim it did');
+    expect(
+        await OutboxStore()
+            .stateOf('nivaat.rollOn:${live.id}:${at.microsecondsSinceEpoch}'),
+        OutboxState.pending,
+        reason: 'and the debt is recorded for a later barrier');
+  });
+
+  test('a post-T hold does not claim rollOnDone when the roll failed',
+      () async {
+    // **`rollOnDone` is the claim that the next occurrence is open.** It is
+    // written after the roll rather than before precisely so recovery cannot
+    // read "already rolled" when nothing rolled — that closes the occurrence
+    // with nothing following it, and on Android nothing else books one.
+    // Stamping it after a roll that FAILED is the same lie by a quieter route,
+    // and it became reachable the moment the roll started going through a
+    // dispatcher that swallows failures by design.
+    //
+    // Built inline rather than from `armLiveAtT`, because the failure has to be
+    // armed BETWEEN the pre-T and post-T passes: the pre-T arm books a wakeup
+    // of its own, and failing that one would abort the pass before it ever
+    // reaches the hold.
+    final f = await liveRig();
+    final (store, live, at) = (f.store, f.alarm, f.at);
+    final e = f.engine;
+    final liveChecks = f.checks;
+
+    await e.evaluateAlarm(live, [court], now: at.subtract(const Duration(minutes: 2)));
+    // Now the roll — and only the roll — cannot book its wakeup.
+    liveChecks.throwOnSchedule = true;
+    await e.evaluateAlarm(live, [court], now: at);
+
+    final held = await store.loadPendingRing(live.id);
+    expect(held, isNotNull, reason: 'the ring was armed and is owed');
+    expect(held!.occurrenceAt, at);
+    expect(held.rollOnDone, isFalse,
+        reason: 'nothing rolled, so nothing may claim it did');
+    expect(
+        await OutboxStore()
+            .stateOf('nivaat.rollOn:${live.id}:${at.microsecondsSinceEpoch}'),
+        OutboxState.pending,
+        reason: 'and the debt is recorded for a later barrier');
+  });
+
+  test('a settle whose roll failed keeps the pending slot', () async {
+    // **The pending slot is the durable record that this occurrence is
+    // unfinished, and it is cleared LAST for that reason.** Before the outbox
+    // that was enforced by accident: the roll threw, and execution never
+    // reached the clear. Routing the roll through a dispatcher that swallows
+    // failures by design turned the accident into a silent clear — the
+    // occurrence closed, the roll still owed, and one of the two records of
+    // that debt thrown away. `_settlePending` has to ASK whether the roll
+    // happened, because it can no longer find out by catching.
+    //
+    // The settle has to be about the occurrence that HOLDS the slot, or the
+    // clear never targets it and the assertion is vacuous — it is matched on
+    // the occurrence, so tomorrow's `nextRing` drop leaves today's slot alone
+    // whatever the roll does. `rollOnDone: false` because a roll that is not
+    // owed is not one that can fail.
+    final f = await armLiveAtT();
+    final held = (await f.store.loadPendingRing(f.alarm.id))!;
+    expect(held.occurrenceAt, f.at);
+    // Stage the state a process death leaves behind: the pending was saved and
+    // the roll had not completed. Both records have to be rolled back, because
+    // the outbox is the more authoritative of the two — `armLiveAtT`'s own
+    // post-T arm already rolled this occurrence on and recorded it done, and a
+    // settle that finds it done correctly owes nothing.
+    await f.store.savePendingRing(held.copyWith(rollOnDone: false));
+    await appDb.customStatement('DELETE FROM outbox_entries');
+
+    // Built from the slot rather than from a guessed locker: an arm AT T lands
+    // on whichever of the three lockers that pass chose, and an event naming a
+    // different one does not match the held pending at all — it falls through
+    // to CheckState (already tomorrow's) and settles nothing, which is a green
+    // test that proves nothing.
+    final dropToday = HostAlarmEvent(
+      id: held.pluginId,
+      kind: HostAlarmEventKind.dropped,
+      cause: HostAlarmEventCause.platformRefusal,
+      recordedAt: f.at.add(const Duration(seconds: 1)),
+      at: held.scheduledFor,
+    );
+    f.ring.scheduled.remove(held.pluginId);
+    // The roll fails at the wakeup booking, not the ring arm: the occurrence it
+    // opens is a day out, and a ring pre-arm is only written near T.
+    f.checks.throwOnSchedule = true;
+    await f.ring.emitHostEvent(dropToday);
+
+    // The verdict landed — that half is a database write and never depended on
+    // the platform.
+    expect(
+        (await f.store.loadHistory()).where((r) =>
+            r.ringDisposition == RingDisposition.missed && r.at == f.at),
+        hasLength(1));
+    // And the debt is still recorded in BOTH places rather than neither.
+    expect(await f.store.loadPendingRing(f.alarm.id), isNotNull,
+        reason: 'the slot may not go while the roll is still owed');
+    expect(
+        await OutboxStore()
+            .stateOf('nivaat.rollOn:${f.alarm.id}:${f.at.microsecondsSinceEpoch}'),
+        OutboxState.pending);
+  });
+
+  test('a roll-on whose platform call fails is still owed, and lands later',
+      () async {
+    // **The seam the outbox exists for.** `_settlePending` commits the verdict,
+    // the CheckState clear and the roll-on intent in ONE transaction, then makes
+    // the platform call outside it — it has to be outside, because an alarm
+    // armed inside a transaction stays armed through a `ROLLBACK` and no
+    // `ROLLBACK` can un-arm it. So when the arming then fails, the only thing
+    // left saying tomorrow is still owed is that row.
+    //
+    // **Recovered by a SECOND engine, and that is what makes this about the
+    // outbox at all.** The same engine would recover it regardless: the
+    // host-event bridge defers a handler that threw and re-runs the whole
+    // settle on its next barrier, and the held pending slot is a third path to
+    // the same place. A fresh engine has no deferred event and nothing in
+    // memory — it has only what reached the database.
+    //
+    // Live-clock fixture for the same reason as the H5 test above: `closed` has
+    // to be genuinely in the future, or `_rollOn` never reaches the
+    // `afterClosed` branch and the expected answer drifts with the date.
+    final f = await armLiveAtT();
+    final tomorrowAt = f.at.add(const Duration(days: 1));
+    final dayAfterAt = f.at.add(const Duration(days: 2));
+
+    final dropNext = HostAlarmEvent(
+      id: nextRing,
+      kind: HostAlarmEventKind.dropped,
+      cause: HostAlarmEventCause.platformRefusal,
+      recordedAt: tomorrowAt.add(const Duration(seconds: 1)),
+      at: tomorrowAt,
+    );
+    f.ring.scheduled.remove(nextRing);
+    // The roll's own arming THROWS rather than declining — a plugin call
+    // failing, not a booking refused. Only a throw reaches the retry.
+    f.ring.throwOnSchedule = true;
+    await f.ring.emitHostEvent(dropNext);
+
+    // The morning was still closed: that half is a database write and never
+    // depended on the platform.
+    expect(
+        (await f.store.loadHistory()).where((r) =>
+            r.ringDisposition == RingDisposition.missed && r.at == tomorrowAt),
+        hasLength(1));
+    final key =
+        'nivaat.rollOn:${f.alarm.id}:${tomorrowAt.microsecondsSinceEpoch}';
+    expect(await OutboxStore().stateOf(key), OutboxState.pending,
+        reason: 'the intent outlived the platform call that failed');
+    expect(
+        (await f.store.loadCheckState(f.alarm.id))?.alarmAt, isNot(dayAfterAt),
+        reason: 'nothing has been rolled on to yet');
+
+    // A fresh engine over the same database. If the intent were not on disk,
+    // nothing here would know a roll was owed — and `nextOccurrence` alone
+    // returns the occurrence that just CLOSED, which is exactly why the row
+    // carries `closedMicros`.
+    final revived = NivaatEngine(
+      store: f.store,
+      scheduler: f.ring..throwOnSchedule = false,
+      api: FakeApi()..sample = wind(5.0, 5.0),
+      checks: FakeChecks(),
+      notifier: FakeNotifier(),
+    );
+    await revived.evaluateAll(
+        now: DateTime.now().add(OutboxStore.retryAfter * 2));
+
+    expect(await OutboxStore().stateOf(key), OutboxState.done);
+    expect((await f.store.loadCheckState(f.alarm.id))?.alarmAt, dayAfterAt,
+        reason: 'the day after — read from the intent, not from the wall clock');
   });
 }

@@ -9,6 +9,12 @@ export 'src/app_window.dart';
 export 'src/appearance.dart';
 export 'src/calendar.dart';
 export 'src/crafted_by.dart';
+// Deliberately narrow: the generated row and companion types stay an
+// implementation detail of the stores, because app code writing its own
+// queries is how the transactions this layer exists for get bypassed.
+export 'src/db/app_database.dart' show AppDatabase, appDb, useInMemoryAppDatabase;
+export 'src/db/outbox.dart';
+export 'src/db/tables.dart' show HostEventClaimState, OutboxState;
 export 'src/dev_mode.dart';
 export 'src/flashing_scrollbar.dart';
 export 'src/format.dart';
