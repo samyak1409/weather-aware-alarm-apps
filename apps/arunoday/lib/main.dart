@@ -80,21 +80,26 @@ class ArunodayApp extends StatelessWidget {
         title: 'Arunoday',
         debugShowCheckedModeBanner: false,
         theme: buildOledTheme(AppPalette.dawn, heavyType: heavy),
+        // `builder`, not around `home`: the ring screen has to cover the WHOLE
+        // navigator, settings and dialogs included. Wrapping `home` put it
+        // under the settings page, where a ring was invisible until you
+        // pressed back (see RingGate).
+        builder: (_, navigator) => RingGate(
+          appName: 'ARUNODAY',
+          // Stopping (or starting) a ring re-arms the next wake/bedtime right
+          // away instead of waiting for the next app open.
+          onRingingChanged: () => unawaited(controller.resync()),
+          actionsBuilder: (context, alarm) =>
+              BedtimeActions.isBedtimeAlarm(alarm)
+                  ? BedtimeActions(controller: controller, ringingAlarm: alarm)
+                  : const SizedBox.shrink(),
+          child: navigator!,
+        ),
         home: child,
       ),
-      child: RingGate(
-        appName: 'ARUNODAY',
-        // Stopping (or starting) a ring re-arms the next wake/bedtime right
-        // away instead of waiting for the next app open.
-        onRingingChanged: () => unawaited(controller.resync()),
-        actionsBuilder: (context, alarm) =>
-            BedtimeActions.isBedtimeAlarm(alarm)
-                ? BedtimeActions(controller: controller, ringingAlarm: alarm)
-                : const SizedBox.shrink(),
-        child: HomeScreen(
-          controller: controller,
-          permissionFlow: permissionFlow,
-        ),
+      child: HomeScreen(
+        controller: controller,
+        permissionFlow: permissionFlow,
       ),
     );
   }

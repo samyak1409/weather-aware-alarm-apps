@@ -94,10 +94,51 @@ class _ThrowingScheduler extends FakeScheduler {
 
 const tonk = SavedLocation(id: 'tonk', name: 'Tonk', lat: 26.17, lon: 75.79);
 
+String _dateKey(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  // ── The "sleep late" push: how far it may go, and what it says ──────────
+  //
+  // All three of these aim the clock rather than trusting the hour the suite
+  // runs at: the rules are about the gap between now, the bedtime and the
+  // wake, and a test that reads differently at 3am than at 3pm is a test that
+  // will fail one morning for no reason.
+
+  /// Moves the wake offset so the next wake lands [minutes] from now.
+  Future<void> aimWake(ArunodayController c, int minutes) async {
+    final dawn =
+        c.nextWake!.subtract(Duration(minutes: c.settings.wakeOffsetMinutes));
+    final target = DateTime.now().add(Duration(minutes: minutes));
+    await c.update(c.settings
+        .copyWith(wakeOffsetMinutes: target.difference(dawn).inMinutes));
+  }
+
+  /// Moves the bedtime offset so the daily bedtime reads [minutes] from now
+  /// (negative = earlier today, which is where a bedtime that has just rung
+  /// sits).
+  Future<void> aimBedtime(ArunodayController c, int minutes) async {
+    final at = DateTime.now().add(Duration(minutes: minutes));
+    final auto = c.plan!.bedtimeMinutes.round();
+    final want = at.hour * 60 + at.minute;
+    await c.update(c.settings
+        .copyWith(bedtimeOffsetMinutes: () => (want - auto) % 1440));
+  }
+
+  Future<ArunodayController> located(FakeScheduler fake) async {
+    final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    return c;
+  }
 
   test('a plugin failure at startup costs the alarms, not the screen', () async {
     // REVIEW #15. `init` armed the window BEFORE setting `loaded`, and home
@@ -239,6 +280,11 @@ void main() {
       locations: [tonk],
       activeLocationId: 'tonk',
     ));
+    // Pin the bedtime just behind now — where one that has just rung sits.
+    // A re-ring is dropped once the bedtime moves past it (2026-08-13), and
+    // with the auto bedtime at ~22:00 a "one minute from now" AGAIN would be
+    // on the wrong side of it for most of the day.
+    await aimBedtime(c, -10);
     final daily = c.nextBedtimeRing!; // no AGAIN yet → the daily bedtime
     expect(daily.isAfter(DateTime.now()), isTrue);
 
@@ -367,7 +413,14 @@ void main() {
       activeLocationId: 'tonk',
     ));
 
-    await c.delayBedtime(const Duration(minutes: 30));
+    // Aim both, so this reads the same at any hour and in any zone: a push
+    // needs room before the wake, and a re-ring is dropped once the bedtime
+    // moves past it (2026-08-13). Leaving the bedtime to the sleep plan put
+    // it on the wrong side of the AGAIN under `TZ=UTC`, where a Tonk location
+    // produces a nonsense local bedtime.
+    await aimWake(c, 360);
+    await aimBedtime(c, -10);
+    await c.delayBedtime(const Duration(minutes: 30), fromReRing: false);
     expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isTrue);
     expect(
       fake.scheduled[ArunodayIds.bedtimeAgain]!.difference(DateTime.now()).inMinutes,
@@ -416,6 +469,127 @@ void main() {
     ));
     expect(c.sleepStartMoment!.isBefore(c.nextWake!), isTrue);
     expect(c.tonightSleepMinutes! < 12 * 60, isTrue);
+  });
+
+  test('every push counts, and the re-ring says which call it is', () async {
+    // "Second call" was fixed copy, and wrong from the third push on — `+1h`
+    // can be taken again every time the re-ring sounds (2026-08-13).
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    await aimWake(c, 360); // six hours of room
+    await aimBedtime(c, -10); // the bedtime that has just rung
+
+    await c.delayBedtime(const Duration(hours: 1), fromReRing: false);
+    expect(c.settings.bedtimeDelayCall, 2);
+    expect(fake.bodies[ArunodayIds.bedtimeAgain],
+        'Second call — dawn does not snooze.');
+
+    // The push that matters: taken ON the re-ring, so it is the next call up.
+    // Two hours rather than one only because this test cannot move the clock
+    // — a real second push happens an hour later and so lands on a different
+    // minute, and the arming pass leaves an alarm alone when its time has not
+    // changed.
+    await c.delayBedtime(const Duration(hours: 2), fromReRing: true);
+    expect(c.settings.bedtimeDelayCall, 3);
+    expect(fake.bodies[ArunodayIds.bedtimeAgain],
+        'Third call — dawn does not snooze.');
+
+    // And a fresh bedtime ring starts the count over rather than climbing
+    // from last night's number.
+    await c.delayBedtime(const Duration(hours: 1), fromReRing: false);
+    expect(c.settings.bedtimeDelayCall, 2);
+  });
+
+  test('a push is refused once it would land at or after the wake', () async {
+    // Unlimited +1h with nothing to stop it walks the bedtime reminder round
+    // the clock into tomorrow afternoon. The nudge exists to protect the
+    // wake, so the wake is where it stops (2026-08-13).
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    final wake = c.nextWake!;
+    expect(
+        c.canDelayBedtime(const Duration(hours: 1),
+            now: wake.subtract(const Duration(hours: 3))),
+        isTrue);
+    expect(
+        c.canDelayBedtime(const Duration(hours: 1),
+            now: wake.subtract(const Duration(minutes: 30))),
+        isFalse,
+        reason: 'it would ring after you were meant to be up');
+
+    // And the write itself refuses, not just the button that hides.
+    await aimWake(c, 30);
+    await c.delayBedtime(const Duration(hours: 1), fromReRing: false);
+    expect(c.settings.bedtimeDelayedUntil, isNull);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isFalse);
+  });
+
+  test('moving the bedtime past a pending re-ring discards it', () async {
+    // Bedtime 21:56, +1h → an AGAIN at 22:58. Edit bedtime to 23:56 and the
+    // re-ring would sound at 22:58 telling you off for a bedtime that has not
+    // arrived yet (Samyak, 2026-08-13).
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    await aimWake(c, 360);
+    await aimBedtime(c, -10);
+    await c.delayBedtime(const Duration(hours: 1), fromReRing: false);
+    final again = c.settings.bedtimeDelayedUntil;
+    expect(again, isNotNull);
+
+    // Control first: a bedtime still BEFORE the re-ring leaves it alone, or
+    // the assertion below would pass against a rule that fires every resync.
+    await aimBedtime(c, 20);
+    expect(c.settings.bedtimeDelayedUntil, again);
+
+    // Nearly twelve hours BEFORE it is still before it — the rule reads the
+    // clock face the short way round, so this is the far side of the same
+    // "keep" answer and not a second case.
+    await aimBedtime(c, 60 - 719);
+    expect(c.settings.bedtimeDelayedUntil, again);
+
+    // Now past it.
+    await aimBedtime(c, 90);
+    expect(c.settings.bedtimeDelayedUntil, isNull);
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isFalse);
+  });
+
+  test('a long run of pushes is not mistaken for a moved bedtime', () async {
+    // The hole the stored mark closes (2026-08-13). Past twelve pushes the
+    // re-ring is more than twelve hours from its own bedtime, so "which way
+    // is nearer" flips and proximity alone reads an untouched bedtime as a
+    // moved one — the thirteenth push would delete the reminder it had just
+    // created. Needs a night longer than thirteen hours to reach, since the
+    // pushes stop at the wake.
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    await aimWake(c, 14 * 60);
+    await aimBedtime(c, -10);
+
+    // Each push lands an hour later than the last, as it would in life —
+    // this test cannot move the clock, so the durations do the walking.
+    for (var hour = 1; hour <= 13; hour++) {
+      await c.delayBedtime(Duration(hours: hour), fromReRing: hour > 1);
+    }
+    expect(c.settings.bedtimeDelayCall, 14, reason: 'thirteen pushes');
+    expect(c.settings.bedtimeDelayedUntil, isNotNull,
+        reason: 'nobody touched the bedtime, so nothing is stale');
+    expect(fake.scheduled.containsKey(ArunodayIds.bedtimeAgain), isTrue);
+  });
+
+  test('…and eleven hours past it counts as past, the short way round',
+      () async {
+    // Samyak's own boundary: re-ring at 00:00, bedtime 11:59 is 11h59m AFTER
+    // it and only 12h01m before, so the re-ring now comes first and is stale.
+    // The far-side keep is in the test above; this is the far-side discard.
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    await aimWake(c, 360);
+    await aimBedtime(c, -10);
+    await c.delayBedtime(const Duration(hours: 1), fromReRing: false);
+    expect(c.settings.bedtimeDelayedUntil, isNotNull);
+
+    await aimBedtime(c, 60 + 719);
+    expect(c.settings.bedtimeDelayedUntil, isNull);
   });
 
   test('resync never cancels an alarm that is mid-ring', () async {
@@ -529,9 +703,9 @@ void main() {
         ];
 
     expect(wakeTitles(), isNotEmpty);
-    expect(wakeTitles(), everyElement('Arunoday · Dawn'));
+    expect(wakeTitles(), everyElement('Dawn'));
     expect(bedTitles(), isNotEmpty);
-    expect(bedTitles(), everyElement('Arunoday · Bedtime'));
+    expect(bedTitles(), everyElement('Bedtime'));
 
     // Offset 0 — the wake IS the dawn, so there's no offset to print at all.
     expect(wakeBodies(), isNotEmpty);
@@ -542,7 +716,7 @@ void main() {
     // A6's "DAWN+0:20" and A7's "AUTO+0:30" (2026-07-22).
     expect(wakeBodies(), isNotEmpty);
     expect(wakeBodies(), everyElement('Dawn+0:20 at Tonk. Good morning.'));
-    expect(wakeTitles(), everyElement('Arunoday · Dawn'));
+    expect(wakeTitles(), everyElement('Dawn'));
   });
 
   test('wake offset shifts nextWake', () async {
@@ -561,6 +735,149 @@ void main() {
     final delta = shifted.difference(base).inMinutes;
     expect((delta - 120).abs() <= 3 || (delta - 120 + 1440).abs() <= 5, isTrue,
         reason: 'delta was $delta');
+  });
+
+  test('the footer names the NEXT dawn, rolling at dawn not at sunrise',
+      () async {
+    // Samyak, 2026-08-13. The roll used to key on SUNRISE, so for the ~27
+    // minutes between them the footer said "Dawn today 06:51" about a dawn
+    // that had already happened — in the app whose whole subject is the next
+    // one. `now` is a parameter because the only interesting minute is the
+    // one either side of dawn, and no test can wait for it.
+    final c = ArunodayController(
+        store: ArunodayStore(), scheduler: FakeScheduler());
+    await c.init();
+    expect(c.footerDawnAt(DateTime.now()), isNull,
+        reason: 'no location, no footer — that screen is the empty intro');
+
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    final dawn = c.dawnOn(DateTime.now())!;
+
+    final before = c.footerDawnAt(dawn.subtract(const Duration(minutes: 1)))!;
+    expect(before.rolled, isFalse);
+    expect(before.dawn, dawn);
+
+    final after = c.footerDawnAt(dawn.add(const Duration(minutes: 1)))!;
+    expect(after.rolled, isTrue);
+    expect(after.dawn.isAfter(dawn), isTrue,
+        reason: 'one minute past dawn, the next dawn is tomorrow\'s');
+    // The sunrise moves with it: one line, one morning. Today's sunrise is
+    // still ahead at that moment, and quoting it beside tomorrow's dawn would
+    // put two mornings in one sentence.
+    expect(after.sunrise!.isAfter(after.dawn), isTrue);
+    expect(after.sunrise!.difference(dawn).inHours, greaterThan(12));
+
+    // The rule, at three points around dawn: the word follows the printed
+    // time. True in any zone — but on an Indian phone with an Indian location
+    // it is also true of the ARGUMENT day, so it cannot fail here. The case
+    // that separates them is below.
+    for (final at in [
+      dawn.subtract(const Duration(minutes: 1)),
+      dawn.add(const Duration(minutes: 1)),
+      dawn.add(const Duration(hours: 6)),
+    ]) {
+      final f = c.footerDawnAt(at)!;
+      expect(f.rolled, _dateKey(f.dawn) != _dateKey(at),
+          reason: 'the word must follow the printed time, at $at');
+    }
+  });
+
+  test('the footer word follows the INSTANT, not the day that found it',
+      () async {
+    // The half of the rule an Indian location cannot show. `dawnOn(d)` is dawn
+    // for the UTC date `d` converted at the end, so on a device far from the
+    // location's longitude the instant lands on a NEIGHBOURING local date —
+    // CLAUDE.md's Tonk-on-a-New-York-phone case, which no test running here
+    // can reach. **Suva is that case from this side**: far enough east that
+    // its dawn for day D falls on the evening of D−1 in IST, so the argument
+    // and the instant disagree on an ordinary Indian machine.
+    final c = ArunodayController(
+        store: ArunodayStore(), scheduler: FakeScheduler());
+    await c.init();
+    await c.update(const ArunodaySettings(
+      locations: [SavedLocation(id: 'sv', name: 'Suva', lat: -18.14, lon: 178.44)],
+      activeLocationId: 'sv',
+    ));
+
+    // **The skew is a property of the MACHINE, not of the fixture**, so it is
+    // checked rather than assumed. A dawn lands on the previous local date
+    // only when the device sits far WEST of the location: at ~05:30 local
+    // dawn that needs longitude > ~165°E on an Indian phone, which Suva
+    // clears — and it is unreachable from a Tokyo one at any longitude, since
+    // no land lies far enough east of it. So this skips there, loudly, rather
+    // than joining the three known `TZ=` failures with a fourth that says
+    // nothing about the code.
+    final tomorrow = calendarDay(DateTime.now(), 1);
+    final instant = c.dawnOn(tomorrow)!;
+    if (_dateKey(instant) == _dateKey(tomorrow)) {
+      markTestSkipped('this zone cannot stage the skew (device too far east)');
+      return;
+    }
+
+    // Stand an hour before that dawn — the same local date as the dawn, one
+    // date behind the argument that produced it.
+    final f = c.footerDawnAt(instant.subtract(const Duration(hours: 1)))!;
+    expect(f.dawn, instant);
+    expect(f.rolled, isFalse,
+        reason: 'it is an hour away TODAY; the argument day says tomorrow');
+  });
+
+  test('a switched-off wake is not a wake to protect', () async {
+    // `nextWake` is pure dawn+offset and knows nothing about `wakeEnabled` —
+    // only the arming loop checks it — so gating the push on it hid SLEEP LATE
+    // whenever a disabled wake happened to be within the hour (2026-08-13).
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    await aimWake(c, 30); // no room, if the wake counted
+    expect(c.canDelayBedtime(const Duration(hours: 1)), isFalse);
+
+    await c.update(c.settings.copyWith(wakeEnabled: false));
+    expect(c.canDelayBedtime(const Duration(hours: 1)), isTrue,
+        reason: 'an alarm that will never sound cannot be the reason');
+  });
+
+  test('canDelayBedtime measures the injected now against the injected now',
+      () async {
+    // Half-applied, it computed the target from `now` and the deadline from
+    // the wall clock — an answer about no world in particular.
+    final fake = FakeScheduler();
+    final c = await located(fake);
+    final wake = c.nextWake!;
+    expect(
+        c.canDelayBedtime(const Duration(hours: 1),
+            now: wake.add(const Duration(hours: 2))),
+        isTrue,
+        reason: 'two hours past this wake, the next one is a day off');
+  });
+
+  test('the wake picker\'s draft answers for a morning it has to find (A15)',
+      () async {
+    // The countdown under the wake-offset picker (2026-08-13). It walks the
+    // window like the arming loop does rather than shifting `nextWake` by the
+    // difference: a big enough nudge moves the alarm to a different morning,
+    // and each morning has its own dawn — a shifted answer would quote today's
+    // dawn for tomorrow's alarm.
+    final c = ArunodayController(
+        store: ArunodayStore(), scheduler: FakeScheduler());
+    await c.init();
+    expect(c.draftWakeRing(0), isNull, reason: 'no location, no dawn');
+
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+    expect(c.draftWakeRing(0), c.nextWake,
+        reason: 'drafting the offset you already have must agree with the '
+            'alarm that is armed');
+
+    // −12h, the hard stop: today's dawn minus twelve hours is behind us for
+    // most of the day, so the answer can only come from a later morning.
+    final far = c.draftWakeRing(-720)!;
+    expect(far.isAfter(DateTime.now()), isTrue,
+        reason: 'a countdown must never point backwards');
   });
 
   test('an edit is never mistaken for a host deferral', () async {

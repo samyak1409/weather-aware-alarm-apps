@@ -290,15 +290,6 @@ String nivaatInLabel(DateTime? t, {DateTime? now}) {
       '${((mins % day) ~/ 60).toString().padLeft(2, '0')}h';
 }
 
-/// Delay until the next wall-clock minute (:00). Countdown tickers align here
-/// so "6:30 → in …" flips the moment 6:31 starts, not one minute after open.
-Duration nivaatUntilNextMinute([DateTime? now]) {
-  final n = now ?? DateTime.now();
-  final next = DateTime(n.year, n.month, n.day, n.hour, n.minute)
-      .add(const Duration(minutes: 1));
-  return next.difference(n);
-}
-
 /// How early a wake may arrive and still count as "the alarm time has come".
 ///
 /// **Zero, on purpose** (Samyak, 2026-07-26). Android AlarmManager and iOS

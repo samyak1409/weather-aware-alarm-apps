@@ -19,10 +19,57 @@ import 'package:core/core.dart';
 
 // ── A1–A3 · notification titles and bodies ──────────────────────────────────
 
-const String kArunodayWakeTitle = 'Arunoday · Dawn';
-const String kArunodayBedtimeTitle = 'Arunoday · Bedtime';
+/// **The app's own name is deliberately absent** (2026-08-13, Samyak — the
+/// rule Nivaat's titles have followed since 2026-07-22). Android prints
+/// "Arunoday" in the notification header directly above the title, so the
+/// prefix spent the scannable head of the line saying it twice; on iOS the
+/// title is AlarmKit's `label`, shown inside the app's own alert. Either way
+/// the app is already identified before this string is read.
+const String kArunodayWakeTitle = 'Dawn';
+const String kArunodayBedtimeTitle = 'Bedtime';
 const String kArunodayBedtimeBody = 'Wind down — dawn comes early.';
-const String kArunodayBedtimeAgainBody = 'Second call — dawn does not snooze.';
+
+/// A3's body — **which** call this is. The bedtime alarm itself was the first,
+/// so the first `+1h` re-ring is the `Second call`.
+///
+/// It was the fixed string `Second call — dawn does not snooze.` until
+/// 2026-08-13, and that was wrong from the third push on: `+1h` can be taken
+/// again every time the re-ring sounds, because a re-ring is itself a bedtime
+/// alarm. Counting is the honest version and also the pointed one — `Fourth
+/// call` says something a generic line cannot.
+///
+/// **The words run to `Twenty-fourth`, which is the real ceiling** (Samyak,
+/// 2026-08-13, worked out from the worst case rather than guessed): a push is
+/// refused once it would land at or after the next wake
+/// ([ArunodayController.canDelayBedtime]), each one is an hour, and a bedtime
+/// is at most 24 hours from the wake it protects. Wake 00:00 with bedtime
+/// 00:01 is the longest night there is — 01:01 is the second call, 23:01 the
+/// twenty-fourth, and the push it offers would land at 00:01, past the wake.
+/// A slower hand only makes the run shorter, since the hour counts from the
+/// tap and not from the ring.
+///
+/// **`Still up` is out of reach while the wake alarm is ON, and reachable the
+/// moment it is off** — [ArunodayController.canDelayBedtime] allows every push
+/// when there is no wake to protect, so the cap goes with it and the
+/// twenty-fifth call has no ordinal left. It is a real line, not the `—`-clock
+/// kind of defence it was first written up as.
+String arunodayBedtimeAgainBody(int call) {
+  // Indexed from the SECOND call, which is the first re-ring — `call` counts
+  // rings and the bedtime alarm itself was the first, so there is no ordinal
+  // here for 0 or 1 and both fall through to `Still up` with everything past
+  // the ceiling.
+  const words = [
+    'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth',
+    'Ninth', 'Tenth', 'Eleventh', 'Twelfth', 'Thirteenth', 'Fourteenth',
+    'Fifteenth', 'Sixteenth', 'Seventeenth', 'Eighteenth', 'Nineteenth',
+    'Twentieth', 'Twenty-first', 'Twenty-second', 'Twenty-third',
+    'Twenty-fourth',
+  ];
+  final i = call - 2;
+  return (i < 0 || i >= words.length)
+      ? 'Still up — dawn does not snooze.'
+      : '${words[i]} call — dawn does not snooze.';
+}
 
 /// A1's body. "First light" is only honest when the wake IS the dawn, so a
 /// non-zero offset names the offset instead.
@@ -48,19 +95,26 @@ String arunodayRitualWakeLine(DateTime nextWake, {DateTime? now}) {
 
 // ── A6–A8 · home screen ─────────────────────────────────────────────────────
 
-/// ` · IN 7H 22M` until [t], minute-truncated so it agrees with the clocks
-/// above it. Empty when [t] is null or already past.
+/// Whole minutes from [now] until [t], both truncated to the minute first so
+/// the number agrees with the clocks it is printed under. Null — nothing to
+/// count down to — for a null [t] and for one already past.
+int? _minutesUntil(DateTime? t, DateTime? now) {
+  if (t == null) return null;
+  final n = now ?? DateTime.now();
+  final mins = DateTime(t.year, t.month, t.day, t.hour, t.minute)
+      .difference(DateTime(n.year, n.month, n.day, n.hour, n.minute))
+      .inMinutes;
+  return mins < 0 ? null : mins;
+}
+
+/// ` · IN 7H 22M` until [t]. Empty when [t] is null or already past.
 ///
 /// ALL-CAPS here and sentence-case in Nivaat: this is Arunoday's label strip,
 /// which is entirely `labelSmall` caps, while Nivaat's countdown is body text
 /// beside a clock (see `nivaatInLabel`).
 String arunodayInLabel(DateTime? t, {DateTime? now}) {
-  if (t == null) return '';
-  final n = now ?? DateTime.now();
-  final mins = DateTime(t.year, t.month, t.day, t.hour, t.minute)
-      .difference(DateTime(n.year, n.month, n.day, n.hour, n.minute))
-      .inMinutes;
-  if (mins < 0) return '';
+  final mins = _minutesUntil(t, now);
+  if (mins == null) return '';
   return ' · IN ${fmtDuration(mins.toDouble()).toUpperCase()}';
 }
 
@@ -82,7 +136,7 @@ String arunodayWakeLine({
 ///
 /// [mode] is [ArunodayController.bedtimeModeDescription] (`Auto` / `Auto+0:30`),
 /// upper-cased here so the caller never has to remember to. [again] is a
-/// pending "not sleepy" re-ring, [sleepMinutes] tonight's sleep if it can be
+/// pending "sleep late" re-ring, [sleepMinutes] tonight's sleep if it can be
 /// computed, and the tail is the same IN/OFF pair as A6.
 String arunodayBedtimeLine({
   required String mode,
@@ -111,6 +165,25 @@ String arunodaySleepReadout(SleepPlanResult plan) =>
     'Year here: sleep ${fmtDuration(plan.minSleepMinutes)} (summer) to '
     '${fmtDuration(plan.maxSleepMinutes)} (winter) — the natural swing of '
     'dawn at this latitude.';
+
+/// `in 7h 22m` until [t] — the settings pickers' live feedback (A14/A15),
+/// answering "what would this actually do?" while you nudge the time.
+///
+/// Sentence-case and unprefixed, unlike [arunodayInLabel]: it stands alone
+/// under the dialog's own clock, among lower-case hints, which is Nivaat's
+/// editor exactly (`nivaatInLabel`) rather than home's caps strip. Same
+/// minute-truncated number underneath.
+///
+/// **The empty branch is defence, not a state either picker reaches**, the
+/// same standing as home's `—` clocks: a bedtime is a clock time and always
+/// has a next occurrence, and a drafted wake offset walks the whole window
+/// (`ArunodayController.draftWakeRing`), so even −12h lands on the following
+/// morning rather than behind you. It is kept because the alternative is a
+/// force-unwrap, and the slot it renders into is built either way.
+String arunodayPickerInLabel(DateTime? t, {DateTime? now}) {
+  final mins = _minutesUntil(t, now);
+  return mins == null ? '' : 'in ${fmtDuration(mins.toDouble())}';
+}
 
 /// A14's hint. [autoMinutes] is the SLEEP PLAN's bedtime — what the row would
 /// read at offset 0 — so the hint quotes it whether or not you have nudged

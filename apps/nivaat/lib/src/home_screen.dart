@@ -107,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// is the entire reason this ticker exists.
   void _armMinuteTicker() {
     _minuteTicker?.cancel();
-    _minuteTicker = Timer(nivaatUntilNextMinute(), () {
+    _minuteTicker = Timer(untilNextMinute(), () {
       if (!mounted) return;
       setState(() {});
       _armMinuteTicker();
@@ -304,14 +304,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// than it measures here, because the block hangs below its own midpoint and
   /// nothing balances it: A9 has an `Add location` button under the copy,
   /// while Nivaat's action is the FAB, off in the corner.
+  /// **Fills the screen when it fits, scrolls when it doesn't** (2026-08-13,
+  /// with the 64px hero, same as Arunoday's A9): the 1:2 spacer rhythm has no
+  /// give in it, so at a raised system text size the sentence and its body ran
+  /// off the bottom of a small phone — and that was already true at the old
+  /// 28px at 2x. `IntrinsicHeight` under a `minHeight` of the viewport keeps
+  /// the rhythm on every screen that fits.
   Widget _empty(TextTheme text) {
+    return LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: IntrinsicHeight(child: _introBody(text)),
+        ),
+      ),
+    );
+  }
+
+  Widget _introBody(TextTheme text) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Spacer(),
-          Text('The windless alarm.', style: text.headlineMedium),
+          // The hero size, with Arunoday's A9 (2026-08-13, Samyak): this
+          // sentence is the whole screen before you have an alarm, so it gets
+          // the 64 an alarm clock would have had.
+          Text('The windless alarm.', style: text.displayLarge),
           const SizedBox(height: 12),
           Text(
             'Rings only when the wind at your court is low enough to play. '
@@ -362,12 +382,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           crossAxisAlignment: CrossAxisAlignment.baseline,
                           textBaseline: TextBaseline.alphabetic,
                           children: [
-                            Text(
-                              '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
-                              style: text.headlineMedium!.copyWith(
-                                color: a.enabled
-                                    ? AppPalette.textPrimary
-                                    : AppPalette.textSecondary,
+                            // Flexible since the clock went to 40 (2026-08-13):
+                            // clock + countdown + switch overran the row by
+                            // 34px at 1.3x text on a 375pt phone.
+                            //
+                            // **It SHRINKS rather than truncating, and that is
+                            // the point of the `FittedBox`.** Two `Flexible`s
+                            // of equal flex split what the switch leaves, so
+                            // the wider child gives way first — and the wider
+                            // child is the clock. Ellipsis there reads `06:…`
+                            // on the one number this list exists to show,
+                            // while a test looking for `06:00` still passes
+                            // and `takeException` sees nothing. Scaling is
+                            // legible; a truncated time is not. The countdown
+                            // beside it keeps the ellipsis, where losing the
+                            // tail costs nothing.
+                            //
+                            // **The scaled clock reports an UNSCALED baseline**
+                            // — `RenderFittedBox` says so in the SDK ("without
+                            // applying any transforms or scaling that would be
+                            // applied during paint"), and this Row aligns on
+                            // baselines. So when the clock does shrink, `in 7h`
+                            // stays on the line the full-size clock would have
+                            // sat on. Left as is: the scaling only starts once
+                            // the clock outgrows its share, which on a real
+                            // phone is a hair at 1.3x and only visible at 2x —
+                            // where this column already overflows for reasons
+                            // that predate the size pass. `CrossAxisAlignment
+                            // .end` is the fix if it ever reads wrong on a
+                            // device, at the cost of moving the countdown for
+                            // everyone at every size.
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  '${a.hour.toString().padLeft(2, '0')}:${a.minute.toString().padLeft(2, '0')}',
+                                  maxLines: 1,
+                                  // 40, not 28 (Samyak — iOS's alarm list is
+                                  // the reference): the time is what you scan
+                                  // this screen for, and at 28 it sat level
+                                  // with the court/limit line under it.
+                                  style: text.displayMedium!.copyWith(
+                                    color: a.enabled
+                                        ? AppPalette.textPrimary
+                                        : AppPalette.textSecondary,
+                                  ),
+                                ),
                               ),
                             ),
                             if (inText.isNotEmpty)

@@ -42,6 +42,8 @@ class ArunodaySettings {
     this.oneTimeExtraMinutes = 0,
     this.oneTimeExtraDate,
     this.bedtimeDelayedUntil,
+    this.bedtimeDelayCall = 0,
+    this.bedtimeDelayFromMinute,
     this.soundPath,
   });
 
@@ -65,8 +67,29 @@ class ArunodaySettings {
   final int oneTimeExtraMinutes;
   final String? oneTimeExtraDate;
 
-  /// A "not sleepy yet" delayed bedtime reminder; cleared once it fires.
+  /// A "sleep late" delayed bedtime reminder; cleared once it fires.
   final DateTime? bedtimeDelayedUntil;
+
+  /// Which call the pending [bedtimeDelayedUntil] re-ring is — 2 for the
+  /// first push (the bedtime alarm itself was the first call), 3 for the next,
+  /// and so on. 0 when nothing is pending.
+  ///
+  /// A number rather than a wording, because `+1h` can be taken again on every
+  /// re-ring: the body that says "Second call" for the fourth one is simply
+  /// wrong (2026-08-13). It is not cleared when the re-ring fires — the ring
+  /// screen's next `+1h` reads it to know it is the one after this.
+  final int bedtimeDelayCall;
+
+  /// The daily bedtime's minute-of-day that the pending push chain is measured
+  /// against — null when nothing is pending.
+  ///
+  /// It exists so "did the bedtime move?" can be **asked** rather than guessed
+  /// from where the re-ring sits on the clock face
+  /// (`ArunodayController._clearOvertakenReRing`). Guessing was wrong past
+  /// twelve pushes: by then the re-ring is more than twelve hours from its
+  /// bedtime, so the shorter way round says "after" and an untouched bedtime
+  /// read as a moved one.
+  final int? bedtimeDelayFromMinute;
 
   /// Selected alarm tone (asset or absolute device path); null = app default.
   final String? soundPath;
@@ -88,6 +111,8 @@ class ArunodaySettings {
     int? oneTimeExtraMinutes,
     String? Function()? oneTimeExtraDate,
     DateTime? Function()? bedtimeDelayedUntil,
+    int? bedtimeDelayCall,
+    int? Function()? bedtimeDelayFromMinute,
     String? Function()? soundPath,
   }) =>
       ArunodaySettings(
@@ -108,6 +133,10 @@ class ArunodaySettings {
         bedtimeDelayedUntil: bedtimeDelayedUntil != null
             ? bedtimeDelayedUntil()
             : this.bedtimeDelayedUntil,
+        bedtimeDelayCall: bedtimeDelayCall ?? this.bedtimeDelayCall,
+        bedtimeDelayFromMinute: bedtimeDelayFromMinute != null
+            ? bedtimeDelayFromMinute()
+            : this.bedtimeDelayFromMinute,
         soundPath: soundPath != null ? soundPath() : this.soundPath,
       );
 
@@ -121,6 +150,8 @@ class ArunodaySettings {
         'oneTimeExtraMinutes': oneTimeExtraMinutes,
         'oneTimeExtraDate': oneTimeExtraDate,
         'bedtimeDelayedUntil': bedtimeDelayedUntil?.toIso8601String(),
+        'bedtimeDelayCall': bedtimeDelayCall,
+        'bedtimeDelayFromMinute': bedtimeDelayFromMinute,
         'soundPath': soundPath,
       };
 
@@ -140,6 +171,8 @@ class ArunodaySettings {
         bedtimeDelayedUntil: j['bedtimeDelayedUntil'] == null
             ? null
             : DateTime.parse(j['bedtimeDelayedUntil'] as String),
+        bedtimeDelayCall: j['bedtimeDelayCall'] as int,
+        bedtimeDelayFromMinute: j['bedtimeDelayFromMinute'] as int?,
         soundPath: j['soundPath'] as String?,
       );
 }

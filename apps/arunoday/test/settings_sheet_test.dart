@@ -1,3 +1,4 @@
+import 'package:arunoday/main.dart';
 import 'package:arunoday/src/controller.dart';
 import 'package:arunoday/src/settings_sheet.dart';
 import 'package:core/core.dart';
@@ -42,6 +43,20 @@ void main() {
     return c;
   }
 
+  /// Holds a press for [held], then lets go — `tester.longPress` holds for
+  /// Flutter's `kLongPressTimeout` (500ms), which these two rows stopped
+  /// answering to on 2026-08-13.
+  Future<void> hold(
+    WidgetTester tester,
+    Finder finder, {
+    Duration? held,
+  }) async {
+    final gesture = await tester.startGesture(tester.getCenter(finder));
+    await tester.pump(held ?? kResetHoldDuration * 1.1);
+    await gesture.up();
+    await tester.pumpAndSettle();
+  }
+
   /// Opens the real settings page the way the app does — it is private, and
   /// only `showSettingsSheet` can push it.
   Future<void> open(WidgetTester tester, ArunodayController c) async {
@@ -83,8 +98,7 @@ void main() {
         reason: 'the collision this test is about');
 
     await open(tester, c);
-    await tester.longPress(find.text('Wake offset from dawn'));
-    await tester.pumpAndSettle();
+    await hold(tester, find.text('Wake offset from dawn'));
 
     expect(find.text("Wake time can't be the same as the bedtime."),
         findsOneWidget,
@@ -117,8 +131,7 @@ void main() {
         reason: 'the collision this test is about');
 
     await open(tester, c);
-    await tester.longPress(find.text('Bedtime'));
-    await tester.pumpAndSettle();
+    await hold(tester, find.text('Bedtime'));
 
     expect(find.text("Bedtime can't be the same as the wake alarm."),
         findsOneWidget);
@@ -138,13 +151,67 @@ void main() {
     ));
     await open(tester, c);
 
-    await tester.longPress(find.text('Wake offset from dawn'));
-    await tester.pumpAndSettle();
+    await hold(tester, find.text('Wake offset from dawn'));
     expect(c.settings.wakeOffsetMinutes, 0);
 
-    await tester.longPress(find.text('Bedtime'));
-    await tester.pumpAndSettle();
+    await hold(tester, find.text('Bedtime'));
     expect(c.settings.bedtimeOffsetMinutes, isNull);
+  });
+
+  testWidgets('a press let go at half a second resets nothing (2026-08-13)',
+      (tester) async {
+    // The reason the hold was lengthened: at Flutter's 500ms default a press
+    // that merely lingered threw away an offset you set on purpose, with no
+    // dialog in between. Pinned as a duration, not a feeling — and this is
+    // the assertion that fails if the constant is quietly turned back down.
+    expect(kResetHoldDuration, const Duration(seconds: 1));
+    final c = await controller(const ArunodaySettings(
+      locations: [_jaipur],
+      activeLocationId: 'l1',
+      wakeOffsetMinutes: 60,
+    ));
+    await open(tester, c);
+
+    await hold(tester, find.text('Wake offset from dawn'),
+        held: const Duration(milliseconds: 500));
+    expect(c.settings.wakeOffsetMinutes, 60, reason: 'not held long enough');
+    // Letting go early is a TAP, so the picker opens — that is the feedback,
+    // and it is why an unfinished hold needs no message of its own.
+    expect(find.text('WAKE OFFSET'), findsOneWidget);
+  });
+
+  testWidgets('the ring gate sits ABOVE the settings page (2026-08-13)',
+      (tester) async {
+    // Device-caught: with an alarm ringing while settings was open, the ring
+    // screen was nowhere to be seen — you had to press back to find it, and
+    // tapping the ring notification looked like it did nothing at all,
+    // because the app was already in front showing settings.
+    //
+    // `RingGate` wrapped `home:`, which is the first ROUTE, so anything
+    // pushed covered it. It lives in `MaterialApp.builder` now, above the
+    // Navigator — asserted structurally rather than by ringing an alarm,
+    // since only a device can make the plugin ring.
+    final c = await controller(
+        const ArunodaySettings(locations: [_jaipur], activeLocationId: 'l1'));
+    await tester.pumpWidget(
+        ArunodayApp(controller: c, permissionFlow: Future<void>.value()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+          of: find.byType(RingGate), matching: find.text('SETTINGS')),
+      findsOneWidget,
+      reason: 'a pushed route must sit INSIDE the gate, or the ring screen '
+          'cannot cover it',
+    );
+
+    // Two live timers to see off, since this is the whole app rather than one
+    // page: the scrollbar's flash (a `Future.delayed`, so unmounting will not
+    // cancel it) and home's minute ticker (which dispose does).
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('two quick switch taps do not undo each other (REVIEW #20)',

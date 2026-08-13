@@ -1,9 +1,24 @@
+import 'dart:async';
+
 import 'package:core/core.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'messages.dart';
 import 'time_conflict.dart';
+
+/// How long the two settings resets want the press held — **1s, up from
+/// Flutter's 500ms `kLongPressTimeout`** (Samyak, 2026-08-13; 1.5s was tried
+/// the same day and felt like a wait).
+///
+/// These are the only gestures in either app that change a saved value with no
+/// dialog in front of them, and each one throws away a number you set on
+/// purpose. At half a second a press that merely lingered was a reset; a full
+/// second has to be meant. Letting go early costs nothing: the tile's own tap
+/// wins the arena instead and the picker opens, which reads as "not held" far
+/// better than nothing happening would.
+const Duration kResetHoldDuration = Duration(seconds: 1);
 
 // --- Offset math shared by the wake & bedtime ±1h dialogs (pure & tested).
 
@@ -56,7 +71,7 @@ class _SettingsPageState extends State<_SettingsPage> {
     if (mounted) setState(() {});
   }
 
-  /// Active "not sleepy" re-ring, if one is pending.
+  /// Active "sleep late" re-ring, if one is pending.
   DateTime? get _delayedUntil {
     final d = c.settings.bedtimeDelayedUntil;
     return (d != null && d.isAfter(DateTime.now())) ? d : null;
@@ -99,6 +114,26 @@ class _SettingsPageState extends State<_SettingsPage> {
         initialMinutes: current,
         nextDawn: dawn,
         bedtimeMinuteOfDay: bed?.round(),
+        // A callback, not a value: the answer moves with every nudge, and
+        // only the controller knows which morning's dawn to hang it off.
+        //
+        // **Two anchors, because the two lines answer different questions**
+        // (Samyak, 2026-08-13). The hint is a CONVERSION — "dawn here is about
+        // 06:51, and your offset makes that 07:11" — so it hangs off
+        // `nextDawn`, fixed for the life of the dialog; dawn is a fact about
+        // the place and near enough constant day to day, so that arithmetic
+        // holds whichever morning the alarm lands on. The countdown is a
+        // SCHEDULE — "when does this next ring" — so it walks the window.
+        //
+        // Don't "fix" this into one anchor. Walking the hint too makes a
+        // picked wake time come back a minute off, since the pick is mapped
+        // against a dawn the new offset may have moved; freezing the countdown
+        // instead empties it whenever a drafted offset puts the wake behind
+        // you. The one visible artefact is that at a large offset the hint's
+        // clock and the countdown's target can differ by a minute — that is
+        // dawn drift (~1 min/day), which this app lives with everywhere, and
+        // not a symptom of the two anchors.
+        draftRing: c.draftWakeRing,
       ),
     );
     // Collision is refused inside the dialog (Save disabled) — a returned
@@ -230,13 +265,15 @@ class _SettingsPageState extends State<_SettingsPage> {
               value: s.wakeEnabled,
               onChanged: (v) => c.update(c.settings.copyWith(wakeEnabled: v)),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Wake offset from dawn'),
-              trailing: Text(fmtOffset(s.wakeOffsetMinutes),
-                  style: text.titleMedium),
-              onTap: _editOffset,
-              onLongPress: s.wakeOffsetMinutes == 0 ? null : _resetWakeOffset,
+            _HeldReset(
+              onHeld: s.wakeOffsetMinutes == 0 ? null : _resetWakeOffset,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Wake offset from dawn'),
+                trailing: Text(fmtOffset(s.wakeOffsetMinutes),
+                    style: text.titleMedium),
+                onTap: _editOffset,
+              ),
             ),
             if (s.wakeOffsetMinutes != 0)
               Padding(
@@ -251,19 +288,21 @@ class _SettingsPageState extends State<_SettingsPage> {
               onChanged: (v) =>
                   c.update(c.settings.copyWith(bedtimeEnabled: v)),
             ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Bedtime'),
-              subtitle: Text(c.bedtimeModeDescription, style: text.bodyMedium),
-              trailing: Text(
-                c.bedtimeMinutes == null
-                    ? '—'
-                    : fmtMinutesOfDay(c.bedtimeMinutes!),
-                style: text.titleMedium,
+            _HeldReset(
+              onHeld: s.bedtimeOffsetMinutes == null ? null : _resetBedtime,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Bedtime'),
+                subtitle:
+                    Text(c.bedtimeModeDescription, style: text.bodyMedium),
+                trailing: Text(
+                  c.bedtimeMinutes == null
+                      ? '—'
+                      : fmtMinutesOfDay(c.bedtimeMinutes!),
+                  style: text.titleMedium,
+                ),
+                onTap: _editBedtime,
               ),
-              onTap: _editBedtime,
-              onLongPress:
-                  s.bedtimeOffsetMinutes == null ? null : _resetBedtime,
             ),
             if (s.bedtimeOffsetMinutes != null)
               Padding(
@@ -275,7 +314,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Bedtime again'),
-                subtitle: Text('Not sleepy — tonight only',
+                subtitle: Text('Sleep late — tonight only',
                     style: text.bodyMedium),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -392,6 +431,105 @@ class _SettingsPageState extends State<_SettingsPage> {
   }
 }
 
+/// [child] with a long press that takes [kResetHoldDuration] rather than
+/// Flutter's default.
+///
+/// Hand-built because there is no duration knob to turn: `ListTile.onLongPress`
+/// passes straight to the `InkWell` under it, and neither takes one. The
+/// recognizer is an ANCESTOR of the tile and still wins — arena victory is not
+/// scoped by depth, and at a full second the tile's own tap recognizer is still waiting
+/// for the pointer to come up, so accepting here rejects it.
+///
+/// [Feedback.forLongPress] is the buzz `InkWell` would have given: on a hold
+/// this long it is the only signal that the gesture landed, since what follows
+/// is a value quietly changing somewhere else on the page.
+class _HeldReset extends StatelessWidget {
+  const _HeldReset({required this.onHeld, required this.child});
+
+  /// Null builds no recognizer at all, so a row with nothing to reset cannot
+  /// swallow a press — same meaning `onLongPress: null` had on the tile.
+  final VoidCallback? onHeld;
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final held = onHeld;
+    if (held == null) return child;
+    return RawGestureDetector(
+      gestures: {
+        LongPressGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          () => LongPressGestureRecognizer(
+              duration: kResetHoldDuration, debugOwner: this),
+          (recognizer) => recognizer.onLongPress = () {
+            unawaited(Feedback.forLongPress(context));
+            held();
+          },
+        ),
+      },
+      child: child,
+    );
+  }
+}
+
+/// The pickers' live `in 7h 22m` (A14/A15) — what the time on screen would
+/// actually do, kept true while the dialog is open.
+///
+/// Stateful only for the tick, which re-aims at each wall-clock :00 rather
+/// than running `Timer.periodic` — the label has to flip when the minute does,
+/// not a minute after the dialog opened. The aim itself is core's
+/// [untilNextMinute], shared with Nivaat's three tickers.
+///
+/// **[at] is a callback, and that is not a style choice**: the target moves
+/// too. Sit on the bedtime picker while the clock reaches 21:56 and "the next
+/// 21:56" becomes tomorrow's; a captured `DateTime` would go past, empty the
+/// line, and stay empty until you nudged something.
+///
+/// The line is built even when [at] is null, so the dialog cannot change
+/// height under your thumb. That is cheap insurance rather than a case you
+/// can reach: see [arunodayPickerInLabel].
+class _DraftCountdown extends StatefulWidget {
+  const _DraftCountdown({required this.at});
+
+  final DateTime? Function() at;
+
+  @override
+  State<_DraftCountdown> createState() => _DraftCountdownState();
+}
+
+class _DraftCountdownState extends State<_DraftCountdown> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _arm();
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _arm() {
+    _tick?.cancel();
+    _tick = Timer(untilNextMinute(), () {
+      if (!mounted) return;
+      setState(() {});
+      _arm();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Text(
+        arunodayPickerInLabel(widget.at()),
+        style: Theme.of(context).textTheme.bodyMedium,
+        textAlign: TextAlign.center,
+      );
+}
+
 class _BedtimeDialog extends StatefulWidget {
   const _BedtimeDialog({
     required this.initialOffset,
@@ -456,6 +594,13 @@ class _BedtimeDialogState extends State<_BedtimeDialog> {
             child: Text(fmtMinutesOfDay(_absolute.toDouble()),
                 style: text.displayLarge),
           ),
+          const SizedBox(height: 4),
+          // Under the clock it describes, above the hint that explains the
+          // control (Samyak, 2026-08-13). A bedtime is a clock time, so this
+          // one is never empty: there is always a next time it reads 21:56.
+          _DraftCountdown(
+              at: () => ArunodayController.nextClockTimeAfter(
+                  DateTime.now(), _absolute)),
           const SizedBox(height: 8),
           Text(
             arunodayBedtimePickerHint(widget.autoMinutes),
@@ -506,6 +651,7 @@ class _OffsetDialog extends StatefulWidget {
   const _OffsetDialog({
     required this.initialMinutes,
     required this.nextDawn,
+    required this.draftRing,
     this.bedtimeMinuteOfDay,
   });
 
@@ -519,6 +665,10 @@ class _OffsetDialog extends StatefulWidget {
 
   /// Current bedtime minute-of-day — live collision cue (MESSAGES A16).
   final int? bedtimeMinuteOfDay;
+
+  /// When the drafted offset would next ring — the live countdown (A15).
+  /// [ArunodayController.draftWakeRing].
+  final DateTime? Function(int offsetMinutes) draftRing;
 
   @override
   State<_OffsetDialog> createState() => _OffsetDialogState();
@@ -572,6 +722,12 @@ class _OffsetDialogState extends State<_OffsetDialog> {
             onTap: _pickWakeTime,
             child: Text(fmtOffset(_minutes), style: text.displayLarge),
           ),
+          const SizedBox(height: 4),
+          // The offset alone says nothing about when you'd be woken; this is
+          // the line that does (Samyak, 2026-08-13). It answers for the
+          // morning the drafted offset really lands on, which past a few
+          // hours is not today's.
+          _DraftCountdown(at: () => widget.draftRing(_minutes)),
           const SizedBox(height: 8),
           Text(
             arunodayWakeOffsetHint(widget.nextDawn, _minutes),

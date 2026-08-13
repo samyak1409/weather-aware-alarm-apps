@@ -35,9 +35,11 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 
 ## Notifications
 
+_**No title here names the app** (2026-08-13, Samyak — Nivaat's rule since 2026-07-22). Android prints "Arunoday" in the notification header directly above the title, so `Arunoday · Bedtime` spent the scannable head of the line saying it twice; on iOS the title is AlarmKit's `label`, read inside Arunoday's own alert. Either way the app is identified before the title is._
+
 ### A1 — Wake ring (system alarm)
 
-- **Title:** `Arunoday · Dawn`
+- **Title:** `Dawn`
 - **Body:** offset 0 → `First light at {loc}. Good morning.` → `First light at Jaipur. Good morning.`
   else → `Dawn{±offset} at {loc}. Good morning.` → `Dawn+0:20 at Jaipur. Good morning.`
 - **Button:** `Stop`
@@ -45,13 +47,16 @@ Worked examples below use: Nivaat court **"Society Court"**, limit **4** (gust c
 
 ### A2 — Bedtime ring
 
-- **Title:** `Arunoday · Bedtime`
+- **Title:** `Bedtime`
 - **Body:** `Wind down — dawn comes early.`
 
 ### A3 — Bedtime "AGAIN" re-ring (after +1h)
 
-- **Title:** `Arunoday · Bedtime`
-- **Body:** `Second call — dawn does not snooze.`
+- **Title:** `Bedtime`
+- **Body:** `{ordinal} call — dawn does not snooze.` → `Second call — dawn does not snooze.` — the bedtime alarm itself was the first call, so the first `+1h` re-ring is the **second**. `arunodayBedtimeAgainBody`
+- **The ordinals run `Second` … `Twenty-fourth`, and that ceiling is worked out rather than picked** (2026-08-13, Samyak). `+1h` can be taken again on every re-ring, each push is an hour, and a push is refused once it would land at or after the next wake (A4) — a bedtime is at most 24 hours from the wake it protects, so wake 00:00 with bedtime 00:01 is the longest night there is: 01:01 is the second call, 23:01 the twenty-fourth, and the push that one offers would land at 00:01, past the wake. A slower hand only shortens the run, since the hour counts from the tap and not from the ring.
+- **Past the words:** `Still up — dawn does not snooze.` — **out of reach while the wake alarm is on, and reachable the moment it is off**: the cap is the wake, so switching the wake off removes it and the twenty-fifth push has no ordinal left. Rare, but a line a user can genuinely see rather than the `—`-clock kind of defence.
+  _(It was the fixed string `Second call — dawn does not snooze.` until 2026-08-13, which was simply wrong from the third push on.)_
 
 ## Ring screen
 
@@ -59,7 +64,9 @@ The screen itself is shared — see **X1**. Arunoday is the only app that adds a
 
 - **A4 — Bedtime ritual** (bedtime alarms only; Android only, since AlarmKit's alert is Stop-only):
   - Wake line: `WAKE {TODAY|TOMORROW} {HH:MM}` → `WAKE TOMORROW 07:11` — `TODAY` when the bedtime itself ran past midnight, which wakes you the same calendar day
-  - `NOT SLEEPY` + button `+1h`
+  - `SLEEP LATE` + button `+1h` — and the button can be taken again every time the re-ring sounds, an hour at a time, because a re-ring is a bedtime alarm too (`ArunodayIds.isBedtime` covers `bedtimeAgain`). Each call says which it is (A3)
+  - **The row disappears when a push would land at or after the next wake** (2026-08-13, Samyak; `ArunodayController.canDelayBedtime`): the nudge exists to protect that wake, so a reminder after you were meant to be up is meaningless — and without a stop, `+1h` walks the bedtime reminder round the clock into tomorrow afternoon. A disabled wake alarm is not a wake to protect and does not hold the button back. Nothing is said in its place: the wake line stays, and STOP is the whole screen, which is itself the answer
+  - **It said `NOT SLEEPY` until 2026-08-13** (Samyak). This is the button for the night you still have something to finish, and naming it after a feeling made it read as an excuse — the opposite of what an app built on keeping the dawn should say at bedtime. `SLEEP LATE` names the choice instead. The settings row's subtitle (A11) moved with it.
 
 ## Home screen
 
@@ -77,15 +84,17 @@ The screen itself is shared — see **X1**. Arunoday is the only app that adds a
 ## Settings sheet
 
 - **A10 — Title:** `SETTINGS`
-- **A11 — Rows** (grouped by ritual, 2026-07-20): `Wake alarm` (switch) · `Wake offset from dawn` (trailing `{±offset}` → `+0:20`) · `Bedtime alarm` (switch) · `Bedtime` (subtitle `Auto` / `Auto{±offset}` — sentence-case here, unlike A7's `AUTO`; trailing `{HH:MM}` → `21:56`) · `Bedtime again` (subtitle `Not sleepy — tonight only`, trailing `{HH:MM}` and a ✕ that cancels it; **only while a re-ring is pending**) · `Alarm sound` (trailing: tone name, e.g. `Dawn Bells`) · section `APPEARANCE` (X7) · section `LOCATIONS` (a `+` opens X5; each saved place is a row — tap to make it active, bin to delete)
+- **A11 — Rows** (grouped by ritual, 2026-07-20): `Wake alarm` (switch) · `Wake offset from dawn` (trailing `{±offset}` → `+0:20`) · `Bedtime alarm` (switch) · `Bedtime` (subtitle `Auto` / `Auto{±offset}` — sentence-case here, unlike A7's `AUTO`; trailing `{HH:MM}` → `21:56`) · `Bedtime again` (subtitle `Sleep late — tonight only`, trailing `{HH:MM}` and a ✕ that cancels it; **only while a re-ring is pending**) · `Alarm sound` (trailing: tone name, e.g. `Dawn Bells`) · section `APPEARANCE` (X7) · section `LOCATIONS` (a `+` opens X5; each saved place is a row — tap to make it active, bin to delete)
 - **A12 — Hints**, each shown **only when there is something to undo**: `Long-press wake offset to reset to dawn.` (offset ≠ 0) · `Long-press bedtime to return to auto.` (bedtime manually set)
+  _(**The hold is 1s, not Flutter's 500ms default** — 2026-08-13, Samyak; `kResetHoldDuration`, after 1.5s was tried the same day and felt like a wait. These two are the only gestures in either app that change a saved value with no dialog in front of them, and each throws away a number you set on purpose. Letting go early is not a dead press: the tap wins instead and the picker opens, which reads as "not held" better than nothing happening would.)_
   _(Either long-press can be **refused**, and then it shows the matching A16 collision line in a snackbar — no new string. Added 2026-08-05: the resets used to write straight past the check the dialogs enforce, which is the one way to end up with wake and bedtime on the same minute. Saying why beats doing nothing, because a silent no-op reads as a missed press.)_
 - **A13 — Yearly sleep readout:** `Year here: sleep {Xh Ym} (summer) to {Xh Ym} (winter) — the natural swing of dawn at this latitude.`
   → `Year here: sleep 7h 33m (summer) to 8h 27m (winter) — the natural swing of dawn at this latitude.`
-- **A14 — Bedtime picker:** title `BEDTIME` · the big time (tap it → system time picker, helpText `BEDTIME`) · hint `auto is {HH:MM} · tap the time to pick exactly` → `auto is 21:56 · tap the time to pick exactly` — `{HH:MM}` is the **sleep plan's** bedtime, the anchor the offset is measured from, so it is quoted whether or not you have nudged bedtime off it · nudge buttons `−1h` / `+1h` (each disabled at its end of the ±12h range) · buttons `Cancel`, `Save`
+- **A14 — Bedtime picker:** title `BEDTIME` · the big time (tap it → system time picker, helpText `BEDTIME`) · countdown `in {Xh Ym}` → `in 3h 05m` · hint `auto is {HH:MM} · tap the time to pick exactly` → `auto is 21:56 · tap the time to pick exactly` — `{HH:MM}` is the **sleep plan's** bedtime, the anchor the offset is measured from, so it is quoted whether or not you have nudged bedtime off it · nudge buttons `−1h` / `+1h` (each disabled at its end of the ±12h range) · buttons `Cancel`, `Save`
   _(Corrected 2026-07-31. The hint was written `{auto is {HH:MM} | manual}`, and there is no `manual` form: the null it branched on meant **no sleep plan** — i.e. no location — not a manually-set bedtime, which leaves the auto value perfectly quotable. No location also means no settings page to open this from, so the branch could never render. The dialog behind it failed the same way, anchoring to a fabricated 22:00 and then silently discarding whatever you saved; it now declines to open at all.)_
-- **A15 — Wake-offset picker:** title `WAKE OFFSET` · the big offset (tap it → system time picker, helpText `WAKE TIME`) · hint `dawn {HH:MM} · wake {HH:MM}` → `dawn 06:51 · wake 07:11` (anchor first, then the result) · second line `tap the offset to pick the wake time` · nudge buttons `−1h` / `+1h` (also disabled at their ends) · buttons `Cancel`, `Save`
+- **A15 — Wake-offset picker:** title `WAKE OFFSET` · the big offset (tap it → system time picker, helpText `WAKE TIME`) · countdown `in {Xh Ym}` → `in 7h 22m` · hint `dawn {HH:MM} · wake {HH:MM}` → `dawn 06:51 · wake 07:11` (anchor first, then the result) · second line `tap the offset to pick the wake time` · nudge buttons `−1h` / `+1h` (also disabled at their ends) · buttons `Cancel`, `Save`
   _(Corrected 2026-07-31, same shape as A14. The hint had a second form `relative to civil dawn`, and the second line was documented as appearing "only when a location is set" — both describing a dialog opened with no dawn, which cannot happen. Worse, that state also short-circuited the wake↔bedtime collision check (A16): the one case that produced the alternative wording was the one case where Save stopped being validated. Dawn is required now, both lines are unconditional, and the check always runs.)_
+- **The countdown on both pickers** (`arunodayPickerInLabel`, 2026-08-13, Samyak — the same feedback Nivaat's alarm editor has had since 2026-07-26): sits directly under the big time, above the hint, and answers "when would this actually ring?" while you nudge. **Sentence case, no `· ` prefix** — it stands among lower-case hints inside a dialog, not in A6/A7's ALL-CAPS label strip. Same minute-truncated number as A6/A7. It walks to the morning the drafted alarm really lands on rather than shifting today's answer, since each morning has its own dawn. **Neither picker can render it empty**, and the builder's empty branch is defence of the same kind as A6/A7's `—` clocks: a bedtime is a clock time and always has a next occurrence, and a drafted wake offset walks the whole window (`draftWakeRing`), so even −12h lands on the following morning rather than behind you. The line is built either way so the dialog cannot change height under your thumb.
 - **A16 — Validation:** wake↔bedtime collisions show live inside the wake-offset / bedtime dialogs (`Bedtime can't be the same as the wake alarm.` / `Wake time can't be the same as the bedtime.`) with Save disabled — **and in a snackbar when a long-press reset would cause one** (2026-08-05; same two strings, see A12). Two refusals live in the **place picker**, checked before the place is named or saved: polar → `No daily dawn here (polar) — Arunoday needs a real dawn.` (same wording for Tromsø etc.), and duplicate → `Same dawn as {name} — already added.` → `Same dawn as Jaipur — already added.` (Arunoday dedupes by **dawn time**, since two towns that share a dawn are one alarm; Nivaat dedupes by distance instead — N21.) Both come from `ArunodayController.placeRefusal`: home and settings can each add a location, and until 2026-07-31 each carried its own **inline copy** of this pair — two strings to keep in step, neither reachable by a test.
   _(Bedtime **is** allowed to land on a pending re-ring's minute — the re-ring wins that slot so only one alarm sounds, and if the re-ring is cancelled the daily bedtime takes it back.)_
   _(The polar refusal replaced a whole no-dawn **screen** you could strand yourself on; refusing at add means it can never be reached.)_
@@ -106,7 +115,7 @@ _Every body is now **just the evidence** (2026-07-22): the verdict lives in the 
 - **Body:** `{windgust} · checked {checktime}` → `wind 3 (≤4) · gusts 12 (≤15) km/h · checked 06:00`
 - **Button:** `Stop`
 - The ring carries its freshness too (2026-07-22) — a ring booked from last night's forecast says `· checked 17 Jul 22:00`, so a 6am reading is never confused with a 12-hour-old one. Its N4 history row quotes the **same instant** but words it `last checked 06:00` — plain `checked` is the ring's alone, because a single check approved it.
-- **On screen:** if Nivaat is open on Android when this fires, the shared ring screen (X1) appears and shows this body verbatim. Nivaat adds no actions of its own to it, and on iOS there is no such screen at all.
+- **On screen:** if Nivaat is open on Android when this fires, the shared ring screen (X1) appears and shows this body verbatim, under the court name and the clock this title carries. Nivaat adds no actions of its own to it, and on iOS there is no such screen at all.
 
 ### N2 — The morning's card (one notification, rewritten as the morning resolves)
 
@@ -218,9 +227,11 @@ Rows never age, so this is pure formatting of what that push recorded — no clo
 
 ### X1 — Ring screen (in-app overlay while an alarm sounds; **Android only**)
 
-Core's `RingGate` overlays whichever app is open when one of its alarms rings. Top to bottom: the app label (`ARUNODAY` / `NIVAAT`), the alarm's **scheduled** `HH:MM` (not the wall clock — a ring can start a second early and this screen doesn't rebuild), **the ring notification's own body** (A1 / A2 / A3 / N1 — never a second wording), any app-specific actions (Arunoday's A4; Nivaat adds none), then the Stop button.
+Core's `RingGate` overlays whichever app is open when one of its alarms rings. Top to bottom: the app label (`ARUNODAY` / `NIVAAT`), the alarm's **scheduled** `HH:MM` (not the wall clock — a ring can start a second early and this screen doesn't rebuild), **the ring notification's own body** led by **which alarm** this is (A1 / A2 / A3 / N1 — never a second wording), any app-specific actions (Arunoday's A4; Nivaat adds none), then the Stop button.
 
-- **Stop button:** `STOP` (letter-spaced)
+- **Which alarm:** `{court} · {body}` → `Society Court · wind 3 (≤4) · gusts 12 (≤15) km/h · checked 06:00` — **Nivaat only** (2026-08-13, Samyak: the screen never named the court, so two alarms looked alike on the one screen you read half awake). It **leads the body line**, in the order N1's own title already uses (`{court} · …`); it had a small line of its own above the clock for half a day and on a real screen that read as a third thing to take in at 6am. Arunoday passes none: one wake and one bedtime, already told apart by the body itself. An unknown court — a deleted alarm, or a ring that cold-started the app before its store finished loading — leaves the body exactly as the notification wrote it. `ringScreenBody`
+- **Stop button:** `STOP` (letter-spaced, 20px, and the one label outside the home screens that follows X7's bold switch)
+- **Sizes (2026-08-13):** the clock is **130** — near the physical limit for five characters on a 375pt phone, so it shrinks to fit rather than wrapping. STOP went 14 → 22 → 28 → 40 → **20** over one afternoon on a real device; the number is a button label, not a headline.
 - **On iOS there is no such screen.** Rings there are AlarmKit's, so the OS draws its own Stop-only alert and `Alarm.ringing` never fires — which is also why Arunoday's `+1h` ritual is Android-only.
 
 ### X2 — Alarms-off banner (home screen; iOS, only after the user has ANSWERED the AlarmKit prompt with a deny)
@@ -260,7 +271,7 @@ Core's `RingGate` overlays whichever app is open when one of its alarms rings. T
 ### X7 — Appearance settings (Arunoday settings page · Nivaat settings page, header `SETTINGS`)
 
 - **Section label:** `APPEARANCE`
-- **Bold-type toggle:** title `Bold clocks & titles` · subtitle `Heavier type on the home screen` (ships OFF)
+- **Bold-type toggle:** title `Bold clocks & titles` · subtitle `Heavier type on the home screen` — **ships ON since 2026-08-13** (it shipped OFF from 2026-07-20). The heroes grew the same day — home clock 72, intro sentence 64, ring clock 130 — and at those sizes the w200 thin face reads washed out where w700 reads deliberate (Samyak). Off is one tap away and is still exactly the old look
 - **Icon picker:** title `App icon` · three thumbnails with labels — Arunoday `Horizon` (default) / `Rays` / `Dawn`; Nivaat `Shuttle` (default) / `Calm` / `Crest`. Android launchers may take a moment to show the new icon
 - **Android close notice** (dialog, **Android only**, before the switch — 2026-08-01): title `CHANGE APP ICON` · body `Android will close {AppName} to apply the new icon.` → `Android will close Nivaat to apply the new icon.` · button `OK` (one). `appIconRestartWarning`
   - **It informs, it does not ask.** No Cancel: tapping a thumbnail already said what you want, so a second choice would be invented. `OK` applies the switch and the app goes immediately (`finishAndRemoveTask`, since the wait read as a freeze). Tapping the barrier backs out and changes nothing — **the only way out now**, so the dialog must stay `barrierDismissible`; a test taps it.

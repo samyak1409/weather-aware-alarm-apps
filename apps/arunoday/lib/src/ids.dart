@@ -7,13 +7,13 @@
 ///
 ///     1000 + slot   wake alarm
 ///     2000 + slot   bedtime alarm
-///     3000          bedtime "not sleepy" re-ring (single — no slot)
+///     3000          bedtime "sleep late" re-ring (single — no slot)
 ///
 /// **A block's width must exceed the largest index it can ever hold** (see
 /// CLAUDE.md). The index here is a day-slot, provably `0..slots-1`, so 1000
 /// is ~140x headroom. Don't compact these to 10/20/30: a wider window would
 /// then push a wake id into the bedtime block, and [ArunodayIds.isBedtime]
-/// would turn true for a WAKE alarm — putting a "+1h not sleepy" button on
+/// would turn true for a WAKE alarm — putting a "+1h sleep late" button on
 /// the dawn ring screen.
 library;
 
@@ -29,7 +29,7 @@ class ArunodayIds {
   static const int wakeBlock = 1000;
   static const int bedtimeBlock = 2000;
 
-  /// The "not sleepy — ring bedtime again in an hour" reminder. It sits
+  /// The "sleep late — ring bedtime again in an hour" reminder. It sits
   /// inside the bedtime range deliberately: [isBedtime] is what tells the
   /// ring screen to offer the bedtime ritual, and this ring must get it.
   static const int bedtimeAgain = 3000;
@@ -55,6 +55,6 @@ class ArunodayIds {
   static int bedtime(DateTime day) => bedtimeBlock + dayNumber(day) % slots;
 
   /// True for every bedtime ring — the daily ones AND the re-ring. Drives the
-  /// ring screen's "+1h not sleepy" action, so it must cover [bedtimeAgain].
+  /// ring screen's "+1h sleep late" action, so it must cover [bedtimeAgain].
   static bool isBedtime(int id) => id >= bedtimeBlock && id <= bedtimeAgain;
 }

@@ -93,7 +93,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   /// app spent suspended — see the twin in `home_screen.dart`.
   void _armMinuteTicker() {
     _minuteTicker?.cancel();
-    _minuteTicker = Timer(nivaatUntilNextMinute(), () {
+    _minuteTicker = Timer(untilNextMinute(), () {
       if (!mounted) return;
       setState(() {});
       _armMinuteTicker();

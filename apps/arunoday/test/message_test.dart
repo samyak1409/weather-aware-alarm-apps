@@ -1,9 +1,13 @@
+import 'package:alarm/alarm.dart';
+import 'package:arunoday/src/bedtime_actions.dart';
 import 'package:arunoday/src/controller.dart';
 import 'package:arunoday/src/home_screen.dart';
+import 'package:arunoday/src/ids.dart';
 import 'package:arunoday/src/messages.dart';
 import 'package:arunoday/src/settings_sheet.dart';
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -30,8 +34,20 @@ void main() {
   final dawn = DateTime(2026, 7, 18, 6, 51);
   final wake = DateTime(2026, 7, 18, 7, 11);
 
+  /// A whole picker countdown line — the number itself is whatever the real
+  /// dawn makes it, so the pickers are asserted on the shape.
+  final inLabel = RegExp(r'^in \d+h \d{2}m$');
+
   group('A1 — wake ring', () {
-    test('title', () => expect(kArunodayWakeTitle, 'Arunoday · Dawn'));
+    test('title, with no app name in it', () {
+      // The shade already prints "Arunoday" above this line, and iOS shows it
+      // inside Arunoday's own AlarmKit alert — so naming the app here read as
+      // a stutter (2026-08-13). Nivaat's titles have followed the same rule
+      // since 2026-07-22; asserted, not just observed, because the prefix is
+      // the kind of thing that grows back.
+      expect(kArunodayWakeTitle, 'Dawn');
+      expect(kArunodayWakeTitle, isNot(contains('Arunoday')));
+    });
 
     test('body names first light only when the wake IS the dawn', () {
       expect(arunodayWakeBody('Jaipur', 0),
@@ -50,9 +66,24 @@ void main() {
 
   group('A2/A3 — bedtime rings', () {
     test('both share one title; the bodies differ', () {
-      expect(kArunodayBedtimeTitle, 'Arunoday · Bedtime');
+      expect(kArunodayBedtimeTitle, 'Bedtime');
+      expect(kArunodayBedtimeTitle, isNot(contains('Arunoday')));
       expect(kArunodayBedtimeBody, 'Wind down — dawn comes early.');
-      expect(kArunodayBedtimeAgainBody, 'Second call — dawn does not snooze.');
+      // The re-ring counts: `+1h` can be taken again on every re-ring, so a
+      // fixed "Second call" was wrong from the third push on (2026-08-13).
+      expect(arunodayBedtimeAgainBody(2), 'Second call — dawn does not snooze.');
+      expect(arunodayBedtimeAgainBody(3), 'Third call — dawn does not snooze.');
+      expect(
+          arunodayBedtimeAgainBody(8), 'Eighth call — dawn does not snooze.');
+      // The ceiling is worked out, not guessed: pushes are an hour each and
+      // refused at the wake, and a bedtime is at most 24h from the wake it
+      // protects — wake 00:00 with bedtime 00:01 makes 23:01 the twenty-
+      // fourth call and its own push lands past the wake.
+      expect(arunodayBedtimeAgainBody(24),
+          'Twenty-fourth call — dawn does not snooze.');
+      // Past the ordinals — out of reach while the wake alarm is ON, and
+      // reachable the moment it is off, since the cap IS the wake.
+      expect(arunodayBedtimeAgainBody(25), 'Still up — dawn does not snooze.');
     });
   });
 
@@ -164,6 +195,27 @@ void main() {
     });
   });
 
+  group('A14/A15 — the pickers\' countdown', () {
+    test('stands alone, sentence-case, on the same minute-truncated number',
+        () {
+      // Nivaat's editor exactly, not home's caps strip: it sits under the
+      // dialog's own clock among lower-case hints, with no ` · ` to join.
+      expect(arunodayPickerInLabel(wake, now: DateTime(2026, 7, 17, 23, 49)),
+          'in 7h 22m');
+      expect(arunodayPickerInLabel(wake, now: DateTime(2026, 7, 17, 23, 49, 59)),
+          'in 7h 22m', reason: 'the stray 59s must not round the minute up');
+    });
+
+    test('empty is DEFENCE — neither picker can actually reach it', () {
+      // Kept for the same reason home's `—` clocks are (see A6/A7): the
+      // honest alternative is a force-unwrap. A bedtime is a clock time and
+      // always has a next occurrence, and a drafted wake offset walks the
+      // whole window, so even −12h lands on the following morning.
+      expect(arunodayPickerInLabel(null), '');
+      expect(arunodayPickerInLabel(dawn, now: wake), '');
+    });
+  });
+
   group('A8 — footer', () {
     test('today, with sunrise', () {
       expect(
@@ -240,6 +292,73 @@ void main() {
     return c;
   }
 
+  testWidgets('A4 — the ring-screen ritual: SLEEP LATE, +1h, and the wake it '
+      'protects', (tester) async {
+    // The wake line had a builder and a test; the two labels beside it were
+    // only ever asserted through a stand-in `Text` in core's X1 case, so this
+    // widget's own words were unlocked until 2026-08-13 — the day one of them
+    // changed. `NOT SLEEPY` named a feeling and read as an excuse; `SLEEP
+    // LATE` names the choice (Samyak).
+    final c = await controller(
+      settings: const ArunodaySettings(
+        locations: [
+          SavedLocation(id: 'l1', name: 'Jaipur', lat: 26.91, lon: 75.79)
+        ],
+        activeLocationId: 'l1',
+      ),
+    );
+    // Rebuilt rather than pumped after the edit below: these actions are
+    // built once, when the ring screen appears, and nothing changes the wake
+    // mid-ring in the app.
+    Future<void> show() => tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: BedtimeActions(
+              controller: c,
+              ringingAlarm: AlarmSettings(
+                id: ArunodayIds.bedtimeAgain,
+                dateTime: DateTime(2026, 7, 17, 21, 56),
+                assetAudioPath: 'assets/sounds/arunoday_dawn.wav',
+                volumeSettings: VolumeSettings.fixed(),
+                notificationSettings: const NotificationSettings(
+                  title: 'Bedtime',
+                  body: 'Second call — dawn does not snooze.',
+                ),
+              ),
+            ),
+          ),
+        ));
+    // Aim the wake hours out first. Without this the test reads differently
+    // at 5am than at 5pm: within an hour of the wake there is no room for a
+    // push and the row is deliberately gone (the second half below).
+    Future<void> aimWake(int minutes) async {
+      final dawn = c.nextWake!
+          .subtract(Duration(minutes: c.settings.wakeOffsetMinutes));
+      await c.update(c.settings.copyWith(
+          wakeOffsetMinutes: DateTime.now()
+              .add(Duration(minutes: minutes))
+              .difference(dawn)
+              .inMinutes));
+    }
+
+    await aimWake(360);
+    await show();
+
+    expect(find.text('SLEEP LATE'), findsOneWidget,
+        reason: 'the label the user reads at bedtime');
+    expect(find.text('+1h'), findsOneWidget, reason: 'the only action here');
+    expect(find.textContaining('WAKE '), findsOneWidget,
+        reason: 'which wake this bedtime is protecting (A4)');
+
+    // With less than an hour left before the wake there is nothing to offer:
+    // a push would ring after you were meant to be up (2026-08-13). The wake
+    // line stays — that is the sentence the whole ritual is about.
+    await aimWake(30);
+    await show();
+    expect(find.text('SLEEP LATE'), findsNothing);
+    expect(find.text('+1h'), findsNothing);
+    expect(find.textContaining('WAKE '), findsOneWidget);
+  });
+
   group('A16 — place-picker refusals', () {
     // Unasserted until 2026-07-31, and worse, duplicated verbatim in the home
     // screen and the settings sheet — two inline copies of one string, neither
@@ -292,6 +411,70 @@ void main() {
             'brought in line with, so it has to hold here too');
   });
 
+  testWidgets('A9 — the intro survives a small phone at large text',
+      (tester) async {
+    // The hero went to 64 on 2026-08-13 and the 1:2 spacer rhythm has no give
+    // in it: measured 55px over the bottom of a 375pt phone at 1.3x, and the
+    // OLD 28px was already 432px over at 2x — so this was broken for anyone
+    // with large text before the size was ever touched. It fills the screen
+    // when it fits and scrolls when it does not.
+    tester.view.physicalSize = const Size(375, 667); // the smallest we support
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller();
+
+    for (final scale in [1.0, 1.3, 2.0]) {
+      await tester.pumpWidget(MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: HomeScreen(controller: c),
+        ),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'overflowed at ${scale}x');
+      expect(find.text('Wake with the dawn.'), findsOneWidget);
+    }
+  });
+
+  testWidgets('A6/A7/A8 — the ARMED home survives large text too',
+      (tester) async {
+    // The empty intro got its fills-or-scrolls guard first, and the armed
+    // screen — which carries a 72pt clock, a 40pt one and four label lines —
+    // did not. Measured on a 375pt phone it ran 30px over at 1.3x (a break
+    // this size pass introduced) and 718px at 2x (483px before it).
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller(
+      settings: const ArunodaySettings(
+        locations: [
+          SavedLocation(id: 'l1', name: 'Jaipur', lat: 26.91, lon: 75.79)
+        ],
+        activeLocationId: 'l1',
+        wakeOffsetMinutes: 20,
+      ),
+    );
+
+    for (final scale in [1.0, 1.3, 2.0]) {
+      await tester.pumpWidget(MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: HomeScreen(controller: c),
+        ),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'overflowed at ${scale}x');
+      expect(find.textContaining('WAKE · DAWN'), findsOneWidget);
+      // The hero is `FittedBox`ed like the ring clock, so it shrinks rather
+      // than wrapping — and a wrap would be silent now that this column
+      // scrolls. `maxLines: 1` is what turns a wrap into this flag.
+      final hero = tester.renderObject<RenderParagraph>(find.descendant(
+          of: find.byType(FittedBox), matching: find.byType(RichText)));
+      expect(hero.didExceedMaxLines, isFalse,
+          reason: 'the wake clock must never wrap at ${scale}x');
+    }
+  });
+
   testWidgets('A10/A11/A12 — settings header, rows and hints', (tester) async {
     // Tall viewport: the settings page is one long ListView, and a child that
     // never scrolls into the 600pt default is never mounted, so `find.text`
@@ -303,18 +486,27 @@ void main() {
     // Everything switched on and nudged off its default, because three of
     // these rows only exist when there is something to undo: both long-press
     // hints appear only once an offset is set, and `Bedtime again` only while
-    // a "not sleepy" re-ring is pending.
+    // a "sleep late" re-ring is pending.
     final c = await controller(
-      settings: ArunodaySettings(
-        locations: const [
+      settings: const ArunodaySettings(
+        locations: [
           SavedLocation(id: 'l1', name: 'Jaipur', lat: 26.91, lon: 75.79)
         ],
         activeLocationId: 'l1',
         wakeOffsetMinutes: 20,
-        bedtimeOffsetMinutes: 30,
-        bedtimeDelayedUntil: DateTime.now().add(const Duration(minutes: 30)),
       ),
     );
+    // The bedtime is pinned ten minutes BEHIND now, which is where a bedtime
+    // that has just rung sits — a pending re-ring is dropped when the bedtime
+    // moves past it (2026-08-13), so a fixed offset would delete this row for
+    // an hour every evening and the test would fail only then.
+    final auto = c.plan!.bedtimeMinutes.round();
+    final justRang = DateTime.now().subtract(const Duration(minutes: 10));
+    await c.update(c.settings.copyWith(
+      bedtimeOffsetMinutes: () =>
+          (justRang.hour * 60 + justRang.minute - auto) % 1440,
+      bedtimeDelayedUntil: () => DateTime.now().add(const Duration(minutes: 30)),
+    ));
     // The settings page is private and pushed by `showSettingsSheet`, so open
     // it the way the app does rather than reaching past the front door.
     await tester.pumpWidget(MaterialApp(
@@ -341,7 +533,7 @@ void main() {
     }
     expect(find.text('APPEARANCE'), findsOneWidget);
     expect(find.text('LOCATIONS'), findsOneWidget);
-    expect(find.text('Not sleepy — tonight only'), findsOneWidget,
+    expect(find.text('Sleep late — tonight only'), findsOneWidget,
         reason: "A11's `Bedtime again` subtitle");
     expect(find.text('Long-press wake offset to reset to dawn.'),
         findsOneWidget);
@@ -391,6 +583,18 @@ void main() {
     );
     expect(find.text('tap the offset to pick the wake time'), findsOneWidget,
         reason: 'the invitation is unconditional — the tap always works');
+    // The countdown to what this offset would ARM, live under the offset
+    // itself (2026-08-13). By shape, since the real dawn decides the number —
+    // and exactly one, because the slot is built even when it is empty.
+    expect(find.textContaining(inLabel), findsOneWidget,
+        reason: 'A15 countdown');
+    // Nudging redraws it: this is feedback on the draft, not a readout of
+    // what is already saved.
+    final before = tester.widget<Text>(find.textContaining(inLabel)).data;
+    await tester.tap(find.text('+1h'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(find.textContaining(inLabel)).data,
+        isNot(before));
     for (final b in ['−1h', '+1h', 'Cancel', 'Save']) {
       expect(find.text(b), findsOneWidget, reason: 'A15 button "$b"');
     }
@@ -406,6 +610,8 @@ void main() {
       tester.widget<Text>(find.textContaining('tap the time to pick')).data,
       matches(RegExp(r'^auto is \d{2}:\d{2} · tap the time to pick exactly$')),
     );
+    expect(find.textContaining(inLabel), findsOneWidget,
+        reason: 'A14 countdown — a bedtime always has a next occurrence');
     for (final b in ['−1h', '+1h', 'Cancel', 'Save']) {
       expect(find.text(b), findsOneWidget, reason: 'A14 button "$b"');
     }

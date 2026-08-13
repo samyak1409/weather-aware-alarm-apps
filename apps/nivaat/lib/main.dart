@@ -121,18 +121,33 @@ class NivaatApp extends StatelessWidget {
         title: 'Nivaat',
         debugShowCheckedModeBanner: false,
         theme: buildOledTheme(AppPalette.wind, heavyType: heavy),
+        // `builder`, not around `home`: the ring screen has to cover the
+        // WHOLE navigator, settings and sheets included (see RingGate).
+        // Listening to the controller here is what lets the court name arrive
+        // late — a ring cold-starts the app, and on Android `init()` runs
+        // after the first frame, so the screen draws before there are any
+        // alarms to look it up in.
+        builder: (_, navigator) => ListenableBuilder(
+          listenable: controller,
+          builder: (_, nav) => RingGate(
+            appName: 'NIVAAT',
+            // The court, the way N1's title leads with it — it is what tells
+            // two alarms apart, and the ring screen never named it
+            // (2026-08-13).
+            alarmLabel: (alarm) => controller.courtNameForRing(alarm.id),
+            // A ring starting or being stopped resyncs immediately, so the
+            // rang row is in history while the alarm still sounds (Rule 1).
+            onRingingChanged: () => unawaited(controller.resync()),
+            child: nav!,
+          ),
+          child: navigator,
+        ),
         home: child,
       ),
-      child: RingGate(
-        appName: 'NIVAAT',
-        // A ring starting or being stopped resyncs immediately, so the rang
-        // row is in history while the alarm still sounds (Rule 1 logs it).
-        onRingingChanged: () => unawaited(controller.resync()),
-        child: HomeScreen(
-          controller: controller,
-          permissionFlow: permissionFlow,
-          batteryFlow: batteryFlow,
-        ),
+      child: HomeScreen(
+        controller: controller,
+        permissionFlow: permissionFlow,
+        batteryFlow: batteryFlow,
       ),
     );
   }

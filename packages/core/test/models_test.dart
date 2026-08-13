@@ -59,6 +59,8 @@ void main() {
         oneTimeExtraMinutes: 60,
         oneTimeExtraDate: '2026-07-13',
         bedtimeDelayedUntil: DateTime(2026, 7, 13, 22, 46),
+        bedtimeDelayCall: 4,
+        bedtimeDelayFromMinute: 1316,
         soundPath: 'assets/sounds/arunoday_dawn.wav',
       );
       final back = ArunodaySettings.fromJson(s.toJson());
@@ -67,6 +69,13 @@ void main() {
       expect(back.wakeEnabled, isFalse);
       expect(back.oneTimeExtraDate, '2026-07-13');
       expect(back.bedtimeDelayedUntil, DateTime(2026, 7, 13, 22, 46));
+      // The re-ring's two pieces of metadata (2026-08-13), and losing either
+      // fails in silence rather than loudly: the count resets, so the next
+      // push says `Third call` on the fifth; and the mark goes null, which
+      // switches the whole "the bedtime moved past it" rule off, since that
+      // rule returns early when it has nothing to compare against.
+      expect(back.bedtimeDelayCall, 4);
+      expect(back.bedtimeDelayFromMinute, 1316);
       expect(back.soundPath, 'assets/sounds/arunoday_dawn.wav');
       expect(back.locations.single.name, 'A');
     });
@@ -83,6 +92,8 @@ void main() {
       expect(s.bedtimeOffsetMinutes, isNull);
       expect(s.wakeEnabled, isTrue);
       expect(s.bedtimeDelayedUntil, isNull);
+      expect(s.bedtimeDelayCall, 0, reason: 'no chain, no call number');
+      expect(s.bedtimeDelayFromMinute, isNull);
       expect(() => ArunodaySettings.fromJson(const {}), throwsA(anything),
           reason: 'no migration: the parser reads the shape this build writes');
     });

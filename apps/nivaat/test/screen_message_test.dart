@@ -1,12 +1,15 @@
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nivaat/main.dart';
 import 'package:nivaat/src/alarm_sheet.dart';
 import 'package:nivaat/src/background_banner.dart';
 import 'package:nivaat/src/controller.dart';
 import 'package:nivaat/src/courts_sheet.dart';
 import 'package:nivaat/src/history_sheet.dart';
 import 'package:nivaat/src/home_screen.dart';
+import 'package:nivaat/src/ids.dart';
 import 'package:nivaat/src/settings_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -79,6 +82,30 @@ void main() {
             'bound sits between so centring cannot come back');
   });
 
+  testWidgets('N14 — the intro survives a small phone at large text',
+      (tester) async {
+    // Twin of Arunoday's A9 case, and for the same reason: the hero went to
+    // 64 on 2026-08-13, the 1:2 spacer rhythm has no give, and at a raised
+    // system text size the sentence ran off the bottom — already true at the
+    // old 28px at 2x. Fills when it fits, scrolls when it does not.
+    tester.view.physicalSize = const Size(375, 667); // the smallest we support
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller();
+
+    for (final scale in [1.0, 1.3, 2.0]) {
+      await tester.pumpWidget(MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: HomeScreen(controller: c),
+        ),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'overflowed at ${scale}x');
+      expect(find.text('The windless alarm.'), findsOneWidget);
+    }
+  });
+
   testWidgets('N13 — the background caveat rides the armed home', (tester) async {
     final c = await controller(
       courts: [court],
@@ -95,6 +122,42 @@ void main() {
     expect(nivaatBackgroundNote, isNot(contains('online')),
         reason: '"online" reads as SIGNED IN to a general user, and this app '
             'has no account to sign in to (2026-07-31)');
+  });
+
+  testWidgets('N11 — an alarm row does not overrun at large text',
+      (tester) async {
+    // The row's clock went 28 → 40 on 2026-08-13 and clock + countdown +
+    // switch then overran the row by 34px at 1.3x on a 375pt phone. (The
+    // outer column still overflows at 2.0x — that predates the size change
+    // and is not what this pins.)
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller(
+      courts: [court],
+      alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+    );
+
+    for (final scale in [1.0, 1.3]) {
+      await tester.pumpWidget(MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: HomeScreen(controller: c),
+        ),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'overflowed at ${scale}x');
+      expect(find.text('06:00'), findsOneWidget);
+      // **Whole, not ellipsized.** `findsOneWidget` above passes either way —
+      // a `Text` truncated to `06:…` still carries the full string — and no
+      // exception is thrown for an ellipsis, so the squeeze has to be checked
+      // by measuring: the clock is `FittedBox`ed, so it scales down inside its
+      // share instead of losing digits.
+      final painted = tester.renderObject<RenderParagraph>(
+          find.descendant(of: find.text('06:00'), matching: find.byType(RichText)));
+      expect(painted.didExceedMaxLines, isFalse,
+          reason: 'the time must never be cut short at ${scale}x');
+    }
   });
 
   test('N16 — both background-throttled variants', () {
@@ -261,5 +324,70 @@ void main() {
     expect(find.text('Delete'), findsOneWidget);
     expect(find.text('Gust guard auto: ≤15 km/h'), findsOneWidget,
         reason: "MESSAGES.md's worked example — limit 4");
+  });
+
+  testWidgets('the ring gate sits ABOVE the settings page (2026-08-13)',
+      (tester) async {
+    // Device-caught in both apps: `RingGate` wrapped `home:`, which is the
+    // first ROUTE, so an open settings page covered the ring screen — the
+    // alarm sounded with nothing on screen until you pressed back, and
+    // tapping the ring notification looked like it did nothing. It lives in
+    // `MaterialApp.builder` now, above the Navigator. Structural, because
+    // only a device can make the plugin actually ring.
+    final c = await controller(
+      courts: [court],
+      alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+    );
+    await tester.pumpWidget(NivaatApp(
+      controller: c,
+      permissionFlow: Future<void>.value(),
+      batteryFlow: Future<void>.value(),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+          of: find.byType(RingGate), matching: find.text('SETTINGS')),
+      findsOneWidget,
+      reason: 'a pushed route must sit INSIDE the gate, or the ring screen '
+          'cannot cover it',
+    );
+
+    // See off the scrollbar's flash (a `Future.delayed`, so unmounting will
+    // not cancel it) and then the home ticker, which dispose does.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  group('X1 — the court the ring screen names', () {
+    // `main` hands `RingGate.alarmLabel` this lookup; core renders it above
+    // the clock (`shared_message_test`). What lands here is the number the
+    // plugin gives the ring screen, which is a LOCKER id, not an alarm id.
+    Future<NivaatController> armed() => controller(
+          courts: [court],
+          alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+        );
+
+    test('every ring locker resolves to the same court', () async {
+      final c = await armed();
+      for (final id in NivaatIds.allRings(1)) {
+        expect(c.courtNameForRing(id), 'Society Court', reason: 'locker $id');
+      }
+    });
+
+    test('checks and cards are not rings, and neither is a gone alarm',
+        () async {
+      final c = await armed();
+      // Same alarm, different blocks: reading one of these as a ring would
+      // put another alarm's court on the screen.
+      expect(c.courtNameForRing(NivaatIds.check(1)), isNull);
+      expect(c.courtNameForRing(NivaatIds.card(1)), isNull);
+      // Deleted mid-ring, or a ring left over from a build ago: the label is
+      // the one thing on this screen that may be missing, so it goes quiet
+      // rather than guessing.
+      expect(c.courtNameForRing(NivaatIds.ring(2)), isNull);
+    });
   });
 }

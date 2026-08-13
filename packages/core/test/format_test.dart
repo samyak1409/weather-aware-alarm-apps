@@ -2,6 +2,35 @@ import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('untilNextMinute aligns to the next wall-clock :00', () {
+    // The one thing every countdown ticker in both apps is aimed at: it must
+    // measure to the next :00, not one minute from whenever the screen
+    // opened. Lived in Nivaat's engine until 2026-08-13, and its test stayed
+    // behind when the code moved here — so this file covered all eight of its
+    // other helpers and none of this one.
+    final mid = DateTime(2026, 7, 12, 6, 30, 17, 250);
+    expect(untilNextMinute(mid), const Duration(seconds: 42, milliseconds: 750));
+    // Exactly on the minute is a whole minute away, never zero — a zero-delay
+    // Timer would re-arm in a tight loop for the whole of that second.
+    final onTheMinute = DateTime(2026, 7, 12, 6, 30);
+    expect(untilNextMinute(onTheMinute), const Duration(minutes: 1));
+    // The no-argument form, which is what all three tickers actually call
+    // (Nivaat's home and alarm editor, and Arunoday's `_DraftCountdown`,
+    // one widget behind both pickers) — bounded rather than exact, since it
+    // reads the real clock.
+    //
+    // **Non-positive is the failure worth naming, and it is reachable.** A
+    // `Timer` armed on it fires immediately and re-arms on the same value.
+    // Measured under `TZ=America/New_York`: on the SECOND pass through a
+    // fall-back hour this returns −59:20, because `DateTime(y,m,d,1,30)`
+    // resolves to the FIRST 01:30. Known and unfixed — India has no DST, so
+    // it cannot reach either app today. If this ever goes red here, that is
+    // what it found, not flake.
+    final live = untilNextMinute();
+    expect(live, greaterThan(Duration.zero));
+    expect(live, lessThanOrEqualTo(const Duration(minutes: 1)));
+  });
+
   test('fmtClock pads hours and minutes', () {
     expect(fmtClock(DateTime(2026, 1, 1, 5, 3)), '05:03');
     expect(fmtClock(DateTime(2026, 1, 1, 23, 59)), '23:59');

@@ -1,6 +1,24 @@
 /// Tiny time formatters — no intl dependency for v1.
 library;
 
+/// Delay until the next wall-clock minute (:00).
+///
+/// A countdown that re-aims on this flips when the minute does, rather than a
+/// minute after the screen opened — and unlike `Timer.periodic` it cannot
+/// drift by however long the app spent suspended. Three screens use it:
+/// Nivaat's home and alarm editor, and Arunoday's two settings pickers (one
+/// widget). **Arunoday's home is the exception and still runs
+/// `Timer.periodic`** — it predates this and has not been converted; it is
+/// the one countdown in either app that can sit a minute stale after a long
+/// suspend. Lives in core because it stopped being Nivaat's alone on
+/// 2026-08-13.
+Duration untilNextMinute([DateTime? now]) {
+  final n = now ?? DateTime.now();
+  final next = DateTime(n.year, n.month, n.day, n.hour, n.minute)
+      .add(const Duration(minutes: 1));
+  return next.difference(n);
+}
+
 String fmtClock(DateTime t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 

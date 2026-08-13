@@ -42,6 +42,24 @@ class NivaatController extends ChangeNotifier {
     return null;
   }
 
+  /// The court behind a **ring** id, for the ring screen's label (X1, N1) —
+  /// null when [ringId] is not a ring at all, or its alarm or court has gone.
+  ///
+  /// Ring ids, not alarm ids: what the ring screen holds is an `AlarmSettings`
+  /// straight from the plugin, so it carries the locker number
+  /// ([NivaatIds.ring] / `lateRing` / `nextRing`) rather than the alarm's own.
+  ///
+  /// Reads the store's live lists, so a ring that cold-started the app shows
+  /// its court as soon as [init] has loaded them — see `RingGate.alarmLabel`.
+  String? courtNameForRing(int ringId) {
+    final alarmId = NivaatIds.alarmIdOfRing(ringId);
+    if (alarmId == null) return null;
+    for (final a in alarms) {
+      if (a.id == alarmId) return courtById(a.courtId)?.name;
+    }
+    return null;
+  }
+
   /// History, minus any row whose court is gone — and those rows are deleted
   /// for good, not just hidden.
   ///

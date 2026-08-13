@@ -28,6 +28,26 @@ void main() {
       }
     });
 
+    test('three clock sizes since 2026-08-13, and the middle one behaves',
+        () {
+      // `displayMedium` is the list/second-clock size — Nivaat's alarm rows
+      // and Arunoday's bedtime, both of which were 28 and read as captions.
+      // It follows headlineMedium's weights, not displayLarge's: w200 at 40px
+      // is too fine to catch at a glance in a list.
+      expect(thin.displayMedium!.fontSize, 40);
+      expect(thin.displayMedium!.fontWeight, FontWeight.w300);
+      expect(thin.displayMedium!.fontFeatures, isNull);
+      expect(heavy.displayMedium!.fontWeight, FontWeight.w600);
+      expect(heavy.displayMedium!.fontFeatures,
+          [const FontFeature.tabularFigures()]);
+      // Still a ladder, both ways round.
+      for (final t in [thin, heavy]) {
+        expect(t.displayLarge!.fontSize!, greaterThan(t.displayMedium!.fontSize!));
+        expect(
+            t.displayMedium!.fontSize!, greaterThan(t.headlineMedium!.fontSize!));
+      }
+    });
+
     test('body and labels stay w400 in BOTH modes — the contrast is the look',
         () {
       for (final t in [thin, heavy]) {
@@ -40,20 +60,40 @@ void main() {
 
   group('Appearance store', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
-    tearDown(() => Appearance.heavyType.value = false);
+    // Back to the shipped value, not to `false` — leaking OFF into another
+    // test would quietly hide the default this group exists to pin.
+    tearDown(() => Appearance.heavyType.value = true);
+
+    test('it ships ON (2026-08-13), from an empty disk as well as in memory',
+        () async {
+      // It shipped OFF from 2026-07-20 until the heroes grew — at 64/72/130 the
+      // w200 thin face reads washed out where w700 reads deliberate (Samyak).
+      // Both defaults have to agree: the notifier's seed is what a screen
+      // built before `load` uses, the `??` is what a first run reads.
+      Appearance.heavyType.value = false; // simulate a stale in-memory value
+      await Appearance.load();
+      expect(Appearance.heavyType.value, isTrue,
+          reason: 'nothing stored yet — a first run gets bold');
+    });
 
     test('setHeavyType persists and notifies; load restores', () async {
-      await Appearance.setHeavyType(true);
-      expect(Appearance.heavyType.value, isTrue);
+      // Off, since that is now the value a user has to CHOOSE.
+      await Appearance.setHeavyType(false);
+      expect(Appearance.heavyType.value, isFalse);
 
-      Appearance.heavyType.value = false; // simulate a fresh process
+      Appearance.heavyType.value = true; // simulate a fresh process
       await Appearance.load();
-      expect(Appearance.heavyType.value, isTrue);
+      expect(Appearance.heavyType.value, isFalse,
+          reason: 'a stored OFF must survive a restart, or the default would '
+              'silently overrule the one person who turned it off');
     });
 
     testWidgets('HeavyTypeSwitch flips the store', (tester) async {
       await tester.pumpWidget(const MaterialApp(
           home: Scaffold(body: HeavyTypeSwitch())));
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      expect(Appearance.heavyType.value, isFalse, reason: 'ON → tap → OFF');
       await tester.tap(find.byType(SwitchListTile));
       await tester.pumpAndSettle();
       expect(Appearance.heavyType.value, isTrue);

@@ -93,12 +93,21 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
       ),
     ),
     // [heavyType] (2026-07-20, Samyak, settings toggle "Bold clocks &
-    // titles" — ships
-    // OFF): the premium look = bold display text against quiet w400
-    // body/labels, so only the two hero styles gain weight; everything else
+    // titles" — the SETTING ships ON since 2026-08-13, see `Appearance`; this
+    // parameter still defaults to the thin look, which is what a caller that
+    // passes nothing — i.e. a test — is asking for): the premium look = bold
+    // display text against quiet w400
+    // body/labels, so only the CLOCK styles gain weight; everything else
     // stays untouched in both modes. Heavy mode also uses tabular figures so
     // the ticking clocks don't shift width per minute (SF Pro's default
     // digits are proportional). OFF must stay EXACTLY the original thin look.
+    //
+    // A third size since 2026-08-13: `displayMedium` (40) is the list and
+    // second-clock size — Nivaat's alarm rows and Arunoday's bedtime, both of
+    // which were 28 and read as captions beside the hero (Samyak, inspired by
+    // iOS's own alarm list). Both intros went the other way, to `displayLarge`.
+    // It follows `headlineMedium`'s weights rather than `displayLarge`'s: at
+    // 40px w200 is too fine to read at a glance in a list.
     textTheme: TextTheme(
       displayLarge: heavyType
           ? const TextStyle(
@@ -114,6 +123,20 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
               letterSpacing: -1.5,
               color: AppPalette.textPrimary,
             ),
+      displayMedium: heavyType
+          ? const TextStyle(
+              fontSize: 40,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -1.0,
+              fontFeatures: [FontFeature.tabularFigures()],
+              color: AppPalette.textPrimary,
+            )
+          : const TextStyle(
+              fontSize: 40,
+              fontWeight: FontWeight.w300,
+              letterSpacing: -0.5,
+              color: AppPalette.textPrimary,
+            ),
       headlineMedium: heavyType
           ? const TextStyle(
               fontSize: 28,
@@ -127,6 +150,24 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
               fontWeight: FontWeight.w300,
               color: AppPalette.textPrimary,
             ),
+      // The ring screen's STOP, and the only label outside the home screens
+      // that answers to "Bold clocks & titles" (2026-08-13). It lives here
+      // rather than in `RingScreen` so the switch reaches it the way it
+      // reaches the clocks — through the theme — instead of a shared widget
+      // reading the global notifier for itself.
+      //
+      // 20: a button label a step above Material's default 14, which is what
+      // it was until today. 22, 28 and 40 were all tried on a real phone and
+      // all read as a headline sitting in a button (Samyak).
+      //
+      // **No colour, deliberately.** It is a BUTTON label: the FilledButton
+      // supplies the foreground (black on the accent), and naming a colour
+      // here overrode it and turned STOP white on blue — device-caught the
+      // day this style was added.
+      titleLarge: TextStyle(
+        fontSize: 20,
+        fontWeight: heavyType ? FontWeight.w700 : FontWeight.w500,
+      ),
       titleMedium: const TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.w400,

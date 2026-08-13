@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The id map's safety net. The block layout is load-bearing twice over: ids
 /// must not collide, and [ArunodayIds.isBedtime] uses the block boundary as a
-/// TYPE TAG — the ring screen offers its "+1h not sleepy" action based on it.
+/// TYPE TAG — the ring screen offers its "+1h sleep late" action based on it.
 void main() {
   test('no two ids collide across a full window', () {
     final seen = <int, String>{};
@@ -62,7 +62,7 @@ void main() {
             reason: 'a WAKE alarm must never offer the bedtime ritual');
       }
       expect(ArunodayIds.isBedtime(ArunodayIds.bedtimeAgain), isTrue,
-          reason: 'the "not sleepy" re-ring needs the bedtime ritual too');
+          reason: 'the "sleep late" re-ring needs the bedtime ritual too');
     });
 
     test('BedtimeActions agrees with the id map', () {

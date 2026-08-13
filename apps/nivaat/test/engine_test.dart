@@ -2075,13 +2075,6 @@ void main() {
     );
   });
 
-  test('nivaatUntilNextMinute aligns to the next wall-clock :00', () {
-    final mid = DateTime(2026, 7, 12, 6, 30, 17, 250);
-    expect(nivaatUntilNextMinute(mid), const Duration(seconds: 42, milliseconds: 750));
-    final onTheMinute = DateTime(2026, 7, 12, 6, 30);
-    expect(nivaatUntilNextMinute(onTheMinute), const Duration(minutes: 1));
-  });
-
   test('nivaatHomeWatchingLine: only while a snapshot window is still open', () {
     final snapshot = HistoryRecord(
         alarmId: 7,

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:core/core.dart';
 import 'package:flutter/foundation.dart';
 
@@ -169,6 +171,45 @@ class ArunodayController extends ChangeNotifier {
     return s == null ? null : _floorToMinute(s);
   }
 
+  /// What the home footer quotes (A8) — **always the NEXT dawn**, with the
+  /// sunrise that follows it. Null only with no location, which is the empty
+  /// screen and has no footer.
+  ///
+  /// It used to roll on SUNRISE, so between 06:51 and 07:18 the footer went on
+  /// saying "Dawn today 06:51" about a dawn that had been and gone — in the
+  /// one app whose entire subject is the next dawn (Samyak, 2026-08-13).
+  ///
+  /// The sunrise rides along rather than rolling on its own: one line, one
+  /// morning. Pairing tomorrow's dawn with today's sunrise would be two
+  /// mornings in one sentence. The cost is those minutes between the two,
+  /// where the sunrise named is the one after the dawn named rather than the
+  /// one still to come today.
+  ///
+  /// Takes [now] for the reason [nextDailyBedtime] does: the interesting
+  /// minute is the one either side of dawn, and no test can wait for it.
+  ({DateTime dawn, DateTime? sunrise, bool rolled})? footerDawnAt(
+      DateTime now) {
+    // [_firstFuture]'s walk, not one calendar step — the same reason every
+    // other next-occurrence here uses it. A single step can land short: a
+    // location far from the device's zone dawns on a neighbouring local date
+    // (CLAUDE.md's Tonk-on-a-New-York-phone case), so "tomorrow's dawn" can
+    // itself be behind you and the footer would print a past time under the
+    // word `tomorrow`.
+    final found = _firstFuture(now, dawnOn);
+    if (found == null) return null;
+    return (
+      dawn: found.at,
+      sunrise: sunriseOn(found.day),
+      // The word describes the INSTANT on screen, so it is `at`'s date that
+      // decides it — not the argument day that produced it. Those are the
+      // same date at home and different ones on a device far from the
+      // location's longitude (Tonk on a New York phone dawns at 20:20 the
+      // previous local evening), where keying on the argument printed
+      // `Dawn tomorrow 20:20` about a dawn still to come today.
+      rolled: _dateKey(found.at) != _dateKey(now),
+    );
+  }
+
   static String _dateKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
@@ -241,20 +282,44 @@ class ArunodayController extends ChangeNotifier {
           clockTimeOn(calendarDay(now, i), bedMinutes)
       ];
 
+  /// The next time the clock reads [minuteOfDay], strictly after [now] — the
+  /// nightly bedtime, and the bedtime picker's countdown for a clock time you
+  /// have not saved yet (A14).
+  ///
+  /// Both halves are clock arithmetic (REVIEW #14): the same time of day, on
+  /// today's date and then on the next DATE. Rolling forward 24 elapsed hours
+  /// aimed a 00:15 bedtime at 23:15 the same evening on a fall-back day.
+  static DateTime nextClockTimeAfter(DateTime now, int minuteOfDay) {
+    var s = clockTimeOn(now, minuteOfDay);
+    for (var d = 1; !s.isAfter(now); d++) {
+      s = clockTimeOn(calendarDay(now, d), minuteOfDay);
+    }
+    return s;
+  }
+
   /// Next daily bedtime occurrence strictly after now (ignores AGAIN).
   @visibleForTesting
   DateTime? nextDailyBedtime(DateTime now) {
     final bed = bedtimeMinutes;
     if (bed == null) return null;
-    // Both halves are clock arithmetic (REVIEW #14): the same time of day, on
-    // today's date and then on the next DATE. Rolling forward 24 elapsed hours
-    // aimed a 00:15 bedtime at 23:15 the same evening on a fall-back day.
-    var s = clockTimeOn(now, bed.round());
-    for (var d = 1; !s.isAfter(now); d++) {
-      s = clockTimeOn(calendarDay(now, d), bed.round());
-    }
-    return s;
+    return nextClockTimeAfter(now, bed.round());
   }
+
+  /// When a **drafted** wake offset would first ring — the wake-offset
+  /// picker's countdown (A15).
+  ///
+  /// Walks the window like [nextWakeAt] instead of shifting [nextWake] by the
+  /// difference: past a few hours the drafted alarm belongs to a different
+  /// morning, and each morning has its own dawn to hang off. Null only when
+  /// there is no location, which is also the state that has no picker.
+  ///
+  /// A one-time extra does not enter it — nothing in the app sets one today
+  /// (SPEC: the tomorrow-wake shift was removed 2026-07-12), and this dialog
+  /// is about the permanent offset either way.
+  DateTime? draftWakeRing(int offsetMinutes) => _firstFuture(
+        DateTime.now(),
+        (day) => dawnOn(day)?.add(Duration(minutes: offsetMinutes)),
+      )?.at;
 
   /// The next bedtime alarm to actually *ring* — the sooner of the daily
   /// bedtime and a pending AGAIN. Drives the "IN" countdown.
@@ -364,15 +429,61 @@ class ArunodayController extends ChangeNotifier {
     ));
   }
 
-  /// Bedtime-ritual action: "not sleepy yet" — ring the bedtime again later.
+  /// Whether another "sleep late" push still has room before the next wake.
+  ///
+  /// **The bedtime nudge exists to protect that wake, so a re-ring at or after
+  /// it is meaningless** (Samyak, 2026-08-13): `+1h` is repeatable, and with
+  /// nothing stopping it you could push the bedtime reminder round the clock
+  /// into tomorrow afternoon. This is also what bounds the call count
+  /// ([arunodayBedtimeAgainBody]) — an 8-hour night runs out around the eighth.
+  ///
+  /// No wake to protect allows it — no location (so no alarms at all), or a
+  /// wake alarm the user has switched off. This is a guard on the wake, not a
+  /// second opinion about whether the bedtime should ring.
+  bool canDelayBedtime(Duration delay, {DateTime? now}) {
+    final n = now ?? DateTime.now();
+    // **A switched-off wake is not a wake to protect.** [nextWake] is pure
+    // dawn+offset and knows nothing about `wakeEnabled` — only the arming loop
+    // checks it — so without this the push was refused, and SLEEP LATE
+    // vanished, on account of an alarm that will never sound.
+    //
+    // `n` reaches BOTH halves. Threading it into the target while the deadline
+    // stayed on the wall clock would answer a question nobody asked.
+    final wake = settings.wakeEnabled ? nextWakeAt(n) : null;
+    if (wake == null) return true;
+    return _floorToMinute(n.add(delay)).isBefore(wake);
+  }
+
+  /// Bedtime-ritual action: "sleep late" — ring the bedtime again later.
   /// Floored to the minute like every user-facing time.
-  Future<void> delayBedtime(Duration delay) async {
+  ///
+  /// [fromReRing] is whether the ring being pushed is itself an AGAIN, which
+  /// is what makes the count keep climbing (`Third call`, `Fourth call`)
+  /// rather than resetting to `Second` every time. The ring screen knows it
+  /// from the alarm id it holds; deriving it here from the stored time would
+  /// be a guess, since a push is an hour from the TAP and not from the ring.
+  ///
+  /// Refuses when [canDelayBedtime] says there is no room. The ring screen
+  /// hides the button in that state, so a refusal here is the second lock on
+  /// the same rule rather than the one the user meets.
+  Future<void> delayBedtime(Duration delay, {required bool fromReRing}) async {
+    if (!canDelayBedtime(delay)) return;
+    final bed = bedtimeMinutes?.round();
     await update(settings.copyWith(
       bedtimeDelayedUntil: () => _floorToMinute(DateTime.now().add(delay)),
+      // Never below the third from a re-ring: a push on an AGAIN cannot be the
+      // second call, whatever a half-written blob claims the counter is.
+      bedtimeDelayCall:
+          fromReRing ? math.max(3, settings.bedtimeDelayCall + 1) : 2,
+      // The bedtime this chain is measured against. A push on a re-ring keeps
+      // the one the chain started from; a push on the bedtime itself starts a
+      // new chain from where the bedtime is now.
+      bedtimeDelayFromMinute: () =>
+          fromReRing ? (settings.bedtimeDelayFromMinute ?? bed) : bed,
     ));
   }
 
-  /// Mistap recovery: cancel a pending "not sleepy" re-ring.
+  /// Mistap recovery: cancel a pending "sleep late" re-ring.
   Future<void> cancelBedtimeDelay() async {
     await update(settings.copyWith(bedtimeDelayedUntil: () => null));
   }
@@ -421,6 +532,61 @@ class ArunodayController extends ChangeNotifier {
             lonDeg: loc.lon,
             wakeOffsetMinutes: 0,
           );
+    // After the plan, not with the other cleanup: it needs the bedtime this
+    // pass just recomputed, which is the whole point of it.
+    _clearOvertakenReRing();
+  }
+
+  /// Drops a pending AGAIN once the bedtime it was postponing has moved past
+  /// it (Samyak, 2026-08-13).
+  ///
+  /// Bedtime 21:56, `+1h` → an AGAIN at 22:58. Now edit bedtime to 23:56: the
+  /// re-ring would sound at 22:58 telling you off for a bedtime that has not
+  /// arrived, and an hour later the real bedtime would ring anyway. You moved
+  /// the thing it was pushing you past, so the push is spent.
+  ///
+  /// **Two questions, in this order.** Did the bedtime move at all? And if it
+  /// did, which way?
+  ///
+  /// *Did it move* is **asked, not inferred** — the chain records the bedtime
+  /// it started from ([ArunodaySettings.bedtimeDelayFromMinute]). Inferring it
+  /// from the clock face alone was wrong past twelve pushes: by then the
+  /// re-ring is more than twelve hours from its own bedtime, the shorter way
+  /// round says "after", and an untouched bedtime read as a moved one — so the
+  /// thirteenth push deleted the reminder it had just created. Out of reach on
+  /// an ordinary night (the pushes stop at the wake, about eight of them), but
+  /// one stored number closes it outright.
+  ///
+  /// *Which way* is *proximity* on the clock face, which is Samyak's own
+  /// framing and the simpler rule: nearer *after* the re-ring means the
+  /// re-ring now comes first and is stale; nearer *before* means it is still
+  /// that bedtime's push. Both are clock times, so no date and no wake enters
+  /// it — an earlier version measured against the bedtime occurrence that
+  /// pairs with the next wake, and needed that whole apparatus to say it.
+  ///
+  /// Worked, with the re-ring at 00:00: bedtime 23:00 keeps it (an hour
+  /// before), 01:00 drops it (an hour after), 12:01 keeps it (11h59m before),
+  /// 11:59 drops it (11h59m after). Exactly twelve hours reads as *after* —
+  /// the fold is `(−720, 720]`, matching `signedBedtimeOffset` — and nothing
+  /// hangs on that choice: it is one minute of the clock face and either
+  /// answer is as true as the other.
+  ///
+  /// A move that is kept **becomes the new mark**, so the next question is
+  /// asked against the bedtime that is actually there; leaving the old mark
+  /// would put the guesswork back one edit later.
+  void _clearOvertakenReRing() {
+    final delayed = settings.bedtimeDelayedUntil;
+    final bed = bedtimeMinutes?.round();
+    final from = settings.bedtimeDelayFromMinute;
+    if (delayed == null || bed == null || from == null || bed == from) return;
+    final again = delayed.hour * 60 + delayed.minute;
+    final ahead = ((bed - again) % 1440 + 1440) % 1440;
+    // Same minute (0) is not "after": the AGAIN owns a shared slot by design,
+    // so the daily bedtime is the one that stands down (see [_armWindow]).
+    settings = (ahead != 0 && ahead <= 720)
+        ? settings.copyWith(bedtimeDelayedUntil: () => null)
+        : settings.copyWith(bedtimeDelayFromMinute: () => bed);
+    store.save(settings); // fire-and-forget, like the expiry cleanup above
   }
 
   /// The half that reaches for the alarm plugin. **Soft-fails** on [Exception]
@@ -534,14 +700,16 @@ class ArunodayController extends ChangeNotifier {
       }
     }
 
-    // "Not sleepy yet" delayed bedtime reminder from the ring screen.
+    // "Sleep late" delayed bedtime reminder from the ring screen.
     if (settings.bedtimeEnabled && delayed != null) {
       expectedById[ArunodayIds.bedtimeAgain] = _floorToMinute(delayed);
       if (delayed.isAfter(now)) {
         wanted[ArunodayIds.bedtimeAgain] = (
           at: delayed,
           title: kArunodayBedtimeTitle,
-          body: kArunodayBedtimeAgainBody,
+          // Which call this is, counted (A3) — "Second call" was a lie from
+          // the third push on, and `+1h` has no limit but the wake.
+          body: arunodayBedtimeAgainBody(settings.bedtimeDelayCall),
         );
       }
     }

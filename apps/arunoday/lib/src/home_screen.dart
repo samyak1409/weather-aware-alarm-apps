@@ -78,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen>
     ));
   }
 
-  /// Active "not sleepy" re-ring, if one is pending.
+  /// Active "sleep late" re-ring, if one is pending.
   DateTime? get _delayedUntil {
     final d = c.settings.bedtimeDelayedUntil;
     return (d != null && d.isAfter(DateTime.now())) ? d : null;
@@ -109,14 +109,35 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /// A9. **Fills the screen when it fits, scrolls when it doesn't**
+  /// (2026-08-13, with the 64px hero): the 1:2 spacer rhythm has no give in
+  /// it, so the sentence plus its body ran off the bottom of a 375pt phone the
+  /// moment the system text size went up — 55px over at 1.3x, and 432px over
+  /// at 2x even at the old 28px, so this was already broken for anyone using
+  /// large text. `IntrinsicHeight` under a `minHeight` of the viewport is what
+  /// lets the Spacers keep their rhythm on every screen that fits.
   Widget _empty(TextTheme text) {
+    return LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: IntrinsicHeight(child: _introBody(text)),
+        ),
+      ),
+    );
+  }
+
+  Widget _introBody(TextTheme text) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 24),
         Text('ARUNODAY', style: text.labelSmall),
         const Spacer(),
-        Text('Wake with the dawn.', style: text.headlineMedium),
+        // The hero size, in step with Nivaat's N14 (2026-08-13, Samyak): on
+        // the empty screen this one sentence IS the app, so it gets the same
+        // 64 the wake clock gets once there is a wake to show.
+        Text('Wake with the dawn.', style: text.displayLarge),
         const SizedBox(height: 12),
         Text(
           'Add your location — the alarm follows its real dawn, every day of the year.',
@@ -132,21 +153,27 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /// The armed home. **Fills or scrolls, exactly like [_empty]** — and for a
+  /// sharper reason: this column carries a 72pt clock, a 40pt one, four label
+  /// lines and up to two banners, with no flex in any of it. Measured on a
+  /// 375pt phone it ran 30px over at 1.3x text and 718px over at 2x (the 2x
+  /// break predates the bigger type — it was 483px over at the old 64/28).
   Widget _main(TextTheme text, SavedLocation loc) {
+    return LayoutBuilder(
+      builder: (context, box) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: box.maxHeight),
+          child: IntrinsicHeight(child: _mainBody(text, loc)),
+        ),
+      ),
+    );
+  }
+
+  Widget _mainBody(TextTheme text, SavedLocation loc) {
     final nextWake = c.nextWake;
-    // Footer shows today's dawn until sunrise has passed, then tomorrow's.
-    final now = DateTime.now();
-    var dawnShown = c.dawnOn(now);
-    var sunriseShown = c.sunriseOn(now);
-    final dawnRolled = sunriseShown != null && !sunriseShown.isAfter(now);
-    if (dawnRolled) {
-      // Calendar step, not +24h (REVIEW #13): on a fall-back evening the
-      // elapsed one comes back to today, and the footer re-prints the dawn it
-      // just decided was over.
-      final tomorrow = calendarDay(now, 1);
-      dawnShown = c.dawnOn(tomorrow);
-      sunriseShown = c.sunriseOn(tomorrow);
-    }
+    // Which dawn the footer names — always the next one, decided on the
+    // controller so a test can stand either side of it (2026-08-13).
+    final footer = c.footerDawnAt(DateTime.now());
     final bed = c.bedtimeMinutes;
     final sleep = c.tonightSleepMinutes;
     final offset = c.settings.wakeOffsetMinutes;
@@ -196,9 +223,21 @@ class _HomeScreenState extends State<HomeScreen>
         // alternative is `nextWake!`, and this repo already has one scar from
         // force-unwrapping an optional that "couldn't" be null (N4's volume,
         // which made history permanently un-openable).
-        Text(
-          nextWake == null ? '—' : fmtClock(nextWake),
-          style: text.displayLarge,
+        // 72, above the theme's 64 (2026-08-13, Samyak). Local rather than a
+        // bump to `displayLarge`, because that style is also both settings
+        // pickers' — this is the one place on a home screen that wants the
+        // biggest number there is. `scaleDown` for the same reason the ring
+        // clock has one: at double system text five characters at 72 no longer
+        // fit a 375pt phone, and a clock that WRAPS is worse than one that
+        // shrinks (the column scrolls now, so nothing would flag it).
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            nextWake == null ? '—' : fmtClock(nextWake),
+            maxLines: 1,
+            style: text.displayLarge!.copyWith(fontSize: 72),
+          ),
         ),
         const SizedBox(height: 4),
         Text(
@@ -212,7 +251,10 @@ class _HomeScreenState extends State<HomeScreen>
         const SizedBox(height: 40),
         Text(
           bed == null ? '—' : fmtMinutesOfDay(bed),
-          style: text.headlineMedium,
+          // The second clock moves 28 → 40 with it, so the pair keeps its
+          // relationship instead of the bedtime shrinking away beside a
+          // bigger wake.
+          style: text.displayMedium,
         ),
         const SizedBox(height: 4),
         Text(
@@ -226,9 +268,10 @@ class _HomeScreenState extends State<HomeScreen>
           style: text.labelSmall,
         ),
         const Spacer(flex: 2),
-        if (dawnShown != null) ...[
+        if (footer != null) ...[
           Text(
-            arunodayFooterLine(dawnShown, sunriseShown, rolled: dawnRolled),
+            arunodayFooterLine(footer.dawn, footer.sunrise,
+                rolled: footer.rolled),
             style: text.bodyMedium,
           ),
           const SizedBox(height: 2),

@@ -22,12 +22,14 @@ void main() {
     // widgets. The split exists for exactly this (2026-07-26).
     Widget screen({
       String appName = 'ARUNODAY',
+      String? label,
       Widget Function(BuildContext, AlarmSettings)? actions,
       Future<void> Function()? onStop,
     }) =>
         MaterialApp(
           home: RingScreen(
             appName: appName,
+            label: label,
             alarms: [
               AlarmSettings(
                 id: 1,
@@ -35,7 +37,7 @@ void main() {
                 assetAudioPath: 'assets/sounds/arunoday_dawn.wav',
                 volumeSettings: VolumeSettings.fixed(),
                 notificationSettings: const NotificationSettings(
-                  title: 'Arunoday · Dawn',
+                  title: 'Dawn',
                   body: 'Dawn+0:20 at Jaipur. Good morning.',
                 ),
               )
@@ -77,13 +79,95 @@ void main() {
       expect(find.text('STOP'), findsOneWidget);
     });
 
+    test('a label LEADS the body line, it does not get one of its own', () {
+      // It had its own small line above the clock for half a day (2026-08-13)
+      // and on the real screen that read as a third thing to take in at 6am.
+      // Leading the evidence says the same thing in the space already there,
+      // in the order N1's title uses.
+      expect(ringScreenBody('wind 3 · gusts 12', 'Society Court'),
+          'Society Court · wind 3 · gusts 12');
+      // Arunoday passes none — one wake and one bedtime, told apart by the
+      // body itself — and an unknown court (deleted alarm, or a ring that
+      // cold-started the app) must read exactly the same way.
+      expect(ringScreenBody('Wind down — dawn comes early.', null),
+          'Wind down — dawn comes early.');
+      expect(ringScreenBody('Wind down — dawn comes early.', ''),
+          'Wind down — dawn comes early.');
+    });
+
+    testWidgets('…and that is what the screen really renders', (tester) async {
+      await tester
+          .pumpWidget(screen(appName: 'NIVAAT', label: 'Society Court'));
+      expect(find.text('Society Court · Dawn+0:20 at Jaipur. Good morning.'),
+          findsOneWidget);
+      expect(find.text('Society Court'), findsNothing,
+          reason: 'no line of its own');
+    });
+
+    testWidgets('STOP is sized for 6am, and follows the bold switch',
+        (tester) async {
+      // 20px, one step over the Material default of 14 this inherited until
+      // 2026-08-13, when 22, 28 and 40 were each tried and each read as a
+      // headline in a button (Samyak). It is the
+      // one label outside the home screens that answers to "Bold clocks &
+      // titles" — everything else here is a clock or a hint, and this is
+      // neither. Asserted through the THEME, which is how the switch reaches
+      // it: reading `Appearance.heavyType` inside the widget meant this test
+      // had to set a process global by hand, and that a theme built thin no
+      // longer decided what the screen drew.
+      for (final heavy in [false, true]) {
+        await tester.pumpWidget(MaterialApp(
+          theme: buildOledTheme(AppPalette.dawn, heavyType: heavy),
+          home: RingScreen(
+            appName: 'ARUNODAY',
+            alarms: [
+              AlarmSettings(
+                id: 1,
+                dateTime: DateTime(2026, 7, 18, 7, 11),
+                assetAudioPath: 'assets/sounds/arunoday_dawn.wav',
+                volumeSettings: VolumeSettings.fixed(),
+                notificationSettings: const NotificationSettings(
+                    title: 'Dawn', body: 'Good morning.'),
+              )
+            ],
+            onStop: () async {},
+          ),
+        ));
+        // Settle: `MaterialApp` animates a theme change (200ms), so one pump
+        // reads a half-interpolated weight — the second pass measured w500
+        // while the theme it had just been given said w700.
+        await tester.pumpAndSettle();
+        final painted = tester
+            .widget<RichText>(find.descendant(
+                of: find.text('STOP'), matching: find.byType(RichText)))
+            .text
+            .style!;
+        expect(painted.fontSize, 20);
+        expect(painted.fontWeight,
+            heavy ? FontWeight.w700 : FontWeight.w500,
+            reason: 'the bold switch, arriving through the theme');
+        expect(painted.letterSpacing, 2);
+        // The BUTTON's foreground, not the text theme's white — naming a
+        // colour on `titleLarge` turned STOP white on blue (device-caught,
+        // 2026-08-13). `buildOledTheme` sets no `filledButtonTheme` and this
+        // button passes no style, so `onPrimary` IS the answer: pinned as a
+        // value rather than re-derived through Material's own fallback chain,
+        // which would agree with a wrong one.
+        final scheme =
+            Theme.of(tester.element(find.byType(FilledButton))).colorScheme;
+        expect(painted.color, scheme.onPrimary);
+        expect(painted.color, isNot(AppPalette.textPrimary),
+            reason: 'that is the regression: the text theme won');
+      }
+    });
+
     testWidgets('app actions sit above STOP (Arunoday A4)', (tester) async {
       await tester.pumpWidget(screen(
-        actions: (_, alarm) => const Text('NOT SLEEPY'),
+        actions: (_, alarm) => const Text('SLEEP LATE'),
       ));
-      expect(find.text('NOT SLEEPY'), findsOneWidget);
+      expect(find.text('SLEEP LATE'), findsOneWidget);
       expect(
-        tester.getCenter(find.text('NOT SLEEPY')).dy,
+        tester.getCenter(find.text('SLEEP LATE')).dy,
         lessThan(tester.getCenter(find.text('STOP')).dy),
       );
     });
