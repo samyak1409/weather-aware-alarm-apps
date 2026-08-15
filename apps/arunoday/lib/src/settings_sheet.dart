@@ -81,12 +81,7 @@ class _SettingsPageState extends State<_SettingsPage> {
     // Same refusals as the home screen's add — one copy, on the controller.
     final place = await showLocationSearch(context, validate: c.placeRefusal);
     if (place == null || !mounted) return;
-    final loc = SavedLocation(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: place.name,
-      lat: place.lat,
-      lon: place.lon,
-    );
+    final loc = place.toSavedLocation();
     await c.update(c.settings.copyWith(
       locations: [...c.settings.locations, loc],
       activeLocationId: () => loc.id,
@@ -100,10 +95,12 @@ class _SettingsPageState extends State<_SettingsPage> {
 
   Future<void> _editOffset() async {
     // No dawn = nothing to offset from, so there is no dialog to show. Can't
-    // happen from a real screen — you reach settings only from the armed home,
-    // and a location with no daily dawn is refused when you add it (A16) — but
-    // opening a picker anchored to nothing is worse than opening none: it
-    // silently drops its collision check (see [_OffsetDialogState._conflict]).
+    // happen from a real screen — the row that calls this is not built without
+    // a location (see `hasLocation` in [build]; it used to be that settings
+    // itself was unreachable without one), and a location with no daily dawn is
+    // refused when you add it (A16) — but opening a picker anchored to nothing
+    // is worse than opening none: it silently drops its collision check (see
+    // [_OffsetDialogState._conflict]).
     final dawn = _anchorDawn();
     if (dawn == null) return;
     final current = c.settings.wakeOffsetMinutes;
@@ -245,174 +242,183 @@ class _SettingsPageState extends State<_SettingsPage> {
     // `c.settings` at tap time, as the handlers outside `build` already do.
     final s = c.settings;
     final plan = c.plan;
+    // **Everything above `Alarm sound` is a question about a place** (2026-08-15,
+    // Samyak): a wake offset is measured from a dawn, a bedtime comes out of a
+    // sleep plan, and with no location there is neither. Settings opens from
+    // the empty home screen now — the way Nivaat's always has — so this page
+    // has to render that state rather than assume it away, and the honest
+    // rendering is to leave out the rows that would have nothing to say. They
+    // come back the moment a location is added, and go again with the last one.
+    //
+    // It is also what keeps the two pickers' no-anchor branches unreachable
+    // (see [_editOffset] and `arunodayBedtimePickerHint`): the rows that open
+    // them are not built at all.
+    final hasLocation = s.locations.isNotEmpty;
+    // The effective active location — the stored id, or the first when it is
+    // null, which is the fallback the alarms really follow.
+    final activeId =
+        hasLocation ? (s.activeLocationId ?? s.locations.first.id) : null;
 
-    return Scaffold(
-      appBar: AppBar(title: Text('SETTINGS', style: text.labelSmall)),
-      body: SafeArea(
-        top: false,
-        // The whole page scrolls as one surface (2026-07-20, Samyak — the
-        // locations list used to be the only scrolling region).
-        child: FlashingScrollbar(
-          builder: (scroll) => ListView(
-            controller: scroll,
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-            children: [
-            // Grouped by ritual: the wake pair, the bedtime pair, then the
-            // sound both rings share (2026-07-20 reorder).
-            SwitchListTile(
+    return SettingsPage(
+      accent: AppPalette.dawn,
+      children: [
+        // Grouped by ritual: the wake pair, the bedtime pair, then the sound
+        // both rings share (2026-07-20 reorder). The whole group needs a
+        // location — see [hasLocation].
+        if (hasLocation) ...[
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Wake alarm'),
+            value: s.wakeEnabled,
+            onChanged: (v) => c.update(c.settings.copyWith(wakeEnabled: v)),
+          ),
+          _HeldReset(
+            onHeld: s.wakeOffsetMinutes == 0 ? null : _resetWakeOffset,
+            child: ListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Wake alarm'),
-              value: s.wakeEnabled,
-              onChanged: (v) => c.update(c.settings.copyWith(wakeEnabled: v)),
+              title: const Text('Wake offset from dawn'),
+              trailing:
+                  Text(fmtOffset(s.wakeOffsetMinutes), style: text.titleMedium),
+              onTap: _editOffset,
             ),
-            _HeldReset(
-              onHeld: s.wakeOffsetMinutes == 0 ? null : _resetWakeOffset,
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Wake offset from dawn'),
-                trailing: Text(fmtOffset(s.wakeOffsetMinutes),
-                    style: text.titleMedium),
-                onTap: _editOffset,
-              ),
+          ),
+          if (s.wakeOffsetMinutes != 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('Long-press wake offset to reset to dawn.',
+                  style: text.bodyMedium),
             ),
-            if (s.wakeOffsetMinutes != 0)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text('Long-press wake offset to reset to dawn.',
-                    style: text.bodyMedium),
-              ),
-            SwitchListTile(
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Bedtime alarm'),
+            value: s.bedtimeEnabled,
+            onChanged: (v) => c.update(c.settings.copyWith(bedtimeEnabled: v)),
+          ),
+          _HeldReset(
+            onHeld: s.bedtimeOffsetMinutes == null ? null : _resetBedtime,
+            child: ListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Bedtime alarm'),
-              value: s.bedtimeEnabled,
-              onChanged: (v) =>
-                  c.update(c.settings.copyWith(bedtimeEnabled: v)),
+              title: const Text('Bedtime'),
+              subtitle: Text(c.bedtimeModeDescription, style: text.bodyMedium),
+              // `!` — this row only exists with a location, and a location
+              // always yields a sleep plan.
+              trailing: Text(fmtMinutesOfDay(c.bedtimeMinutes!),
+                  style: text.titleMedium),
+              onTap: _editBedtime,
             ),
-            _HeldReset(
-              onHeld: s.bedtimeOffsetMinutes == null ? null : _resetBedtime,
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Bedtime'),
-                subtitle:
-                    Text(c.bedtimeModeDescription, style: text.bodyMedium),
-                trailing: Text(
-                  c.bedtimeMinutes == null
-                      ? '—'
-                      : fmtMinutesOfDay(c.bedtimeMinutes!),
-                  style: text.titleMedium,
-                ),
-                onTap: _editBedtime,
-              ),
+          ),
+          if (s.bedtimeOffsetMinutes != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text('Long-press bedtime to return to auto.',
+                  style: text.bodyMedium),
             ),
-            if (s.bedtimeOffsetMinutes != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text('Long-press bedtime to return to auto.',
-                    style: text.bodyMedium),
-              ),
-            if (_delayedUntil != null)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Bedtime again'),
-                subtitle: Text('Sleep late — tonight only',
-                    style: text.bodyMedium),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(fmtClock(_delayedUntil!), style: text.titleMedium),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      color: AppPalette.textSecondary,
-                      onPressed: c.cancelBedtimeDelay,
-                    ),
-                  ],
-                ),
-              ),
+          if (_delayedUntil != null)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Alarm sound'),
-              trailing: Text(
-                SoundLibrary.displayName(s.soundPath,
-                    defaultName: 'Dawn Bells'),
-                style: text.titleMedium,
+              title: const Text('Bedtime again'),
+              subtitle:
+                  Text('Sleep late — tonight only', style: text.bodyMedium),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(fmtClock(_delayedUntil!), style: text.titleMedium),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    color: AppPalette.textSecondary,
+                    onPressed: c.cancelBedtimeDelay,
+                  ),
+                ],
               ),
-              onTap: () async {
-                final picked = await showSoundPicker(context,
-                    selectedPath: c.settings.soundPath ??
-                        'assets/sounds/arunoday_dawn.wav');
-                if (picked != null) {
-                  await c.update(
-                      c.settings.copyWith(soundPath: () => picked.path));
-                }
-              },
             ),
-            const Divider(),
-            const SizedBox(height: 8),
-            Text('APPEARANCE', style: text.labelSmall),
-            const HeavyTypeSwitch(),
-            const AppIconPicker(
-              accent: AppPalette.dawn,
-              appName: 'Arunoday',
-              choices: [
-                AppIconChoice(
-                    id: '1', label: 'Horizon', asset: 'assets/icons/1.png'),
-                AppIconChoice(
-                    id: '2', label: 'Rays', asset: 'assets/icons/2.png'),
-                AppIconChoice(
-                    id: '3', label: 'Dawn', asset: 'assets/icons/3.png'),
-              ],
-            ),
-            const SizedBox(height: 4),
-            const Divider(),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Text('LOCATIONS', style: text.labelSmall),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.add, size: 20),
-                  color: AppPalette.textSecondary,
-                  onPressed: _addLocation,
-                ),
-              ],
-            ),
-            for (final l in s.locations)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(l.name),
-                leading: Icon(
-                  l.id == (s.activeLocationId ?? s.locations.first.id)
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_off,
-                  size: 20,
-                  color: l.id ==
-                          (s.activeLocationId ?? s.locations.first.id)
-                      ? Theme.of(context).colorScheme.primary
-                      : AppPalette.textSecondary,
-                ),
-                onTap: () => _selectLocation(l),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  color: AppPalette.textSecondary,
-                  onPressed: () => _deleteLocation(l),
-                ),
-              ),
-            if (plan != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                arunodaySleepReadout(plan),
-                style: text.bodyMedium,
-              ),
-            ],
-            ],
+        ],
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Alarm sound'),
+          trailing: Text(
+            SoundLibrary.displayName(s.soundPath, defaultName: 'Dawn Bells'),
+            style: text.titleMedium,
           ),
+          onTap: () async {
+            final picked = await showSoundPicker(context,
+                selectedPath:
+                    c.settings.soundPath ?? 'assets/sounds/arunoday_dawn.wav');
+            if (picked != null) {
+              await c.update(c.settings.copyWith(soundPath: () => picked.path));
+            }
+          },
         ),
-      ),
+        const SettingsSection(label: 'APPEARANCE'),
+        const HeavyTypeSwitch(),
+        const AppIconPicker(
+          accent: AppPalette.dawn,
+          appName: 'Arunoday',
+          choices: [
+            AppIconChoice(id: '1', label: 'Horizon', asset: 'assets/icons/1.png'),
+            AppIconChoice(id: '2', label: 'Rays', asset: 'assets/icons/2.png'),
+            AppIconChoice(id: '3', label: 'Dawn', asset: 'assets/icons/3.png'),
+          ],
+        ),
+        SettingsSection(
+          label: 'LOCATIONS',
+          onAdd: _addLocation,
+          emptyNote: hasLocation ? null : kArunodayNoLocationsYet,
+        ),
+        for (final l in s.locations)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(l.name),
+            leading: Icon(
+              l.id == activeId
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_off,
+              size: 20,
+              color: l.id == activeId
+                  ? Theme.of(context).colorScheme.primary
+                  : AppPalette.textSecondary,
+            ),
+            onTap: () => _selectLocation(l),
+            trailing: PlaceRowActions(
+              place: l,
+              accent: AppPalette.dawn,
+              onDelete: () => _deleteLocation(l),
+            ),
+          ),
+        if (plan != null) ...[
+          const SizedBox(height: 12),
+          Text(arunodaySleepReadout(plan), style: text.bodyMedium),
+        ],
+      ],
     );
   }
 
+  /// **Asks first, on every delete** (2026-08-15, Samyak — N20's rule brought
+  /// across). One tap on the bin means three different things here, and only
+  /// the harmless one is obvious from the row: deleting a spare place changes
+  /// nothing, deleting the active one silently re-points every alarm at
+  /// another place's dawn, and deleting the last one switches the wake and
+  /// bedtime off altogether. [arunodayDeleteLocationWarning] says which.
   Future<void> _deleteLocation(SavedLocation l) async {
+    final before = c.settings;
+    final restBefore = before.locations.where((x) => x.id != l.id).toList();
+    final ok = await confirmDestructive(
+      context,
+      title: 'DELETE LOCATION',
+      message: arunodayDeleteLocationWarning(
+        l.name,
+        isActive:
+            (before.activeLocationId ?? before.locations.first.id) == l.id,
+        nextActiveName: restBefore.isEmpty ? null : restBefore.first.name,
+      ),
+    );
+    if (!ok || !mounted) return;
+    // **Re-read after the dialog** (REVIEW #20's rule, one await further out):
+    // what this writes must be built on the settings as they are now, not on
+    // the frame that opened the confirmation. A row tapped twice is the case
+    // that matters — the second confirmation must not resurrect the list the
+    // first one deleted from.
     final s = c.settings;
+    if (!s.locations.any((x) => x.id == l.id)) return;
     final rest = s.locations.where((x) => x.id != l.id).toList();
     // The effective active is activeLocationId, or the first location when it's
     // null (the getter's fallback). Only rewrite the id when the active one is
@@ -425,9 +431,12 @@ class _SettingsPageState extends State<_SettingsPage> {
           ? () => (rest.isEmpty ? null : rest.first.id)
           : null,
     ));
-    // No locations left → settings is unreachable anyway; leave the page so
-    // the user lands back on the empty home screen.
-    if (rest.isEmpty && mounted) Navigator.of(context).pop();
+    // **The page stays open with nothing left** (2026-08-15). It used to pop,
+    // because settings was unreachable without a location and staying would
+    // have stranded the user on a page they could not get back to. Settings
+    // opens from the empty home now, so popping would instead throw away the
+    // page you were working on — and what is left here is exactly the section
+    // you need: LOCATIONS, with its empty state and its `+`.
   }
 }
 
@@ -486,13 +495,13 @@ class _HeldReset extends StatelessWidget {
 /// 21:56" becomes tomorrow's; a captured `DateTime` would go past, empty the
 /// line, and stay empty until you nudged something.
 ///
-/// The line is built even when [at] is null, so the dialog cannot change
-/// height under your thumb. That is cheap insurance rather than a case you
-/// can reach: see [arunodayPickerInLabel].
+/// [at] is non-null: neither picker can draft a time that is behind them (see
+/// [arunodayPickerInLabel]), so the line always has a number and the dialog
+/// cannot change height under your thumb.
 class _DraftCountdown extends StatefulWidget {
   const _DraftCountdown({required this.at});
 
-  final DateTime? Function() at;
+  final DateTime Function() at;
 
   @override
   State<_DraftCountdown> createState() => _DraftCountdownState();
@@ -727,7 +736,9 @@ class _OffsetDialogState extends State<_OffsetDialog> {
           // the line that does (Samyak, 2026-08-13). It answers for the
           // morning the drafted offset really lands on, which past a few
           // hours is not today's.
-          _DraftCountdown(at: () => widget.draftRing(_minutes)),
+          // `!` — the window walk always finds a morning: this dialog needs a
+          // location, and a location with no daily dawn is refused at add.
+          _DraftCountdown(at: () => widget.draftRing(_minutes)!),
           const SizedBox(height: 8),
           Text(
             arunodayWakeOffsetHint(widget.nextDawn, _minutes),

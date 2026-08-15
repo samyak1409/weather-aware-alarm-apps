@@ -1,6 +1,6 @@
 import 'package:core/core.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nivaat/src/courts_sheet.dart';
+import 'package:nivaat/src/courts.dart';
 import 'package:nivaat/src/engine.dart';
 import 'package:nivaat/src/home_screen.dart';
 import 'package:nivaat/src/skip_notifier.dart';
@@ -275,23 +275,37 @@ void main() {
       // and MESSAGES.md hid it behind an `{n} alarm(s) use {court}` shorthand
       // that never renders — nobody reads the one case the template elides.
       expect(nivaatDeleteCourtWarning('Society Court', 1, 0),
-          '1 alarm uses Society Court and will be deleted too. Continue?');
+          'Deleting Society Court also deletes 1 alarm. Continue?');
       expect(nivaatDeleteCourtWarning('Society Court', 2, 0),
-          '2 alarms use Society Court and will be deleted too. Continue?');
+          'Deleting Society Court also deletes 2 alarms. Continue?');
       expect(
         nivaatDeleteCourtWarning('Society Court', 1, 1),
-        '1 alarm uses Society Court and will be deleted too, along with '
-        '1 history entry. Continue?',
+        'Deleting Society Court also deletes 1 alarm and 1 history entry. '
+        'Continue?',
       );
       expect(
         nivaatDeleteCourtWarning('Society Court', 2, 5),
-        '2 alarms use Society Court and will be deleted too, along with '
-        '5 history entries. Continue?',
+        'Deleting Society Court also deletes 2 alarms and 5 history entries. '
+        'Continue?',
       );
       expect(nivaatDeleteCourtWarning('Society Court', 0, 1),
-          '1 history entry for Society Court will be deleted too. Continue?');
+          'Deleting Society Court also deletes 1 history entry. Continue?');
       expect(nivaatDeleteCourtWarning('Society Court', 0, 5),
-          '5 history entries for Society Court will be deleted too. Continue?');
+          'Deleting Society Court also deletes 5 history entries. Continue?');
+      // The fourth shape, added 2026-08-15 when the dialog stopped being
+      // skipped for a bare court (Samyak). "Nothing to warn about" was the
+      // wrong call: the row does not say whether an alarm points here, so the
+      // user could not know which of these four they were skipping.
+      expect(nivaatDeleteCourtWarning('Society Court', 0, 0),
+          'No alarm uses Society Court. Continue?');
+      // **One verb over both nouns** (2026-08-15). The old shape was
+      // `2 alarms use {court} and will be deleted too, along with 5 history
+      // entries`, and the two rewrites weighed against it both said history
+      // *uses* a court — which it does not — and needed a plural verb for a
+      // compound subject on top. `deletes` governs both, so nothing has to
+      // agree with a count.
+      expect(nivaatDeleteCourtWarning('Society Court', 2, 5),
+          isNot(contains('along with')));
     });
   });
 

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'models.dart';
 import 'open_meteo.dart';
 import 'theme.dart';
 
@@ -206,6 +207,10 @@ class _LocationSearchSheetState extends State<_LocationSearchSheet> {
             '${pos.latitude.toStringAsFixed(3)}, ${pos.longitude.toStringAsFixed(3)}',
         lat: pos.latitude,
         lon: pos.longitude,
+        // The one place that mints a GPS place. Everything downstream reads
+        // this rather than sniffing the region string — which is coordinates
+        // here precisely because there is no region to quote.
+        source: PlaceSource.gps,
       ));
     } finally {
       if (mounted) setState(() => _locating = false);

@@ -44,6 +44,24 @@ class $CourtsTable extends Courts with TableInfo<$CourtsTable, Court> {
     type: DriftSqlType.double,
     requiredDuringInsert: true,
   );
+  @override
+  late final GeneratedColumnWithTypeConverter<PlaceSource, String> source =
+      GeneratedColumn<String>(
+        'source',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      ).withConverter<PlaceSource>($CourtsTable.$convertersource);
+  static const VerificationMeta _regionMeta = const VerificationMeta('region');
+  @override
+  late final GeneratedColumn<String> region = GeneratedColumn<String>(
+    'region',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _positionMeta = const VerificationMeta(
     'position',
   );
@@ -56,7 +74,15 @@ class $CourtsTable extends Courts with TableInfo<$CourtsTable, Court> {
     requiredDuringInsert: true,
   );
   @override
-  List<GeneratedColumn> get $columns => [id, name, lat, lon, position];
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    lat,
+    lon,
+    source,
+    region,
+    position,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -98,6 +124,12 @@ class $CourtsTable extends Courts with TableInfo<$CourtsTable, Court> {
     } else if (isInserting) {
       context.missing(_lonMeta);
     }
+    if (data.containsKey('region')) {
+      context.handle(
+        _regionMeta,
+        region.isAcceptableOrUnknown(data['region']!, _regionMeta),
+      );
+    }
     if (data.containsKey('position')) {
       context.handle(
         _positionMeta,
@@ -131,6 +163,16 @@ class $CourtsTable extends Courts with TableInfo<$CourtsTable, Court> {
         DriftSqlType.double,
         data['${effectivePrefix}lon'],
       )!,
+      source: $CourtsTable.$convertersource.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}source'],
+        )!,
+      ),
+      region: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}region'],
+      ),
       position: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}position'],
@@ -142,6 +184,9 @@ class $CourtsTable extends Courts with TableInfo<$CourtsTable, Court> {
   $CourtsTable createAlias(String alias) {
     return $CourtsTable(attachedDatabase, alias);
   }
+
+  static JsonTypeConverter2<PlaceSource, String, String> $convertersource =
+      const EnumNameConverter<PlaceSource>(PlaceSource.values);
 }
 
 class Court extends DataClass implements Insertable<Court> {
@@ -149,12 +194,16 @@ class Court extends DataClass implements Insertable<Court> {
   final String name;
   final double lat;
   final double lon;
+  final PlaceSource source;
+  final String? region;
   final int position;
   const Court({
     required this.id,
     required this.name,
     required this.lat,
     required this.lon,
+    required this.source,
+    this.region,
     required this.position,
   });
   @override
@@ -164,6 +213,14 @@ class Court extends DataClass implements Insertable<Court> {
     map['name'] = Variable<String>(name);
     map['lat'] = Variable<double>(lat);
     map['lon'] = Variable<double>(lon);
+    {
+      map['source'] = Variable<String>(
+        $CourtsTable.$convertersource.toSql(source),
+      );
+    }
+    if (!nullToAbsent || region != null) {
+      map['region'] = Variable<String>(region);
+    }
     map['position'] = Variable<int>(position);
     return map;
   }
@@ -174,6 +231,10 @@ class Court extends DataClass implements Insertable<Court> {
       name: Value(name),
       lat: Value(lat),
       lon: Value(lon),
+      source: Value(source),
+      region: region == null && nullToAbsent
+          ? const Value.absent()
+          : Value(region),
       position: Value(position),
     );
   }
@@ -188,6 +249,10 @@ class Court extends DataClass implements Insertable<Court> {
       name: serializer.fromJson<String>(json['name']),
       lat: serializer.fromJson<double>(json['lat']),
       lon: serializer.fromJson<double>(json['lon']),
+      source: $CourtsTable.$convertersource.fromJson(
+        serializer.fromJson<String>(json['source']),
+      ),
+      region: serializer.fromJson<String?>(json['region']),
       position: serializer.fromJson<int>(json['position']),
     );
   }
@@ -199,6 +264,10 @@ class Court extends DataClass implements Insertable<Court> {
       'name': serializer.toJson<String>(name),
       'lat': serializer.toJson<double>(lat),
       'lon': serializer.toJson<double>(lon),
+      'source': serializer.toJson<String>(
+        $CourtsTable.$convertersource.toJson(source),
+      ),
+      'region': serializer.toJson<String?>(region),
       'position': serializer.toJson<int>(position),
     };
   }
@@ -208,12 +277,16 @@ class Court extends DataClass implements Insertable<Court> {
     String? name,
     double? lat,
     double? lon,
+    PlaceSource? source,
+    Value<String?> region = const Value.absent(),
     int? position,
   }) => Court(
     id: id ?? this.id,
     name: name ?? this.name,
     lat: lat ?? this.lat,
     lon: lon ?? this.lon,
+    source: source ?? this.source,
+    region: region.present ? region.value : this.region,
     position: position ?? this.position,
   );
   Court copyWithCompanion(CourtsCompanion data) {
@@ -222,6 +295,8 @@ class Court extends DataClass implements Insertable<Court> {
       name: data.name.present ? data.name.value : this.name,
       lat: data.lat.present ? data.lat.value : this.lat,
       lon: data.lon.present ? data.lon.value : this.lon,
+      source: data.source.present ? data.source.value : this.source,
+      region: data.region.present ? data.region.value : this.region,
       position: data.position.present ? data.position.value : this.position,
     );
   }
@@ -233,13 +308,15 @@ class Court extends DataClass implements Insertable<Court> {
           ..write('name: $name, ')
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
+          ..write('source: $source, ')
+          ..write('region: $region, ')
           ..write('position: $position')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, name, lat, lon, position);
+  int get hashCode => Object.hash(id, name, lat, lon, source, region, position);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -248,6 +325,8 @@ class Court extends DataClass implements Insertable<Court> {
           other.name == this.name &&
           other.lat == this.lat &&
           other.lon == this.lon &&
+          other.source == this.source &&
+          other.region == this.region &&
           other.position == this.position);
 }
 
@@ -256,6 +335,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
   final Value<String> name;
   final Value<double> lat;
   final Value<double> lon;
+  final Value<PlaceSource> source;
+  final Value<String?> region;
   final Value<int> position;
   final Value<int> rowid;
   const CourtsCompanion({
@@ -263,6 +344,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
     this.name = const Value.absent(),
     this.lat = const Value.absent(),
     this.lon = const Value.absent(),
+    this.source = const Value.absent(),
+    this.region = const Value.absent(),
     this.position = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -271,18 +354,23 @@ class CourtsCompanion extends UpdateCompanion<Court> {
     required String name,
     required double lat,
     required double lon,
+    required PlaceSource source,
+    this.region = const Value.absent(),
     required int position,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        name = Value(name),
        lat = Value(lat),
        lon = Value(lon),
+       source = Value(source),
        position = Value(position);
   static Insertable<Court> custom({
     Expression<String>? id,
     Expression<String>? name,
     Expression<double>? lat,
     Expression<double>? lon,
+    Expression<String>? source,
+    Expression<String>? region,
     Expression<int>? position,
     Expression<int>? rowid,
   }) {
@@ -291,6 +379,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
       if (name != null) 'name': name,
       if (lat != null) 'lat': lat,
       if (lon != null) 'lon': lon,
+      if (source != null) 'source': source,
+      if (region != null) 'region': region,
       if (position != null) 'position': position,
       if (rowid != null) 'rowid': rowid,
     });
@@ -301,6 +391,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
     Value<String>? name,
     Value<double>? lat,
     Value<double>? lon,
+    Value<PlaceSource>? source,
+    Value<String?>? region,
     Value<int>? position,
     Value<int>? rowid,
   }) {
@@ -309,6 +401,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
       name: name ?? this.name,
       lat: lat ?? this.lat,
       lon: lon ?? this.lon,
+      source: source ?? this.source,
+      region: region ?? this.region,
       position: position ?? this.position,
       rowid: rowid ?? this.rowid,
     );
@@ -329,6 +423,14 @@ class CourtsCompanion extends UpdateCompanion<Court> {
     if (lon.present) {
       map['lon'] = Variable<double>(lon.value);
     }
+    if (source.present) {
+      map['source'] = Variable<String>(
+        $CourtsTable.$convertersource.toSql(source.value),
+      );
+    }
+    if (region.present) {
+      map['region'] = Variable<String>(region.value);
+    }
     if (position.present) {
       map['position'] = Variable<int>(position.value);
     }
@@ -345,6 +447,8 @@ class CourtsCompanion extends UpdateCompanion<Court> {
           ..write('name: $name, ')
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
+          ..write('source: $source, ')
+          ..write('region: $region, ')
           ..write('position: $position, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -5121,6 +5225,8 @@ typedef $$CourtsTableCreateCompanionBuilder =
       required String name,
       required double lat,
       required double lon,
+      required PlaceSource source,
+      Value<String?> region,
       required int position,
       Value<int> rowid,
     });
@@ -5130,6 +5236,8 @@ typedef $$CourtsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<double> lat,
       Value<double> lon,
+      Value<PlaceSource> source,
+      Value<String?> region,
       Value<int> position,
       Value<int> rowid,
     });
@@ -5160,6 +5268,17 @@ class $$CourtsTableFilterComposer
 
   ColumnFilters<double> get lon => $composableBuilder(
     column: $table.lon,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<PlaceSource, PlaceSource, String> get source =>
+      $composableBuilder(
+        column: $table.source,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
+
+  ColumnFilters<String> get region => $composableBuilder(
+    column: $table.region,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5198,6 +5317,16 @@ class $$CourtsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get region => $composableBuilder(
+    column: $table.region,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get position => $composableBuilder(
     column: $table.position,
     builder: (column) => ColumnOrderings(column),
@@ -5224,6 +5353,12 @@ class $$CourtsTableAnnotationComposer
 
   GeneratedColumn<double> get lon =>
       $composableBuilder(column: $table.lon, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<PlaceSource, String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<String> get region =>
+      $composableBuilder(column: $table.region, builder: (column) => column);
 
   GeneratedColumn<int> get position =>
       $composableBuilder(column: $table.position, builder: (column) => column);
@@ -5261,6 +5396,8 @@ class $$CourtsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<double> lat = const Value.absent(),
                 Value<double> lon = const Value.absent(),
+                Value<PlaceSource> source = const Value.absent(),
+                Value<String?> region = const Value.absent(),
                 Value<int> position = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CourtsCompanion(
@@ -5268,6 +5405,8 @@ class $$CourtsTableTableManager
                 name: name,
                 lat: lat,
                 lon: lon,
+                source: source,
+                region: region,
                 position: position,
                 rowid: rowid,
               ),
@@ -5277,6 +5416,8 @@ class $$CourtsTableTableManager
                 required String name,
                 required double lat,
                 required double lon,
+                required PlaceSource source,
+                Value<String?> region = const Value.absent(),
                 required int position,
                 Value<int> rowid = const Value.absent(),
               }) => CourtsCompanion.insert(
@@ -5284,6 +5425,8 @@ class $$CourtsTableTableManager
                 name: name,
                 lat: lat,
                 lon: lon,
+                source: source,
+                region: region,
                 position: position,
                 rowid: rowid,
               ),

@@ -1,5 +1,6 @@
 import 'package:arunoday/main.dart';
 import 'package:arunoday/src/controller.dart';
+import 'package:arunoday/src/messages.dart';
 import 'package:arunoday/src/settings_sheet.dart';
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
@@ -212,6 +213,55 @@ void main() {
     // cancel it) and home's minute ticker (which dispose does).
     await tester.pump(const Duration(milliseconds: 1200));
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  group('deleting a location (2026-08-15)', () {
+    testWidgets('asks first, and Cancel keeps it', (tester) async {
+      // The bin was one tap from gone, and on the last location that tap
+      // silently switched the wake and bedtime off — the most destructive
+      // gesture in the app, with the least in front of it.
+      final c = await controller(const ArunodaySettings(
+          locations: [_jaipur], activeLocationId: 'l1'));
+      await open(tester, c);
+
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+      expect(find.text('DELETE LOCATION'), findsOneWidget);
+      expect(find.text(arunodayDeleteLocationWarning('Jaipur', isActive: true)),
+          findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(c.settings.locations, hasLength(1), reason: 'Cancel means cancel');
+      expect(find.text('Wake alarm'), findsOneWidget);
+    });
+
+    testWidgets('the last one goes, and the page STAYS', (tester) async {
+      // It used to pop, because settings was unreachable without a location
+      // and staying would have stranded you. Settings opens from the empty
+      // home now, so popping would throw away the page you were working on —
+      // and what is left is exactly the section you need next.
+      final c = await controller(const ArunodaySettings(
+          locations: [_jaipur], activeLocationId: 'l1'));
+      await open(tester, c);
+
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+      // The dialog's own Delete, not the row's bin icon.
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      expect(c.settings.locations, isEmpty);
+      expect(c.settings.activeLocationId, isNull,
+          reason: 'nothing left to be active');
+      expect(find.text('SETTINGS'), findsOneWidget,
+          reason: 'the page must not pop out from under the user');
+      // And the rows that needed a location are gone with it, live — this is
+      // the same page, rebuilt, not a fresh one.
+      expect(find.text('Wake alarm'), findsNothing);
+      expect(find.text('Bedtime'), findsNothing);
+      expect(find.text(kArunodayNoLocationsYet), findsOneWidget);
+    });
   });
 
   testWidgets('two quick switch taps do not undo each other (REVIEW #20)',

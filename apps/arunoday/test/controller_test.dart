@@ -92,6 +92,28 @@ class _ThrowingScheduler extends FakeScheduler {
   }
 }
 
+/// Watches for the one state `update` must never publish: a location visible
+/// with no sleep plan behind it.
+///
+/// It looks from INSIDE `save`, which is the await `update` blocks on — the
+/// only moment the split was ever observable, and the moment home's minute
+/// ticker could land a `setState` in (home rebuilds on its own clock, not on
+/// this controller's notify). Before 2026-08-15 that rendered `—`; with the
+/// placeholders gone it is a null-check crash on the first location you add.
+class _PlanWatchingStore extends ArunodayStore {
+  ArunodayController? controller;
+  bool sawLocationWithoutPlan = false;
+
+  @override
+  Future<void> save(ArunodaySettings s) async {
+    final c = controller;
+    if (c != null && c.activeLocation != null && c.plan == null) {
+      sawLocationWithoutPlan = true;
+    }
+    return super.save(s);
+  }
+}
+
 const tonk = SavedLocation(id: 'tonk', name: 'Tonk', lat: 26.17, lon: 75.79);
 
 String _dateKey(DateTime d) =>
@@ -199,6 +221,10 @@ void main() {
     final fake = FakeScheduler();
     final c = ArunodayController(store: ArunodayStore(), scheduler: fake);
     await c.init();
+    // Sampled BEFORE the arm, so the comparison below cannot lose a race with
+    // the clock it is asserting against: the pass arms everything strictly
+    // after its own `now`, which is at or after this one.
+    final armedAfter = DateTime.now();
     await c.update(const ArunodaySettings(
       locations: [tonk],
       activeLocationId: 'tonk',
@@ -212,7 +238,7 @@ void main() {
 
     // Every scheduled moment is in the future.
     for (final at in fake.scheduled.values) {
-      expect(at.isAfter(DateTime.now()), isTrue);
+      expect(at.isAfter(armedAfter), isTrue);
     }
 
     // Bedtime falls out of the sleep plan (Tonk: ~22:00 zone).
@@ -285,8 +311,11 @@ void main() {
     // with the auto bedtime at ~22:00 a "one minute from now" AGAIN would be
     // on the wrong side of it for most of the day.
     await aimBedtime(c, -10);
+    // One clock sample, taken before the read it judges — `nextBedtimeRing`
+    // takes its own, so a fresh one here can be the later of the two.
+    final before = DateTime.now();
     final daily = c.nextBedtimeRing!; // no AGAIN yet → the daily bedtime
-    expect(daily.isAfter(DateTime.now()), isTrue);
+    expect(daily.isAfter(before), isTrue);
 
     final soon = DateTime.now().add(const Duration(minutes: 1));
     await c.update(c.settings.copyWith(bedtimeDelayedUntil: () => soon));
@@ -451,6 +480,21 @@ void main() {
       locations: [tonk],
       activeLocationId: 'tonk',
     ));
+
+    // **Aim both, or this test is a time bomb** (2026-08-15). Every assertion
+    // below is about the GAP between the bedtime, the wake and a re-ring, and
+    // left to the real clock those gaps are whatever hour the suite runs at.
+    // It failed on 2026-08-15 at 05:34 IST: Tonk's dawn that morning was
+    // 05:35:09, so `nextWake` was 05:35, `later` below was 05:34 — already
+    // past — and `sleepStartMoment` correctly ignored a re-ring behind it.
+    // A 60-second window, once a day, in a file that was otherwise green.
+    //
+    // Aimed, the wake is six hours out and the bedtime eight hours before it,
+    // which is a night at any hour and in any zone. The two helpers at the
+    // top of this file exist for exactly this and every sibling test already
+    // uses them — these two were the ones that got missed.
+    await aimWake(c, 360);
+    await aimBedtime(c, -120);
 
     // No re-ring yet: sleep starts at the daily bedtime.
     final daily = c.sleepStartMoment!;
@@ -875,9 +919,30 @@ void main() {
 
     // −12h, the hard stop: today's dawn minus twelve hours is behind us for
     // most of the day, so the answer can only come from a later morning.
+    final drafted = DateTime.now();
     final far = c.draftWakeRing(-720)!;
-    expect(far.isAfter(DateTime.now()), isTrue,
+    expect(far.isAfter(drafted), isTrue,
         reason: 'a countdown must never point backwards');
+  });
+
+  test('update never publishes a location without its sleep plan', () async {
+    // Reproduced before it was fixed: `update` set `settings` and then awaited
+    // `store.save` BEFORE computing the plan, so anything that rebuilt inside
+    // that await saw a location the plan had not caught up with. Home's
+    // ticker is exactly such a thing.
+    final store = _PlanWatchingStore();
+    final c = ArunodayController(store: store, scheduler: FakeScheduler());
+    store.controller = c;
+    await c.init();
+
+    await c.update(const ArunodaySettings(
+      locations: [tonk],
+      activeLocationId: 'tonk',
+    ));
+
+    expect(store.sawLocationWithoutPlan, isFalse,
+        reason: 'the armed home reads both, so they have to move together');
+    expect(c.plan, isNotNull);
   });
 
   test('an edit is never mistaken for a host deferral', () async {
@@ -893,6 +958,23 @@ void main() {
       locations: [tonk],
       activeLocationId: 'tonk',
     ));
+    // **Six hours of room, or this test is a time bomb** (2026-08-15). It
+    // failed at 05:34 IST that morning, one minute under Tonk's 05:35:09
+    // dawn, and the mechanism is the rule under test firing correctly rather
+    // than a broken assertion: the edit moves every wake one minute EARLIER,
+    // so in the minute before dawn the EDITED time is already past — and a
+    // plugin time sitting a minute ahead of an alarm whose own moment has
+    // arrived is a textbook short host deferral, so `_isPreservable` keeps
+    // it and the alarm rightly never moves. `expect(isNot(old))` then fails.
+    // (Staged and confirmed by moving the LOCATION rather than the clock:
+    // dawn shifts ~4 min per degree of longitude, so the failing minute is
+    // reachable on demand.)
+    //
+    // Aimed, the wake is six hours out and one minute earlier is still five
+    // fifty-nine ahead — which is the case the rule is actually about: before
+    // an alarm's own moment there is nothing to have deferred.
+    await aimWake(c, 360);
+
     final id = fake.scheduled.keys.firstWhere((k) => k < 2000);
     final old = fake.scheduled[id]!;
 

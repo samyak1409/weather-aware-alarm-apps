@@ -59,11 +59,18 @@ class _WeekdaySetConverter extends TypeConverter<Set<int>, String> {
 const weekdaySet = _WeekdaySetConverter();
 
 /// Nivaat's saved courts. [position] keeps the list order the UI renders.
+///
+/// [source] and [region] are the ⓘ's provenance (X5, `savedLocationDetail`):
+/// the enum by NAME rather than by index, so adding a third way to pick a place
+/// can never re-label the courts already saved. [region] is nullable because a
+/// GPS fix genuinely has none.
 class Courts extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
   RealColumn get lat => real()();
   RealColumn get lon => real()();
+  TextColumn get source => textEnum<PlaceSource>()();
+  TextColumn get region => text().nullable()();
   IntColumn get position => integer()();
 
   @override

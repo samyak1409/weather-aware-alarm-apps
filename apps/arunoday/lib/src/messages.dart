@@ -174,15 +174,21 @@ String arunodaySleepReadout(SleepPlanResult plan) =>
 /// editor exactly (`nivaatInLabel`) rather than home's caps strip. Same
 /// minute-truncated number underneath.
 ///
-/// **The empty branch is defence, not a state either picker reaches**, the
-/// same standing as home's `—` clocks: a bedtime is a clock time and always
-/// has a next occurrence, and a drafted wake offset walks the whole window
-/// (`ArunodayController.draftWakeRing`), so even −12h lands on the following
-/// morning rather than behind you. It is kept because the alternative is a
-/// force-unwrap, and the slot it renders into is built either way.
-String arunodayPickerInLabel(DateTime? t, {DateTime? now}) {
-  final mins = _minutesUntil(t, now);
-  return mins == null ? '' : 'in ${fmtDuration(mins.toDouble())}';
+/// **[t] is non-null and there is no empty branch** (Samyak, 2026-08-15). It
+/// used to take a nullable and render `''`, described as defence — but a
+/// bedtime is a clock time and always has a next occurrence, and a drafted
+/// wake offset walks the whole window (`ArunodayController.draftWakeRing`), so
+/// even −12h lands on the following morning rather than behind you. Nothing
+/// reached the branch, so it was a line nobody could read and one more thing
+/// to keep true.
+String arunodayPickerInLabel(DateTime t, {DateTime? now}) {
+  final n = now ?? DateTime.now();
+  // Both truncated to the minute first, so the number agrees with the clock it
+  // is printed under.
+  final mins = DateTime(t.year, t.month, t.day, t.hour, t.minute)
+      .difference(DateTime(n.year, n.month, n.day, n.hour, n.minute))
+      .inMinutes;
+  return 'in ${fmtDuration(mins.toDouble())}';
 }
 
 /// A14's hint. [autoMinutes] is the SLEEP PLAN's bedtime — what the row would
@@ -194,8 +200,14 @@ String arunodayPickerInLabel(DateTime? t, {DateTime? now}) {
 /// branch rendering `manual`, and that was wrong twice: the word named the
 /// wrong thing (a manually-set bedtime is `bedtimeOffsetMinutes`, which leaves
 /// the auto value perfectly quotable), and the state it stood for — no sleep
-/// plan, i.e. no location — cannot reach this dialog, because settings is only
-/// openable from the armed home screen. See [arunodayWakeOffsetHint].
+/// plan, i.e. no location — cannot reach this dialog.
+///
+/// **That unreachability now rests on a different fact** (2026-08-15): settings
+/// used to open only from the armed home screen, and opens from the empty one
+/// too since the tune icon moved onto both. What keeps this dialog out of the
+/// no-location state is that the row which opens it is not built until there is
+/// a location — see `_SettingsPageState.build`. Same for
+/// [arunodayWakeOffsetHint].
 String arunodayBedtimePickerHint(int autoMinutes) =>
     'auto is ${fmtMinutesOfDay(autoMinutes.toDouble())}'
     ' · tap the time to pick exactly';
@@ -203,8 +215,8 @@ String arunodayBedtimePickerHint(int autoMinutes) =>
 /// A15's hint — anchor first, then the result: `dawn 06:51 · wake 07:11`.
 ///
 /// [dawn] is non-null for the same reason [arunodayBedtimePickerHint]'s
-/// argument is: with no location there is no settings page to open this from,
-/// and a location that has no daily dawn is refused when you add it (A16). The
+/// argument is: with no location the row that opens this dialog is not built at
+/// all, and a location that has no daily dawn is refused when you add it. The
 /// old `relative to civil dawn` fallback was unreachable, and it took the
 /// dialog's wake↔bedtime collision check down with it — that check short-
 /// circuits on a null dawn, so the one state that produced the fallback string
@@ -212,6 +224,55 @@ String arunodayBedtimePickerHint(int autoMinutes) =>
 String arunodayWakeOffsetHint(DateTime dawn, int offsetMinutes) =>
     'dawn ${fmtClock(dawn)} · wake '
     '${fmtClock(dawn.add(Duration(minutes: offsetMinutes)))}';
+
+// ── A11 · the LOCATIONS section ─────────────────────────────────────────────
+
+/// What the LOCATIONS section says when it is empty (2026-08-15).
+///
+/// **A state that could not be reached until this build.** Settings opened only
+/// from the armed home screen, so the section always had at least one row and
+/// never needed an empty state; now that the tune icon sits on the empty home
+/// too, an empty LOCATIONS is the first thing a new user meets there — and a
+/// bare header with a `+` beside it says nothing about what a location is for.
+/// Nivaat's courts have had this line (N19) since the sheet existed.
+///
+/// Names both alarms, because the wake is the obvious one and the bedtime is
+/// the one you would not guess also hangs off the dawn here.
+const String kArunodayNoLocationsYet =
+    'Add a location — the wake and bedtime alarms follow its dawn.';
+
+/// The delete-location confirmation (2026-08-15, Samyak — modelled on N20, and
+/// asked for **every** delete rather than only the destructive one).
+///
+/// Three shapes, and the split is the whole reason this is a builder: one tap
+/// on the bin can mean three different things, and only the last of them is
+/// obvious from the row.
+///
+/// [isActive] is measured against the *effective* active location — the stored
+/// id, or the first location when that is null — because that fallback is what
+/// the alarms really follow. [nextActiveName] is the place that inherits it,
+/// null only when nothing is left.
+String arunodayDeleteLocationWarning(
+  String name, {
+  required bool isActive,
+  String? nextActiveName,
+}) {
+  if (isActive && nextActiveName == null) {
+    // The tap that silently switched everything off. It is the one delete that
+    // costs the user their alarms, so it is the one that has to say so.
+    return 'Deleting $name leaves no location, so the wake and bedtime '
+        'alarms stop until you add one. Continue?';
+  }
+  if (isActive) {
+    // "will start following", not "will follow" (Samyak, 2026-08-15): the
+    // alarms are following something already, so the plain future reads as a
+    // description of the status quo rather than as the change you are about
+    // to make.
+    return '$name is the active location — the alarms will start following '
+        '$nextActiveName instead. Continue?';
+  }
+  return '$name will be removed. The alarms are unaffected. Continue?';
+}
 
 // ── A16 · place-picker refusals ─────────────────────────────────────────────
 

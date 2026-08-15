@@ -148,10 +148,13 @@ String? nivaatHistoryNote(HistoryRecord record) => switch (record.kind) {
 /// The CARD keeps the full evidence because it has no neighbour to lean on —
 /// that asymmetry is the decision, not an oversight.
 ///
-/// [courtName] is the caller's lookup, so a row whose court is gone can
-/// degrade to one word instead of blanking the sheet. Orphan rows are pruned
-/// on load, so that fallback is defence, not an expected path.
-String nivaatHistorySub(HistoryRecord record, String? courtName) {
+/// [courtName] is the caller's lookup, and it is **non-null** (Samyak,
+/// 2026-08-15): every load prunes rows whose court has gone
+/// (`NivaatController._loadHistory`), so the sheet can only render rows whose
+/// court is still there. It used to degrade to the word `court removed`, which
+/// nothing could reach — and neither app has shipped, so a throw here is a bug
+/// report where the fallback was a wrong word nobody would ever query.
+String nivaatHistorySub(HistoryRecord record, String courtName) {
   final note = nivaatHistoryNote(record);
   final checked = record.kind == HistoryKind.cancelled
       ? ''
@@ -160,7 +163,7 @@ String nivaatHistorySub(HistoryRecord record, String? courtName) {
           record.at,
           tried: record.outcome == CheckOutcome.skippedNoData,
         );
-  return '${courtName ?? 'court removed'} · '
+  return '$courtName · '
       '${fmtShortDate(record.at)} · ${fmtClock(record.at)}$checked'
       '${note == null ? '' : ' · $note'}';
 }
@@ -256,9 +259,14 @@ String _watchKey(int alarmId, DateTime at) =>
 /// Home alarm-list sub (MESSAGES.md N15). Non-default retry windows surface
 /// as `· +1m` / `· +60m` so a short test window is visible without opening
 /// the editor; the default 30 stays silent (the common case).
-String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation? court) {
+///
+/// [court] is **non-null** (Samyak, 2026-08-15): deleting a court deletes its
+/// alarms in the same synchronous step (N20), and only the UI isolate ever
+/// writes the alarm list, so no background check can leave an alarm behind its
+/// court. The old `court removed` fallback was a word no state could produce.
+String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation court) {
   final base =
-      '${fmtWeekdays(alarm.weekdays)} · ${court?.name ?? 'court removed'} '
+      '${fmtWeekdays(alarm.weekdays)} · ${court.name} '
       '· ≤${alarm.courtSpeedLimitKmh} km/h';
   if (alarm.retryMinutesAfter == CheckCascade.retryCapMinutesAfter) {
     return base;

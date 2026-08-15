@@ -2,6 +2,21 @@ import 'calendar.dart';
 import 'format.dart';
 import 'wind.dart';
 
+/// Which of the two ways of adding a place produced this one (X5).
+///
+/// Stored as the FACT, never as the sentence it renders — [savedLocationDetail]
+/// builds that. A place saved today has to keep answering correctly after the
+/// wording changes, which a stored display string cannot do.
+enum PlaceSource {
+  /// Picked from the Open-Meteo geocoder, so it carries that result's own
+  /// region line ("Rajasthan, India").
+  search,
+
+  /// A one-shot GPS fix the user named themselves — there is no region to
+  /// quote, only where the coordinates came from.
+  gps,
+}
+
 /// A saved named place (court or home). Stored as fixed lat/lon — no continuous
 /// GPS tracking (auto-location is the rejected feature); "add current location"
 /// uses a one-shot GPS fix, see location_picker.
@@ -11,6 +26,8 @@ class SavedLocation {
     required this.name,
     required this.lat,
     required this.lon,
+    this.source = PlaceSource.search,
+    this.region,
   });
 
   final String id;
@@ -18,16 +35,72 @@ class SavedLocation {
   final double lat;
   final double lon;
 
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'name': name, 'lat': lat, 'lon': lon};
+  /// How this place was added — what its ⓘ can honestly say.
+  final PlaceSource source;
 
+  /// The geocoder's own sub-line for a [PlaceSource.search] place
+  /// (`Rajasthan, India`), or null. Always null for a GPS fix: the picker's
+  /// `GeoPlace.region` there is a coordinate stand-in for the row it never
+  /// renders, and storing it would put a second copy of the numbers behind an
+  /// ⓘ whose whole job is to say something the row does not.
+  final String? region;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'lat': lat,
+        'lon': lon,
+        'source': source.name,
+        'region': region,
+      };
+
+  /// **No defaults for keys this app always writes** (CLAUDE.md's no-migration
+  /// policy): a blob from a build before `source` existed throws here rather
+  /// than being quietly reinterpreted as a searched place. `region` is read
+  /// as nullable because null is a value this build really writes, not an
+  /// absent key being papered over.
   factory SavedLocation.fromJson(Map<String, dynamic> j) => SavedLocation(
         id: j['id'] as String,
         name: j['name'] as String,
         lat: (j['lat'] as num).toDouble(),
         lon: (j['lon'] as num).toDouble(),
+        source: PlaceSource.values.byName(j['source'] as String),
+        region: j['region'] as String?,
       );
 }
+
+/// What the ⓘ beside a saved place says (X5) — **only the part the row does
+/// not already show**.
+///
+/// The row is the name, so the ⓘ is the rest of the geocoder's line and
+/// nothing else: `Rajasthan, India` under a place called Jaipur, never
+/// `Jaipur, Rajasthan, India` (Samyak, 2026-08-15). Repeating the name spends
+/// the front of a two-second pill on the one word already an inch above it.
+///
+/// A pure builder rather than a line inside the row, for the reason this repo
+/// keeps relearning: a string built inside a `build()` is a string no test can
+/// name. Both apps render it, so it lives here.
+///
+/// **A GPS fix has no region and needs none.** [SavedLocation.source] is read
+/// first, so it answers `Saved using GPS` and never looks at the region at all
+/// — the null it carries there says nothing about what the ⓘ shows.
+///
+/// **A SEARCHED place with no region says nothing, and that is the right
+/// answer** rather than a fallback standing in for one. Two spellings, one
+/// meaning: `''` when Open-Meteo answered with neither `admin1` nor `country`,
+/// and null for a place built without one — which is every fixture that omits
+/// it, so this is the branch that actually runs. The ⓘ then shows an empty
+/// pill, and that is the accepted residual.
+///
+/// An earlier draft returned the coordinates there and called the case
+/// unreachable in the same breath (Samyak, 2026-08-15). The coordinates went —
+/// they invented detail the row already carries in Nivaat — but the
+/// "unreachable" claim was wrong twice over and is gone too: the branch is
+/// exercised by every fixture that omits a region, and a doc that asserts
+/// unreachability for something a test then pins is the 2026-07-31 rule
+/// running backwards.
+String savedLocationDetail(SavedLocation place) =>
+    place.source == PlaceSource.gps ? 'Saved using GPS' : place.region ?? '';
 
 /// Arunoday settings: one active location, wake offset, optional bedtime
 /// override, master toggles.

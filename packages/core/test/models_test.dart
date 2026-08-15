@@ -3,16 +3,126 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('SavedLocation JSON round-trips (int coords widen to double)', () {
-    const loc = SavedLocation(id: 'a', name: 'Home', lat: 26.17, lon: 75.79);
+    const loc = SavedLocation(
+      id: 'a',
+      name: 'Home',
+      lat: 26.17,
+      lon: 75.79,
+      region: 'Rajasthan, India',
+    );
     final back = SavedLocation.fromJson(loc.toJson());
     expect(back.id, 'a');
     expect(back.name, 'Home');
     expect(back.lat, 26.17);
     expect(back.lon, 75.79);
+    expect(back.source, PlaceSource.search);
+    expect(back.region, 'Rajasthan, India');
     // num->double coercion for integer-valued coords.
     final z = SavedLocation.fromJson(
-        {'id': 'z', 'name': 'Eq', 'lat': 0, 'lon': 0});
+        {'id': 'z', 'name': 'Eq', 'lat': 0, 'lon': 0, 'source': 'search',
+         'region': null});
     expect(z.lat, 0.0);
+  });
+
+  test('a GPS place round-trips as one, with no region', () {
+    const loc = SavedLocation(
+      id: 'a',
+      name: 'My location',
+      lat: 26.17,
+      lon: 75.79,
+      source: PlaceSource.gps,
+    );
+    final back = SavedLocation.fromJson(loc.toJson());
+    expect(back.source, PlaceSource.gps);
+    expect(back.region, isNull);
+  });
+
+  test('a blob from before the ⓘ throws rather than being guessed at', () {
+    // CLAUDE.md's no-migration policy: neither app has shipped, and clearing
+    // app data is the upgrade path. Defaulting an absent `source` to `search`
+    // would silently relabel every GPS place ever saved — and the reason this
+    // is loud rather than quiet is that the wrong answer is unfalsifiable
+    // afterwards: nothing in the row would look wrong.
+    expect(
+      () => SavedLocation.fromJson(
+          {'id': 'a', 'name': 'Home', 'lat': 26.17, 'lon': 75.79}),
+      throwsA(anything),
+    );
+  });
+
+  group('savedLocationDetail — what the ⓘ says (X5)', () {
+    test('a searched place adds only what the row does not already show', () {
+      // The name is the row. Repeating it here would spend the front of a
+      // two-second pill on the word an inch above it (Samyak, 2026-08-15).
+      final detail = savedLocationDetail(const SavedLocation(
+        id: 'a',
+        name: 'Jaipur',
+        lat: 26.91,
+        lon: 75.79,
+        region: 'Rajasthan, India',
+      ));
+      expect(detail, 'Rajasthan, India');
+      expect(detail, isNot(contains('Jaipur')));
+    });
+
+    test('a GPS fix says where it came from instead', () {
+      expect(
+        savedLocationDetail(const SavedLocation(
+          id: 'a',
+          name: 'Home Court',
+          lat: 26.17,
+          lon: 75.79,
+          source: PlaceSource.gps,
+        )),
+        'Saved using GPS',
+      );
+    });
+
+    test('a place with no region has nothing to add, and says nothing', () {
+      // Both spellings of "no region": `''` from a geocode result carrying
+      // neither admin1 nor country, and null from a place built without one —
+      // which is every fixture that omits it, so this branch is exercised
+      // constantly rather than being the unreachable case an earlier draft of
+      // the dartdoc claimed (2026-08-15).
+      const bare = SavedLocation(id: 'a', name: 'Jaipur', lat: 26.91, lon: 75.79);
+      expect(bare.region, isNull, reason: 'the constructor default');
+      expect(savedLocationDetail(bare), '');
+      expect(
+        savedLocationDetail(const SavedLocation(
+            id: 'a', name: 'Jaipur', lat: 26.91, lon: 75.79, region: '')),
+        '',
+      );
+    });
+  });
+
+  group('GeoPlace.toSavedLocation — one conversion, three call sites', () {
+    test('a searched place keeps its region', () {
+      final saved = const GeoPlace(
+        name: 'Jaipur',
+        region: 'Rajasthan, India',
+        lat: 26.91,
+        lon: 75.79,
+      ).toSavedLocation();
+      expect(saved.source, PlaceSource.search);
+      expect(saved.region, 'Rajasthan, India');
+      expect(saved.name, 'Jaipur');
+    });
+
+    test('a GPS place drops its coordinate stand-in', () {
+      // The picker fills `GeoPlace.region` with the coordinates for a GPS
+      // pick, and storing that would put the numbers behind an ⓘ whose whole
+      // job is to say something the row does not already show.
+      final saved = const GeoPlace(
+        name: 'My location',
+        region: '26.170, 75.790',
+        lat: 26.17,
+        lon: 75.79,
+        source: PlaceSource.gps,
+      ).toSavedLocation();
+      expect(saved.source, PlaceSource.gps);
+      expect(saved.region, isNull);
+      expect(savedLocationDetail(saved), 'Saved using GPS');
+    });
   });
 
   group('ArunodaySettings', () {

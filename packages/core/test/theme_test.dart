@@ -25,6 +25,14 @@ void main() {
     expect(theme.dialogTheme.backgroundColor, AppPalette.surface);
     expect(theme.bottomSheetTheme.backgroundColor, AppPalette.surface);
     expect(theme.snackBarTheme.backgroundColor, AppPalette.surface);
+    // Tooltips joined the family on 2026-08-15, when the ⓘ made either app
+    // render one for the first time — Material's default is a LIGHT box with
+    // dark text under a dark theme, i.e. the only pale rectangle in the app.
+    expect(
+      (theme.tooltipTheme.decoration! as BoxDecoration).color,
+      AppPalette.surface,
+    );
+    expect(theme.tooltipTheme.textStyle!.color, AppPalette.textPrimary);
     // Home scaffolds stay pure black — only the elevated family is gray.
     expect(theme.scaffoldBackgroundColor, AppPalette.trueBlack);
     expect(theme.canvasColor, isNot(AppPalette.trueBlack));

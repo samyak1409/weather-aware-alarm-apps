@@ -52,11 +52,14 @@ class _CraftedByState extends State<CraftedBy> {
   /// guessed. The widget's box is not the same thing — it carries [padding].
   final GlobalKey _markLine = GlobalKey();
 
-  /// Where the middle of the mark is on screen, or null before it has laid
-  /// out (nothing can be tapped before then, so this is defence only).
-  double? get _markCenterY {
-    final box = _markLine.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return null;
+  /// Where the middle of the mark is on screen.
+  ///
+  /// Only ever read from [_tapMark], and a tap means the line is on screen and
+  /// laid out — so the box and its size both exist by then. The null-and-
+  /// `hasSize` guard this used to carry was defence against a state a tap
+  /// handler cannot be in (Samyak, 2026-08-15).
+  double get _markCenterY {
+    final box = _markLine.currentContext!.findRenderObject()! as RenderBox;
     return box.localToGlobal(box.size.center(Offset.zero)).dy;
   }
 

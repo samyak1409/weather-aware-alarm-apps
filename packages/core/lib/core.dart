@@ -8,6 +8,7 @@ export 'src/app_icon.dart';
 export 'src/app_window.dart';
 export 'src/appearance.dart';
 export 'src/calendar.dart';
+export 'src/confirm_dialog.dart';
 export 'src/crafted_by.dart';
 // Deliberately narrow: the generated row and companion types stay an
 // implementation detail of the stores, because app code writing its own
@@ -25,11 +26,13 @@ export 'src/motion.dart';
 export 'src/notification_permission_banner.dart';
 export 'src/nudge_banner.dart';
 export 'src/open_meteo.dart';
+export 'src/place_info_button.dart';
 export 'src/portrait.dart';
 export 'src/repos.dart';
 export 'src/ring_gate.dart';
 export 'src/system_settings.dart';
 export 'src/scheduler.dart';
+export 'src/settings_page.dart';
 export 'src/sleep_plan.dart';
 export 'src/solar.dart';
 export 'src/sound_picker.dart';

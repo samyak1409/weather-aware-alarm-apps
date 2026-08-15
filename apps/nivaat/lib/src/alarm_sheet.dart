@@ -7,6 +7,45 @@ import 'alarm_time_conflict.dart';
 import 'controller.dart';
 import 'engine.dart';
 
+/// N17's delete confirmation (2026-08-15, Samyak — the same round that put one
+/// on Arunoday's location delete).
+///
+/// `Delete` sat beside `Save` with nothing between it and a gone alarm, in a
+/// sheet you open by tapping the row you were only meaning to read.
+///
+/// **It names both the time and the court** (Samyak, 2026-08-15). Two alarms
+/// differ by exactly those, and the editor's own `Court` row shows the DRAFT —
+/// change the dropdown without saving and the row and this sentence disagree,
+/// which is the moment naming it here earns its place rather than repeating
+/// the screen.
+///
+/// Both are read off the **saved** alarm for that reason: `Delete` removes what
+/// is stored, not what you have half-typed over it.
+///
+/// [court] is **non-null** (Samyak, 2026-08-15): deleting a court deletes its
+/// alarms in the same synchronous step (N20), and only the UI isolate ever
+/// writes the alarm list, so an alarm cannot outlive its court. A no-court
+/// branch was written and cut — a sentence nothing could render.
+///
+/// **The history clause is the reassuring half.** Rows outlive their alarm —
+/// only deleting the COURT removes them (N20) — and without saying so, "delete"
+/// reads as "delete the mornings too", which is the reading that stops someone
+/// tidying up an alarm they no longer want. [history] is counted on the alarm's
+/// own id, which is never reissued (REVIEW #9), so it survives every edit to
+/// the alarm's time and court.
+///
+/// Top-level and pure for the reason `nivaatDeleteCourtWarning` is: that one
+/// shipped "1 alarm **use** Society Court" for a fortnight because it was built
+/// inside a widget and no test could name it. This one counts too.
+String nivaatDeleteAlarmWarning(String time, String court, int history) {
+  final what = 'The $time alarm at $court';
+  if (history == 0) return '$what will be deleted. Continue?';
+  // The verb agrees with the count, not just the noun — N20's lesson.
+  final h =
+      history == 1 ? '1 history entry stays' : '$history history entries stay';
+  return '$what will be deleted. Its $h in the log. Continue?';
+}
+
 Future<void> showAlarmSheet(
   BuildContext context,
   NivaatController c, {
@@ -34,8 +73,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   // a useful time; edits keep the saved value (2026-07-22).
   late int _hour;
   late int _minute;
-  // Fall back to the first court if the alarm's court was deleted — a value
-  // absent from the dropdown items would assert-crash the DropdownButton.
+  // A new alarm opens on the first court; an edit opens on its own.
   late String _courtId = _initialCourtId();
   // A new alarm opens on the defaults; an edit opens on what was saved, which
   // this editor is the only writer of — so both are always values the dropdown
@@ -130,11 +168,17 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
         ignoreEnabled: true,
       );
 
-  String _initialCourtId() {
-    final id = widget.existing?.courtId;
-    if (id != null && widget.c.courts.any((c) => c.id == id)) return id;
-    return widget.c.courts.first.id;
-  }
+  /// The court the dropdown opens on: a new alarm gets the first court, an
+  /// edit gets its own.
+  ///
+  /// **No "is the saved court still there?" check** (Samyak, 2026-08-15). It
+  /// guarded against a value absent from the dropdown's items, which
+  /// assert-crashes `DropdownButton` — but deleting a court deletes its alarms
+  /// in the same synchronous step (N20), and only the UI isolate writes the
+  /// alarm list, so an alarm cannot outlive its court. `courts.first` is the
+  /// genuine default for a NEW alarm and nothing else.
+  String _initialCourtId() =>
+      widget.existing?.courtId ?? widget.c.courts.first.id;
 
   String? _conflictFor(int hour, int minute) => nivaatAlarmTimeConflict(
         widget.c.alarms,
@@ -161,6 +205,32 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
   }
 
   bool _saving = false;
+
+  /// Delete, but ask first ([nivaatDeleteAlarmWarning]).
+  ///
+  /// The warning quotes the **saved** alarm, not the draft on screen: you are
+  /// deleting what is stored, and naming a time you have only just picked would
+  /// ask you to confirm the destruction of an alarm that never existed.
+  Future<void> _confirmDelete() async {
+    final existing = widget.existing;
+    if (existing == null) return;
+    final ok = await confirmDestructive(
+      context,
+      title: 'DELETE ALARM',
+      message: nivaatDeleteAlarmWarning(
+        '${existing.hour.toString().padLeft(2, '0')}:'
+        '${existing.minute.toString().padLeft(2, '0')}',
+        // The SAVED court, not `_courtId`: that one is the DRAFT, and the
+        // dropdown may have been changed without saving. `Delete` removes
+        // what is stored, so this names what is stored.
+        widget.c.courtById(existing.courtId)!.name,
+        widget.c.historyForAlarm(existing.id),
+      ),
+    );
+    if (!ok || !mounted) return;
+    await widget.c.deleteAlarm(existing.id);
+    if (mounted) Navigator.pop(context);
+  }
 
   Future<void> _save() async {
     // Guard against double-taps: a second tap would mint a second id and
@@ -413,10 +483,7 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
                 children: [
                   if (widget.existing != null)
                     TextButton(
-                      onPressed: () async {
-                        await widget.c.deleteAlarm(widget.existing!.id);
-                        if (context.mounted) Navigator.pop(context);
-                      },
+                      onPressed: _confirmDelete,
                       child: const Text('Delete',
                           style: TextStyle(color: AppPalette.textSecondary)),
                     ),

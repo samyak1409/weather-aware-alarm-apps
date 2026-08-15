@@ -206,13 +206,13 @@ void main() {
           'in 7h 22m', reason: 'the stray 59s must not round the minute up');
     });
 
-    test('empty is DEFENCE — neither picker can actually reach it', () {
-      // Kept for the same reason home's `—` clocks are (see A6/A7): the
-      // honest alternative is a force-unwrap. A bedtime is a clock time and
-      // always has a next occurrence, and a drafted wake offset walks the
-      // whole window, so even −12h lands on the following morning.
-      expect(arunodayPickerInLabel(null), '');
-      expect(arunodayPickerInLabel(dawn, now: wake), '');
+    test('always has a number — there is no empty branch left', () {
+      // It took a nullable and rendered `''` until 2026-08-15, described as
+      // defence. Nothing reached it: a bedtime is a clock time and always has
+      // a next occurrence, and a drafted wake offset walks the whole window,
+      // so even −12h lands on the following morning. Removed with the `—`
+      // clocks in the same pass (Samyak).
+      expect(arunodayPickerInLabel(wake, now: dawn), matches(inLabel));
     });
   });
 
@@ -401,6 +401,12 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Add location'), findsOneWidget);
+    // The way into settings is on this screen too since 2026-08-15 (Samyak):
+    // it used to appear only once there was a location, so before you had one
+    // there was no way to reach the tone, the app icon or the bold switch at
+    // all. Nivaat's has always been on both branches.
+    expect(find.byIcon(Icons.tune), findsOneWidget,
+        reason: 'the empty home must have a way into settings');
 
     // Height parity with Nivaat's N14 — the other half of the same claim, see
     // `screen_message_test` (2026-07-31).
@@ -533,6 +539,17 @@ void main() {
     }
     expect(find.text('APPEARANCE'), findsOneWidget);
     expect(find.text('LOCATIONS'), findsOneWidget);
+    // X4 rides every screen, not just home (2026-08-15) — and it carries the
+    // seven-tap developer gate, so a copy of the LINE would not do.
+    // **Pinned, not scrolled** (2026-08-15): the mark sits outside the
+    // ListView, the way it does on home, so a long locations list cannot push it
+    // off the page and the seven-tap gate stays reachable.
+    expect(find.byType(CraftedBy), findsOneWidget);
+    expect(
+      find.ancestor(of: find.byType(CraftedBy), matching: find.byType(ListView)),
+      findsNothing,
+      reason: 'inside the ListView it scrolls away with the last section',
+    );
     expect(find.text('Sleep late — tonight only'), findsOneWidget,
         reason: "A11's `Bedtime again` subtitle");
     expect(find.text('Long-press wake offset to reset to dawn.'),
@@ -540,6 +557,177 @@ void main() {
     expect(find.text('Long-press bedtime to return to auto.'), findsOneWidget);
     // The tone name rides as the row's trailing value (X6's default).
     expect(find.text('Dawn Bells'), findsOneWidget);
+  });
+
+  testWidgets('A11 — with no location, only what still means something shows',
+      (tester) async {
+    // Settings opens from the empty home now (2026-08-15, Samyak), so this
+    // page has a state it never had before. Every row above `Alarm sound` is
+    // a question about a place — a wake offset is measured from a dawn, a
+    // bedtime comes out of a sleep plan — and with no place there is nothing
+    // for them to read or write. They are left out rather than drawn dead.
+    tester.view.physicalSize = const Size(1200, 4000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller();
+
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () => showSettingsSheet(context, c),
+          child: const Text('open'),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    for (final row in [
+      'Wake alarm',
+      'Wake offset from dawn',
+      'Bedtime alarm',
+      'Bedtime',
+    ]) {
+      expect(find.text(row), findsNothing, reason: 'A11 row "$row" needs a '
+          'location to mean anything');
+    }
+    // What is NOT location-shaped stays — the tone and the appearance options
+    // are exactly the things you could not reach before this change.
+    expect(find.text('Alarm sound'), findsOneWidget);
+    expect(find.text('APPEARANCE'), findsOneWidget);
+    // And LOCATIONS says what it is for, rather than being a bare header with
+    // a `+` beside it (the twin of Nivaat's N19 line).
+    expect(find.text('LOCATIONS'), findsOneWidget);
+    expect(find.text(kArunodayNoLocationsYet), findsOneWidget);
+    expect(kArunodayNoLocationsYet,
+        'Add a location — the wake and bedtime alarms follow its dawn.');
+  });
+
+  testWidgets('A11 — the ⓘ on a location says where it came from',
+      (tester) async {
+    // The row shows the name you kept, which cannot tell two `Home`s apart or
+    // say whether the coordinates came off the map or off the phone (X5).
+    tester.view.physicalSize = const Size(1200, 4000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller(
+      settings: const ArunodaySettings(
+        locations: [
+          SavedLocation(
+            id: 'l1',
+            name: 'Jaipur',
+            lat: 26.91,
+            lon: 75.79,
+            region: 'Rajasthan, India',
+          )
+        ],
+        activeLocationId: 'l1',
+      ),
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => TextButton(
+          onPressed: () => showSettingsSheet(context, c),
+          child: const Text('open'),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // The button is an icon with no text, so its tooltip is the only thing a
+    // screen reader has to read out — and the only label a long-press shows.
+    expect(
+      tester
+          .widget<IconButton>(find.ancestor(
+              of: find.byIcon(Icons.info_outline),
+              matching: find.byType(IconButton)))
+          .tooltip,
+      'Where this place came from',
+    );
+
+    await tester.tap(find.byIcon(Icons.info_outline));
+    await tester.pumpAndSettle();
+    expect(find.text('Rajasthan, India'), findsOneWidget);
+
+    // See the toast off, or its timer outlives the test.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('A11 — a location row survives a narrow phone at large text',
+      (tester) async {
+    // The row grew a second trailing button on 2026-08-15 (the ⓘ beside the
+    // bin), which is the shape that tripped `ListTile`'s trailing-overflow
+    // assert on Nivaat's Court row at 2x on a 390pt phone. 375 wide is the
+    // narrowest we support; tall so the section is mounted at all, since it is
+    // the last one on a page that scrolls.
+    tester.view.physicalSize = const Size(375, 4000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final c = await controller(
+      settings: const ArunodaySettings(
+        locations: [
+          SavedLocation(
+              id: 'l1', name: 'Jaipur', lat: 26.91, lon: 75.79),
+          SavedLocation(id: 'l2', name: 'Mumbai', lat: 19.08, lon: 72.88),
+        ],
+        activeLocationId: 'l1',
+      ),
+    );
+
+    for (final scale in [1.0, 1.3, 2.0]) {
+      await tester.pumpWidget(MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showSettingsSheet(context, c),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'overflowed at ${scale}x');
+      expect(find.text('Jaipur'), findsOneWidget);
+      expect(find.byIcon(Icons.info_outline), findsNWidgets(2));
+      // Off the page again, so the next scale opens a fresh one rather than
+      // stacking routes.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+    }
+  });
+
+  group('A11 — the delete-location warning (2026-08-15)', () {
+    // One tap on the bin means three different things, and only the harmless
+    // one is obvious from the row. Modelled on N20, and asked on EVERY delete
+    // rather than only the destructive one (Samyak).
+    test('the last location takes the alarms with it, and says so', () {
+      expect(
+        arunodayDeleteLocationWarning('Jaipur', isActive: true),
+        'Deleting Jaipur leaves no location, so the wake and bedtime alarms '
+        'stop until you add one. Continue?',
+      );
+    });
+
+    test('the active one hands over, and names its successor', () {
+      expect(
+        arunodayDeleteLocationWarning('Jaipur',
+            isActive: true, nextActiveName: 'Mumbai'),
+        'Jaipur is the active location — the alarms will start following '
+        'Mumbai instead. Continue?',
+      );
+    });
+
+    test('a spare one changes nothing, and says that too', () {
+      expect(
+        arunodayDeleteLocationWarning('Mumbai',
+            isActive: false, nextActiveName: 'Jaipur'),
+        'Mumbai will be removed. The alarms are unaffected. Continue?',
+      );
+    });
   });
 
   testWidgets('A14/A15 — both pickers, opened the way the app opens them',

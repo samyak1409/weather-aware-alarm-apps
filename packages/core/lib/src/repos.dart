@@ -262,7 +262,14 @@ class NivaatStore {
         .get();
     return [
       for (final r in rows)
-        SavedLocation(id: r.id, name: r.name, lat: r.lat, lon: r.lon),
+        SavedLocation(
+          id: r.id,
+          name: r.name,
+          lat: r.lat,
+          lon: r.lon,
+          source: r.source,
+          region: r.region,
+        ),
     ];
   }
 
@@ -283,6 +290,8 @@ class NivaatStore {
                   name: Value(courts[i].name),
                   lat: Value(courts[i].lat),
                   lon: Value(courts[i].lon),
+                  source: Value(courts[i].source),
+                  region: Value(courts[i].region),
                   position: Value(i),
                 ),
             ]));

@@ -99,7 +99,7 @@ class NivaatController extends ChangeNotifier {
   }
 
   /// N21's refusal, or null to accept the place. Lives here, not inline in the
-  /// courts sheet, for the reason this repo keeps relearning: a string built
+  /// courts UI, for the reason this repo keeps relearning: a string built
   /// inside a widget is a string no test can name (2026-07-31).
   ///
   /// "Area" rather than a distance: the rule is a ~100 m radius, and no
@@ -186,12 +186,9 @@ class NivaatController extends ChangeNotifier {
   }
 
   Future<void> addCourt(GeoPlace place) async {
-    final court = SavedLocation(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: place.name,
-      lat: place.lat,
-      lon: place.lon,
-    );
+    // One conversion, shared with Arunoday's two add-a-location call sites —
+    // it is the only thing that knows a GPS pick keeps no region (X5).
+    final court = place.toSavedLocation();
     courts = [...courts, court];
     await store.saveCourts(courts);
     notifyListeners();
@@ -206,6 +203,17 @@ class NivaatController extends ChangeNotifier {
   /// alarm was deleted earlier.
   int historyForCourt(String courtId) =>
       history.where((h) => h.courtId == courtId).length;
+
+  /// How many history rows belong to [alarmId] — what the delete-alarm
+  /// confirmation says stays behind (N17).
+  ///
+  /// Rows survive their alarm on purpose: the log is a record of mornings, not
+  /// of alarms, and only deleting the COURT takes them
+  /// ([NivaatStore.removeHistoryForCourt]). Saying so is the point of quoting
+  /// the number — a delete that looks like it also erases the log would stop
+  /// people deleting alarms they no longer want.
+  int historyForAlarm(int alarmId) =>
+      history.where((h) => h.alarmId == alarmId).length;
 
   Future<void> removeCourt(String id) async {
     final orphaned = alarms.where((a) => a.courtId == id).toList();

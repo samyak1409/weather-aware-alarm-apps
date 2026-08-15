@@ -1962,10 +1962,11 @@ void main() {
       nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: 60), court),
       'Every day · Home Court · ≤4 km/h · +60m',
     );
-    expect(
-      nivaatAlarmListSub(alarm, null),
-      'Every day · court removed · ≤4 km/h',
-    );
+    // The `court removed` fallback was cut on 2026-08-15: deleting a court
+    // deletes its alarms in the same step and only the UI isolate writes the
+    // alarm list, so no state could render it. `court` is non-null now, and
+    // this assertion is what is left of the case — the court is always named.
+    expect(nivaatAlarmListSub(alarm, court), contains('Home Court'));
   });
 
   test('nivaatInLabel / nivaatNextRingAt: countdown only for a future ring', () {

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'models.dart';
 import 'wind.dart';
 
 /// Minimal Open-Meteo client (free, no API key) using dart:io directly so
@@ -127,12 +128,40 @@ class GeoPlace {
     required this.region,
     required this.lat,
     required this.lon,
+    this.source = PlaceSource.search,
   });
 
   final String name;
+
+  /// The geocoder's own sub-line (`Rajasthan, India`). For a GPS pick this is
+  /// the coordinates instead — a stand-in the picker never renders, and one
+  /// [source] tells a caller not to quote (see [savedLocationDetail]).
   final String region;
+
+  /// Which half of the picker produced this place (X5). Defaults to the
+  /// geocoder, which is what every result parsed here is.
+  final PlaceSource source;
+
   final double lat;
   final double lon;
+
+  /// The place as the apps store it — **one conversion, three call sites**
+  /// (Arunoday's home and settings both add a location; Nivaat adds a court).
+  /// Each carried its own copy of these four fields, and the ⓘ's provenance
+  /// would have made that three copies of a rule instead: a GPS pick keeps no
+  /// [region], because the string there is a coordinate stand-in rather than a
+  /// place the geocoder named.
+  ///
+  /// The id is minted here for the same reason — it was the same expression in
+  /// all three.
+  SavedLocation toSavedLocation() => SavedLocation(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        name: name,
+        lat: lat,
+        lon: lon,
+        source: source,
+        region: source == PlaceSource.gps ? null : region,
+      );
 }
 
 class OpenMeteoException implements Exception {

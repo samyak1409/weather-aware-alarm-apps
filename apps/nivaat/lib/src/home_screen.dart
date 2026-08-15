@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'alarm_sheet.dart';
 import 'background_banner.dart';
 import 'controller.dart';
-import 'courts_sheet.dart';
+import 'courts.dart';
 import 'engine.dart';
 import 'history_sheet.dart';
 import 'screenshot_harness.dart';
@@ -154,11 +154,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _addAlarm() async {
-    // No court yet: bootstrap via place picker, then open the alarm editor
-    // (courts sheet auto-dismisses after the first save — Settings keeps the
-    // list open when adding from there).
+    // No court yet: pick a place first, then open the alarm editor. It used to
+    // go through the courts SHEET with `promptAdd`, which opened the picker
+    // from inside itself and then had to dismiss itself again on the way back
+    // — a whole flag and two pops to make a sheet the user never wanted to see
+    // get out of the way. With the courts list living in settings there is
+    // nothing in between: the picker is the step, and backing out of it means
+    // no alarm, because an alarm has nowhere to check the wind.
     if (c.courts.isEmpty) {
-      final added = await showCourtsSheet(context, c, promptAdd: true);
+      final added = await pickAndAddCourt(context, c);
       if (!added || !mounted) return;
     }
     await showAlarmSheet(context, c, alarm: null);
@@ -186,7 +190,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(28, 24, 16, 8),
+              // Right pad 28, matching Arunoday's top bar (2026-08-15,
+              // Samyak): it was 16, so the same control — the same icon, at
+              // the same size, opening the same page — sat 12pt further out in
+              // one app than the other. 28 is the body gutter both screens
+              // already use for everything else.
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 8),
               child: Row(
                 children: [
                   Text('NIVAAT', style: text.labelSmall),
@@ -355,7 +364,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         separatorBuilder: (_, _) => const Divider(),
         itemBuilder: (context, i) {
           final a = c.alarms[i];
-          final court = c.courtById(a.courtId);
+          // `!` — deleting a court deletes its alarms in the same step.
+          final court = c.courtById(a.courtId)!;
           // Countdown sits with the clock (what it measures) — not buried in
           // the court/limit sub. Enabled only; the switch already says off.
           final inText = a.enabled

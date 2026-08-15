@@ -396,10 +396,26 @@ class ArunodayController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// **The plan is recomputed BEFORE the first await, and that ordering is the
+  /// whole guarantee** (2026-08-15).
+  ///
+  /// `settings` is a public field, so the line above already publishes the new
+  /// location to anything that rebuilds — and home does not rebuild only on
+  /// this controller's notify: it runs its own minute ticker and calls
+  /// `setState` on its own clock. A tick landing inside `store.save` therefore
+  /// built the armed home from a location whose sleep plan did not exist yet.
+  /// That used to render `—`; since those placeholders were deleted on
+  /// 2026-08-15 it is a null-check crash, on the app's very first location.
+  ///
+  /// **And the save must then write `settings`, not `next`.** [_recomputePlan]
+  /// can clean the settings it reads — an expired one-timer, a re-ring the
+  /// bedtime has moved past — and it saves that itself, fire-and-forget. Saving
+  /// `next` after it would put the uncleaned value back on disk.
   Future<void> update(ArunodaySettings next) async {
     settings = next;
-    await store.save(next);
-    await _recomputeAndResync();
+    _recomputePlan();
+    await store.save(settings);
+    await _armWindow();
     notifyListeners();
   }
 

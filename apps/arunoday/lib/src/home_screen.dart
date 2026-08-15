@@ -66,16 +66,39 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _addLocation() async {
     final place = await showLocationSearch(context, validate: c.placeRefusal);
     if (place == null || !mounted) return;
-    final loc = SavedLocation(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: place.name,
-      lat: place.lat,
-      lon: place.lon,
-    );
+    final loc = place.toSavedLocation();
     await c.update(c.settings.copyWith(
       locations: [...c.settings.locations, loc],
       activeLocationId: () => loc.id,
     ));
+  }
+
+  /// The one top bar, built the same on both branches (2026-08-15, Samyak).
+  ///
+  /// The tune icon used to appear only once there was a location, so the empty
+  /// screen had no way into settings at all — you could not change the tone or
+  /// the app icon until you had added a place, and the one screen that most
+  /// wants a way forward had only the button in the middle of it. Nivaat's has
+  /// always been on both, which is the shape this follows.
+  /// The 8pt below it is Nivaat's `fromLTRB(28, 24, 28, 8)`, which this now
+  /// matches exactly: 24 above the label, 8 under the bar. It had none, so the
+  /// first banner sat 8pt tighter to the bar here than there — the same bar,
+  /// the same banner, two apps.
+  Widget _topBar(TextTheme text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Text('ARUNODAY', style: text.labelSmall),
+          const Spacer(),
+          IconButton(
+            icon: const Icon(Icons.tune, size: 20),
+            color: AppPalette.textSecondary,
+            onPressed: () => showSettingsSheet(context, c),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Active "sleep late" re-ring, if one is pending.
@@ -132,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 24),
-        Text('ARUNODAY', style: text.labelSmall),
+        _topBar(text),
         const Spacer(),
         // The hero size, in step with Nivaat's N14 (2026-08-13, Samyak): on
         // the empty screen this one sentence IS the app, so it gets the same
@@ -182,24 +205,21 @@ class _HomeScreenState extends State<HomeScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 24),
-        Row(
-          children: [
-            Text('ARUNODAY', style: text.labelSmall),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(Icons.tune, size: 20),
-              color: AppPalette.textSecondary,
-              onPressed: () => showSettingsSheet(context, c),
-            ),
-          ],
-        ),
+        _topBar(text),
         if (!kScreenshotHarness) ...[
           // Armed-home only (location set) — empty intro stays clean
           // (2026-07-22, same rule as Nivaat's ≥1-alarm gate).
+          // **Vertical rhythm matched to Nivaat's** (2026-08-15). Both apps
+          // stack the same two banners under the same top bar, and these
+          // carried `top: 16, bottom: 4` against the shared default's
+          // `bottom: 12` — so a pair of banners was 20pt apart here and 12pt
+          // apart there, and the gap to what followed was 4 against 12. Only
+          // the horizontal is app-specific: this column is already inset 28,
+          // where Nivaat's children inset themselves.
           const AlarmPermissionBanner(
             appName: 'Arunoday',
             accent: AppPalette.dawn,
-            margin: EdgeInsets.only(top: 16, bottom: 4),
+            margin: EdgeInsets.only(bottom: 12),
           ),
           // Android-only: the iOS rings are AlarmKit's own full-screen alerts,
           // so Arunoday posts nothing through this permission there. On Android
@@ -208,21 +228,20 @@ class _HomeScreenState extends State<HomeScreen>
           if (Platform.isAndroid)
             NotificationPermissionBanner(
               accent: AppPalette.dawn,
-              margin: const EdgeInsets.only(top: 16, bottom: 4),
+              margin: const EdgeInsets.only(bottom: 12),
               denied: notificationsDenied,
               recheckAfter: widget.permissionFlow,
               message: kArunodayNotificationsOff,
             ),
         ],
         const Spacer(),
-        // The `—` on both clocks is defence, not a state you can reach: this
-        // whole branch needs a location, and a location with no daily dawn is
-        // refused when you add it (A16), so dawn — and everything derived from
-        // it — resolves. No-location is the empty intro above (A9), which is
-        // what the doc used to mis-describe this as. Kept because the honest
-        // alternative is `nextWake!`, and this repo already has one scar from
-        // force-unwrapping an optional that "couldn't" be null (N4's volume,
-        // which made history permanently un-openable).
+        // **`!`, not a `—` fallback** (Samyak, 2026-08-15). This branch needs
+        // a location, and a location with no daily dawn is refused when you
+        // add it (A16), so dawn — and everything derived from it — resolves.
+        // No-location is the empty intro above (A9). The `—` was defence
+        // against a state no screen can render, and neither app has shipped:
+        // a crash here is a bug report, where a `—` is a wrong number nobody
+        // ever finds out about.
         // 72, above the theme's 64 (2026-08-13, Samyak). Local rather than a
         // bump to `displayLarge`, because that style is also both settings
         // pickers' — this is the one place on a home screen that wants the
@@ -234,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen>
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
           child: Text(
-            nextWake == null ? '—' : fmtClock(nextWake),
+            fmtClock(nextWake!),
             maxLines: 1,
             style: text.displayLarge!.copyWith(fontSize: 72),
           ),
@@ -250,7 +269,7 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         const SizedBox(height: 40),
         Text(
-          bed == null ? '—' : fmtMinutesOfDay(bed),
+          fmtMinutesOfDay(bed!),
           // The second clock moves 28 → 40 with it, so the pair keeps its
           // relationship instead of the bedtime shrinking away beside a
           // bigger wake.

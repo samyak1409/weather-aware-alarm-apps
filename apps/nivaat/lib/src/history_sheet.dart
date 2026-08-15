@@ -21,7 +21,7 @@ class _HistorySheet extends StatefulWidget {
   State<_HistorySheet> createState() => _HistorySheetState();
 }
 
-/// Listens to the controller, like the courts and settings sheets do. Without
+/// Listens to the controller, like the settings page does. Without
 /// it a background check that lands a row while this sheet is open showed up
 /// only after closing and reopening — home and the settings row count were
 /// already live, so the open log was the one stale surface (2026-07-26).
@@ -105,7 +105,8 @@ class _HistorySheetState extends State<_HistorySheet> {
                         title: Text(nivaatHistoryLine(h),
                             style: text.titleMedium),
                         subtitle: Text(
-                          nivaatHistorySub(h, c.courtById(h.courtId)?.name),
+                          // `!` — every load prunes rows whose court is gone.
+                          nivaatHistorySub(h, c.courtById(h.courtId)!.name),
                           style: text.bodyMedium,
                         ),
                       );

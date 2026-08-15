@@ -57,6 +57,18 @@ ThemeData buildOledTheme(Color accent, {bool heavyType = false}) {
       backgroundColor: AppPalette.surface,
       surfaceTintColor: Colors.transparent,
     ),
+    // Tooltips are an elevated overlay too, and were the one that got missed
+    // (2026-08-15, Samyak — the ⓘ's long-press label was the first tooltip
+    // either app rendered). Material's default paints a light box with dark
+    // text in a dark theme, which is the only pale rectangle in either app.
+    // Same grey and same text colour as every other overlay here.
+    tooltipTheme: const TooltipThemeData(
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        borderRadius: BorderRadius.all(Radius.circular(6)),
+      ),
+      textStyle: TextStyle(color: AppPalette.textPrimary, fontSize: 12),
+    ),
     // showTimePicker ignores dialogTheme (SDK) — pin it to the same elevated
     // gray as sheets/dialogs.
     timePickerTheme: const TimePickerThemeData(

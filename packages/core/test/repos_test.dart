@@ -49,6 +49,32 @@ void main() {
           reason: 'default retry window survives the store');
     });
 
+    test('a court keeps where it came from (X5)', () async {
+      // The ⓘ reads these two columns and nothing else, so a court that lost
+      // them on the way to disk would go on claiming it was searched for.
+      const searched = SavedLocation(
+        id: 'c1',
+        name: 'Society Court',
+        lat: 26.17,
+        lon: 75.79,
+        region: 'Rajasthan, India',
+      );
+      const fixed = SavedLocation(
+        id: 'c2',
+        name: 'Home Court',
+        lat: 26.18,
+        lon: 75.80,
+        source: PlaceSource.gps,
+      );
+      await store.saveCourts([searched, fixed]);
+      final back = await store.loadCourts();
+      expect(back[0].source, PlaceSource.search);
+      expect(back[0].region, 'Rajasthan, India');
+      expect(back[1].source, PlaceSource.gps);
+      expect(back[1].region, isNull);
+      expect(savedLocationDetail(back[1]), 'Saved using GPS');
+    });
+
     test('per-alarm retryMinutesAfter persists through the store', () async {
       const short = NivaatAlarm(
         id: 7,
