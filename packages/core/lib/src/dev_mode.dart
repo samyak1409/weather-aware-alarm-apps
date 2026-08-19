@@ -66,6 +66,14 @@ class DevTapRun {
   int _taps = 0;
   DateTime? _last;
 
+  /// How many taps the live run stands at — 0 before the first, and 0 again
+  /// the moment one completes.
+  ///
+  /// Read by the maker's mark to tell the two things a tap on SAMYAK can be
+  /// apart: at 1 it is a link being followed, past 1 it is a gate being
+  /// opened (see `CraftedBy.linkDelay`).
+  int get taps => _taps;
+
   /// Records a tap at [now]. True when this tap completes the run.
   ///
   /// A gap of exactly [DevMode.tapGap] still continues the run — the boundary

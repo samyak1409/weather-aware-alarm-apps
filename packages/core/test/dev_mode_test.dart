@@ -257,23 +257,94 @@ void main() {
           reason: 'it must still be on after the app is killed and reopened');
     });
 
-    testWidgets('tapping SAMYAK opens the site and never counts as a tap',
-        (tester) async {
-      // The mark's tap surface is the whole padded footer, because the heart
-      // alone is 11px of one 10px line. SAMYAK stays a link inside it: its
-      // RenderParagraph is deeper in the tree, so its recognizer enters the
-      // gesture arena first and takes the tap. If that ever stopped being
-      // true, opening Samyak's site seven times would silently flip the gate.
-      var opened = 0;
-      await tester.pumpWidget(host(openSite: () async => opened++));
-
-      for (var i = 0; i < DevMode.tapsToToggle; i++) {
+    Future<void> tapName(WidgetTester tester, int times) async {
+      for (var i = 0; i < times; i++) {
         await tester.tapOnText(find.textRange.ofSubstring('SAMYAK'));
         await tester.pump();
       }
-      expect(opened, DevMode.tapsToToggle);
-      expect(DevMode.enabled.value, isFalse);
-      expect(find.text(kDevModeOnMessage), findsNothing);
+    }
+
+    testWidgets('a lone tap on SAMYAK opens the site, a run window later',
+        (tester) async {
+      // SAMYAK stays a link — it just stops being an instant one.
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, 1);
+      await tester.pump(DevMode.tapGap);
+      expect(opened, 0,
+          reason: 'a tap landing on the gap still continues a run, so the '
+              'site cannot have opened yet');
+
+      await tester.pump(CraftedBy.linkDelay - DevMode.tapGap);
+      expect(opened, 1);
+      expect(DevMode.enabled.value, isFalse, reason: 'one tap is not seven');
+    });
+
+    testWidgets('a run that stalls short of seven opens nothing at all',
+        (tester) async {
+      // Giving up at three does not turn those three back into a link tap
+      // (Samyak, 2026-08-20): only a run's FIRST tap ever arms the site, so an
+      // abandoned gesture is silent rather than answered with a browser.
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, 3);
+      await tester.pump(CraftedBy.linkDelay);
+      expect(opened, 0);
+      expect(DevMode.enabled.value, isFalse, reason: 'three is not seven');
+      // That the NEXT tap reaches the site again is the run expiring, which
+      // runs on the wall clock (`DateTime.now()`) and so cannot be pumped —
+      // it is the counting group's, not this one's.
+    });
+
+    testWidgets('seven taps on SAMYAK flip the gate and open nothing',
+        (tester) async {
+      // Why the link waits at all (2026-08-20, Samyak): SAMYAK is the widest
+      // target on the mark, so a thumb going for the gate lands on the word —
+      // and it used to answer with seven browsers while the run stayed at
+      // zero.
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, DevMode.tapsToToggle);
+      expect(DevMode.enabled.value, isTrue);
+      expect(find.text(kDevModeOnMessage), findsOneWidget);
+
+      await tester.pump(CraftedBy.linkDelay);
+      expect(opened, 0, reason: 'every tap cancelled the one waiting before '
+          'it, and the seventh spent the run on the gate');
+    });
+
+    testWidgets('a run counts the same wherever on the mark its taps land',
+        (tester) async {
+      // The footer and the word are one surface for counting purposes, so a
+      // thumb that drifts on and off the word still gets there.
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, 1);
+      await tapMark(tester, DevMode.tapsToToggle - 2);
+      await tapName(tester, 1);
+      expect(DevMode.enabled.value, isTrue);
+
+      await tester.pump(CraftedBy.linkDelay);
+      expect(opened, 0,
+          reason: 'the seventh tap was on SAMYAK and still owed nothing — it '
+              'completed the run');
+    });
+
+    testWidgets('a tap on the footer calls off a waiting site visit',
+        (tester) async {
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, 1);
+      await tapMark(tester, 1);
+      await tester.pump(CraftedBy.linkDelay);
+      expect(opened, 0,
+          reason: 'the second tap is a run building, not a link being '
+              'followed — whichever half of the mark it landed on');
     });
   });
 }

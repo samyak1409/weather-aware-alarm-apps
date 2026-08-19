@@ -142,6 +142,10 @@ void main() {
         ),
       ));
       await tester.tapOnText(find.textRange.ofSubstring('SAMYAK'));
+      // Not on the tap itself: it could still turn out to be the first of the
+      // seven-tap developer run, so the link waits that window out. What the
+      // waiting buys, and what cancels it, is `dev_mode_test`'s.
+      await tester.pump(CraftedBy.linkDelay);
       expect(opened, 1);
     });
   });
