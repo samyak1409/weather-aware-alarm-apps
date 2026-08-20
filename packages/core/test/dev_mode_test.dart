@@ -73,6 +73,26 @@ void main() {
       }
       expect(run.tap(now.add(DevMode.tapGap)), isTrue);
     });
+
+    test('only a tap that OPENS a run counts 1, unlock included', () {
+      // The number the maker's mark reads to tell a link tap from a gesture,
+      // so the tap after an unlock must not read as a first one (Samyak,
+      // 2026-08-20): a thumb does not stop dead on the seventh, and an eighth
+      // that counted 1 opened the site behind the toast.
+      final run = DevTapRun();
+      run.tap(t0);
+      expect(run.taps, 1, reason: 'nothing came before it');
+      for (var i = 2; i <= DevMode.tapsToToggle + 1; i++) {
+        run.tap(at(i * 200));
+        expect(run.taps, isNot(1), reason: 'tap $i is a run being worked');
+      }
+      // A pause is what makes a tap a beginning again — without it the mark
+      // could never reach the site once it had been unlocked.
+      final rested = at((DevMode.tapsToToggle + 1) * 200)
+          .add(DevMode.tapGap + const Duration(milliseconds: 1));
+      expect(run.tap(rested), isFalse);
+      expect(run.taps, 1);
+    });
   });
 
   group('the switch itself', () {
@@ -314,6 +334,24 @@ void main() {
       await tester.pump(CraftedBy.linkDelay);
       expect(opened, 0, reason: 'every tap cancelled the one waiting before '
           'it, and the seventh spent the run on the gate');
+    });
+
+    testWidgets('an eighth tap on SAMYAK does not open the site',
+        (tester) async {
+      // Overshooting the gate is not following the link (Samyak, 2026-08-20):
+      // seven taps empty the run's counter, so the tap after one used to read
+      // as a lone tap and open the site behind the toast that had just said
+      // developer settings were on.
+      var opened = 0;
+      await tester.pumpWidget(host(openSite: () async => opened++));
+
+      await tapName(tester, DevMode.tapsToToggle + 1);
+      expect(DevMode.enabled.value, isTrue, reason: 'the seventh flipped it');
+
+      await tester.pump(CraftedBy.linkDelay);
+      expect(opened, 0,
+          reason: 'the eighth tap landed inside the same drumming, so it owed '
+              'the site nothing');
     });
 
     testWidgets('a run counts the same wherever on the mark its taps land',

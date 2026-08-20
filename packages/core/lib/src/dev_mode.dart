@@ -61,31 +61,37 @@ const String kDevModeOffMessage = 'Developer settings disabled';
 ///
 /// Pure and time-injected so its two rules can be tested without waiting on a
 /// real clock: a run that pauses longer than [DevMode.tapGap] starts over, and
-/// completing one resets it, so the next seven taps flip the switch back.
+/// every seventh tap of one flips the switch, so the next seven flip it back.
 class DevTapRun {
   int _taps = 0;
   DateTime? _last;
 
-  /// How many taps the live run stands at — 0 before the first, and 0 again
-  /// the moment one completes.
+  /// How many taps the live run stands at — 1 on the tap that opens one, and
+  /// climbing for as long as the drumming keeps up.
   ///
   /// Read by the maker's mark to tell the two things a tap on SAMYAK can be
-  /// apart: at 1 it is a link being followed, past 1 it is a gate being
-  /// opened (see `CraftedBy.linkDelay`).
+  /// apart: at 1 it is a link being followed, past 1 it is the gate being
+  /// worked (see `CraftedBy.linkDelay`). A pause is the only thing that ever
+  /// puts it back to 1 — see [tap].
   int get taps => _taps;
 
-  /// Records a tap at [now]. True when this tap completes the run.
+  /// Records a tap at [now]. True when this tap completes a run of
+  /// [DevMode.tapsToToggle].
   ///
   /// A gap of exactly [DevMode.tapGap] still continues the run — the boundary
   /// has to fall somewhere, and a failed unlock costs one more tap.
+  ///
+  /// **An unlock happens INSIDE a run rather than ending one** (Samyak,
+  /// 2026-08-20): every seventh tap flips the switch and nothing is reset.
+  /// Zeroing the count was the same thing until the mark began READING it,
+  /// and then it made the eighth tap of an unlock look exactly like a lone
+  /// first tap — so the site opened behind the toast that had just said
+  /// developer settings were on. A thumb does not stop dead on the seventh.
   bool tap(DateTime now) {
     final last = _last;
     _taps =
         last == null || now.difference(last) > DevMode.tapGap ? 1 : _taps + 1;
     _last = now;
-    if (_taps < DevMode.tapsToToggle) return false;
-    _taps = 0;
-    _last = null;
-    return true;
+    return _taps % DevMode.tapsToToggle == 0;
   }
 }

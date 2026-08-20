@@ -54,7 +54,10 @@ class CraftedBy extends StatefulWidget {
   /// does not turn those three back into a link tap — it opens a browser over
   /// a gesture that was abandoned, which is the annoyance this whole delay
   /// exists to remove. So a run that stalls short of seven opens nothing at
-  /// all, and a lone tap is the only tap that reaches the site.
+  /// all, and a lone tap is the only tap that reaches the site. **An unlock
+  /// does not end the run**, so the eighth tap of one is not a first tap
+  /// either — [DevTapRun] puts its count back to 1 on a pause and on nothing
+  /// else, which is what keeps `taps == 1` meaning what it says.
   ///
   /// [DevMode.tapGap] plus a millisecond, because a tap at exactly the gap
   /// still continues the run (see [DevTapRun.tap]) — waiting the gap itself
@@ -100,8 +103,9 @@ class _CraftedByState extends State<CraftedBy> {
     _pendingSite = null;
     if (!_devTaps.tap(DateTime.now())) {
       // `taps == 1` is what makes this a LINK tap rather than the start of a
-      // gesture; past one they are going for the gate and the site is not
-      // what they asked for, however the run ends.
+      // gesture; past one — an unlock included, since only a pause resets the
+      // count — they are going for the gate, and the site is not what they
+      // asked for however the run ends.
       if (onName && _devTaps.taps == 1) {
         _pendingSite = Timer(CraftedBy.linkDelay, _openSite);
       }
