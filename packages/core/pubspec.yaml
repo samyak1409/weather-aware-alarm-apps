@@ -10,7 +10,7 @@ environment:
   flutter: ">=3.44.0"
 
 dependencies:
-  alarm: ^5.10.0
+  alarm: ^5.11.0
   audioplayers: ^6.8.1
   drift: ^2.34.3
   flutter:
