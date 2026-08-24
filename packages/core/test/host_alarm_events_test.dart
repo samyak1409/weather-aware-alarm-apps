@@ -451,4 +451,229 @@ void main() {
       await controller.close();
     });
   });
+
+  group('the host marker is released only when this isolate is finished', () {
+    // **What the manual acknowledgement boundary buys.** The plugin used to
+    // clear its own durable marker the instant it handed the event over, so
+    // the only copy lived in RAM from then until `complete` — a death anywhere
+    // in between, the wind fetch included, lost the event for good, because a
+    // claim row is only ever reached by an event arriving on the stream and no
+    // marker means nothing arrives again.
+    setUp(useInMemoryAppDatabase);
+
+    late DateTime at;
+    late List<int> acked;
+    late StreamController<HostAlarmEvent> controller;
+    late HostAlarmEventClaims claims;
+    late HostAlarmEventBridge bridge;
+
+    setUp(() {
+      // Derived from the clock, never pinned: a fixture on a fixed date drifts
+      // past [HostAlarmEventClaims.keyTtl] and starts being pruned.
+      at = DateTime.now().toUtc();
+      acked = [];
+      controller = StreamController<HostAlarmEvent>.broadcast();
+      claims = HostAlarmEventClaims();
+      bridge = HostAlarmEventBridge(
+        events: () => controller.stream,
+        claims: claims,
+      );
+    });
+
+    tearDown(() async {
+      await bridge.dispose();
+      await controller.close();
+    });
+
+    /// Kind and cause are fixed because nothing here reads them — the claim
+    /// key is `(id, recordedAt)` and the marker rules are the same for a move
+    /// and a drop. Only what the release DOES varies.
+    HostAlarmEvent ev(int id, {Future<void> Function()? ack}) => HostAlarmEvent(
+          id: id,
+          kind: HostAlarmEventKind.dropped,
+          cause: HostAlarmEventCause.staleAtBoot,
+          recordedAt: at,
+          at: at,
+          acknowledge: ack ?? () async => acked.add(id),
+        );
+
+    /// What a successor reaches for once the holder's lease has run out.
+    DateTime pastTheLease() =>
+        DateTime.now().add(HostAlarmEventClaims.lease * 2);
+
+    test('isSettled counts abandoned, and a live lease is not settled',
+        () async {
+      expect(await claims.isSettled(ev(1)), isFalse,
+          reason: 'never seen — nobody has finished with it');
+
+      final held = await claims.begin(ev(2));
+      expect(await claims.isSettled(ev(2)), isFalse,
+          reason: 'a live lease is the one null that must NOT be released: '
+              'its holder may still die and be recovered from the marker');
+      await claims.complete(ev(2), held!);
+      expect(await claims.isSettled(ev(2)), isTrue);
+
+      final doomed = await claims.begin(ev(3));
+      await claims.abandon(ev(3), doomed!);
+      expect(await claims.isSettled(ev(3)), isTrue,
+          reason: 'nobody will try again, so the marker protects nothing');
+      expect(await claims.isClaimed(ev(3)), isFalse,
+          reason: 'settled is not applied — abandoned parts the two');
+    });
+
+    test('an overtaken settle reports that it did not land', () async {
+      // `attempts` is the fencing token, and until now only the ROW was behind
+      // it. A settle that lost its claim has to say so, because its caller has
+      // a side effect outside the database to decide about.
+      final mine = await claims.begin(ev(4));
+      expect(await claims.complete(ev(4), mine!), isTrue, reason: 'still ours');
+
+      final stale = await claims.begin(ev(5));
+      await claims.begin(ev(5), now: pastTheLease()); // the next barrier
+      expect(await claims.complete(ev(5), stale!), isFalse,
+          reason: 'the row belongs to the successor now');
+      expect(await claims.abandon(ev(5), stale), isFalse,
+          reason: 'same fence, same answer — both settles carry a side effect');
+      expect(await claims.isSettled(ev(5)), isFalse,
+          reason: "a stale write must not retire its successor's claim");
+    });
+
+    test('a handled event releases its marker, a soft-failed one holds it',
+        () async {
+      var attempts = 0;
+      bridge.setHandler((event) async {
+        attempts++;
+        // Fails once, the way a wind fetch refused while the process is still
+        // coming up does, then succeeds on the next barrier.
+        if (attempts == 1) throw Exception('transient');
+      });
+
+      await bridge.start();
+      controller.add(ev(1));
+      await bridge.apply();
+
+      expect(acked, isEmpty,
+          reason: 'THE case the boundary exists for: the handler failed with '
+              'attempts left, so the marker is the only thing that can bring '
+              'this event back after a process death');
+      expect(await claims.isClaimed(ev(1)), isFalse);
+
+      await bridge.apply();
+      expect(await claims.isClaimed(ev(1)), isTrue);
+      expect(acked, [1], reason: 'released once the claim is durably done');
+    });
+
+    test('an abandoned event releases its marker rather than replaying for days',
+        () async {
+      bridge.setHandler((event) async => throw Exception('always'));
+
+      await bridge.start();
+      controller.add(ev(7));
+      for (var i = 0; i < HostAlarmEventBridge.maxHandlerAttempts + 1; i++) {
+        await bridge.apply();
+      }
+
+      expect(await claims.isClaimed(ev(7)), isFalse,
+          reason: 'abandoned is not applied');
+      expect(acked, [7],
+          reason: 'a deterministically-broken handler must not have its event '
+              'redelivered on every init until the host expires it');
+    });
+
+    test('a worker overtaken mid-handler leaves the marker to its successor',
+        () async {
+      // A lease bounds how long a claim is RESPECTED, not how long a handler
+      // runs, so a slow worker is legitimately overtaken while still inside
+      // its own handler. Its settle is correctly a no-op — and the release has
+      // to follow the same fence, or the successor is left holding an event
+      // that nothing could recover if it died: the whole boundary undone by
+      // the one line meant to close it.
+      final successor = HostAlarmEventClaims();
+      bridge.setHandler(
+        (event) async => successor.begin(event, now: pastTheLease()),
+      );
+
+      await bridge.start();
+      controller.add(ev(21));
+      await bridge.apply();
+
+      expect(acked, isEmpty,
+          reason: "the marker is the successor's recovery, not ours to spend");
+      expect(await claims.isSettled(ev(21)), isFalse,
+          reason: 'the successor still holds a live claim on it');
+    });
+
+    test('an overtaken worker releases nothing when it gives up either',
+        () async {
+      // The same fence on the other settle. Giving up is the one path that
+      // deliberately DOES release the marker, so it is where releasing a claim
+      // you no longer hold is easiest to do by accident.
+      final successor = HostAlarmEventClaims();
+      var attempts = 0;
+      bridge.setHandler((event) async {
+        attempts++;
+        // Overtaken on the very attempt that would otherwise abandon it.
+        if (attempts == HostAlarmEventBridge.maxHandlerAttempts) {
+          await successor.begin(event, now: pastTheLease());
+        }
+        throw Exception('always');
+      });
+
+      await bridge.start();
+      controller.add(ev(22));
+      for (var i = 0; i < HostAlarmEventBridge.maxHandlerAttempts + 1; i++) {
+        await bridge.apply();
+      }
+
+      expect(attempts, HostAlarmEventBridge.maxHandlerAttempts,
+          reason: 'the budget really was spent — otherwise this never reached '
+              'the abandon branch and would pass for the wrong reason');
+      expect(acked, isEmpty,
+          reason: "our budget ran out, the successor's did not");
+      expect(await claims.isSettled(ev(22)), isFalse,
+          reason: "a stale abandon must not park its successor's claim");
+    });
+
+    test('a redelivery is released only when the other holder finished',
+        () async {
+      // Both halves of the cross-isolate case, which the boundary is what
+      // makes reachable at all: while the plugin acknowledged for us, the
+      // first isolate to init consumed the marker and no second isolate ever
+      // saw the event.
+      var handled = 0;
+      bridge.setHandler((event) async => handled++);
+
+      final other = HostAlarmEventClaims();
+      await other.begin(ev(11)); // still mid-handler
+      final done = await other.begin(ev(12));
+      await other.complete(ev(12), done!); // finished
+
+      await bridge.start();
+      controller
+        ..add(ev(11))
+        ..add(ev(12));
+      await bridge.apply();
+
+      expect(handled, 0, reason: 'neither event was ours to run');
+      expect(acked, [12],
+          reason: '12 is finished with; releasing 11 would throw away what its '
+              'live holder would be recovered from if it died');
+    });
+
+    test('an acknowledgement that throws costs a redelivery, not the drain',
+        () async {
+      var handled = 0;
+      bridge.setHandler((event) async => handled++);
+      final event = ev(9, ack: () async => throw Exception('channel down'));
+
+      await bridge.start();
+      controller.add(event);
+      await bridge.apply();
+
+      expect(handled, 1);
+      expect(await claims.isClaimed(event), isTrue,
+          reason: 'the claim was settled before the release was attempted, so '
+              'a failed release must not unwind the handler that succeeded');
+    });
+  });
 }

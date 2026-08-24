@@ -30,7 +30,7 @@ class AlarmPkgScheduler implements AlarmScheduler {
           claims: claims ?? HostAlarmEventClaims(),
           ensurePluginReady: () async {
             if (!_initialized) {
-              await Alarm.init();
+              await Alarm.init(acknowledgeEventsAutomatically: false);
               _initialized = true;
             }
           },
@@ -67,6 +67,7 @@ class AlarmPkgScheduler implements AlarmScheduler {
           AlarmMoved(:final nextRingAt) => nextRingAt,
           AlarmDropped(:final scheduledFor) => scheduledFor,
         },
+        acknowledge: () => Alarm.acknowledgeEvent(e),
       );
 
   /// The tone to play, resolved at FULL volume whatever the ring volume is.
@@ -94,7 +95,10 @@ class AlarmPkgScheduler implements AlarmScheduler {
   @override
   Future<void> ensureInitialized() async {
     if (_initialized) return;
-    await Alarm.init();
+    // Manual acknowledgement — see `HostAlarmEvent.acknowledge` for why. BOTH
+    // init sites pass it: the flag is static per isolate, and a background
+    // isolate reaches the `ensurePluginReady` closure above first.
+    await Alarm.init(acknowledgeEventsAutomatically: false);
     _initialized = true;
     // Start the bridge after init so the replay buffer is already filled;
     // handlers still run only when [applyHostAlarmEvents] is awaited.

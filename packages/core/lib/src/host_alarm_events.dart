@@ -36,6 +36,7 @@ class HostAlarmEvent {
     required this.cause,
     required this.recordedAt,
     required this.at,
+    this.acknowledge,
   });
 
   final int id;
@@ -48,6 +49,16 @@ class HostAlarmEvent {
   /// For [HostAlarmEventKind.moved]: when it rings now.
   /// For [HostAlarmEventKind.dropped]: when it should have rung.
   final DateTime at;
+
+  /// Releases the host's durable marker for this event, or null when the
+  /// source has none — a test fake, and iOS, where AlarmKit records nothing.
+  ///
+  /// **Called only once this isolate is durably finished with the event**,
+  /// which is the whole manual boundary. The plugin's default cleared it at
+  /// the emit, so the only copy lived in memory from `Alarm.init()` until
+  /// [HostAlarmEventClaims.complete] — the wind fetch included — and nothing
+  /// re-drives a claim row that no event ever arrives for again.
+  final Future<void> Function()? acknowledge;
 
   String get claimKey => hostAlarmEventClaimKey(id, recordedAt);
 }
@@ -115,6 +126,19 @@ class HostAlarmEventClaims {
     return row?.state == HostEventClaimState.done;
   }
 
+  /// True once [event] is settled **terminally** — applied, or given up on.
+  ///
+  /// The question [begin]'s null cannot answer: it also means "another holder
+  /// has a live lease", and releasing the host's marker under one would throw
+  /// away the only thing that holder could be recovered from. Counts
+  /// [HostEventClaimState.abandoned], unlike [isClaimed] — the question is not
+  /// "was it applied" but "will anyone try again".
+  Future<bool> isSettled(HostAlarmEvent event) async {
+    final state = (await _row(event))?.state;
+    return state == HostEventClaimState.done ||
+        state == HostEventClaimState.abandoned;
+  }
+
   /// Takes responsibility for [event], or returns null when there is nothing
   /// to do — it is already applied, already abandoned, or someone else holds a
   /// live lease on it.
@@ -155,14 +179,14 @@ class HostAlarmEventClaims {
 
   /// Marks [event] applied. Call only after the handler has succeeded, and
   /// pass the [claim] [begin] handed back.
-  Future<void> complete(HostAlarmEvent event, HostAlarmEventClaim claim,
+  Future<bool> complete(HostAlarmEvent event, HostAlarmEventClaim claim,
           {DateTime? now}) =>
       _settle(event, claim, HostEventClaimState.done, now: now);
 
   /// Hands [event] back for a later barrier — a handler that failed but has
   /// attempts left. The attempt count stays where it is, so the budget survives
   /// a restart.
-  Future<void> release(HostAlarmEvent event, HostAlarmEventClaim claim,
+  Future<bool> release(HostAlarmEvent event, HostAlarmEventClaim claim,
           {DateTime? now}) =>
       _settle(event, claim, HostEventClaimState.pending, now: now);
 
@@ -171,7 +195,7 @@ class HostAlarmEventClaims {
   /// Terminal so a deterministically-failing handler stops being re-run on
   /// every barrier for the life of the install, and distinct from [complete]
   /// so nothing can mistake it for an event that was actually applied.
-  Future<void> abandon(HostAlarmEvent event, HostAlarmEventClaim claim,
+  Future<bool> abandon(HostAlarmEvent event, HostAlarmEventClaim claim,
           {DateTime? now}) =>
       _settle(event, claim, HostEventClaimState.abandoned, now: now);
 
@@ -187,14 +211,18 @@ class HostAlarmEventClaims {
   /// row that says a dropped ring was never dealt with when it was, or the
   /// reverse. `attempts` only ever climbs, so a stale worker's write matches
   /// nothing and is correctly a no-op.
-  Future<void> _settle(
+  /// Returns whether the write landed; false means this holder was overtaken.
+  /// **A caller with a side effect outside the database must check it** — the
+  /// bridge's marker release is one, and doing it on an overtaken settle hands
+  /// the successor a claim nothing can recover.
+  Future<bool> _settle(
     HostAlarmEvent event,
     HostAlarmEventClaim claim,
     HostEventClaimState state, {
     DateTime? now,
   }) async {
     final at = now ?? DateTime.now();
-    await (_db.update(_db.hostEventClaims)
+    final rows = await (_db.update(_db.hostEventClaims)
           ..where((t) =>
               t.claimKey.equals(event.claimKey) &
               t.attempts.equals(claim.attempts)))
@@ -203,6 +231,7 @@ class HostAlarmEventClaims {
       leasedUntil: const Value(null),
       updatedAt: Value(at),
     ));
+    return rows > 0;
   }
 
   Future<HostEventClaim?> _row(HostAlarmEvent event) =>
@@ -353,7 +382,13 @@ class HostAlarmEventBridge {
       // the event to a crash, marking done afterwards alone lets two isolates
       // both run it. See [HostAlarmEventClaims].
       final claim = await _claims.begin(event);
-      if (claim == null) return;
+      if (claim == null) {
+        // Finished with by someone else, so the marker is ours to release.
+        // A live lease reads false and keeps it — the safe way for the race
+        // between these two reads to land.
+        if (await _claims.isSettled(event)) await _acknowledge(event);
+        return;
+      }
       try {
         await handler(event);
       } on Exception catch (e, st) {
@@ -363,7 +398,10 @@ class HostAlarmEventBridge {
               '(attempt ${claim.attempts}, will retry on the next barrier): $e');
           _deferred.add(event);
         } else {
-          await _claims.abandon(event, claim);
+          // Terminal: keeping the marker would redeliver a permanently
+          // broken handler's event on every init until the host expired it.
+          // Fenced on the settle landing, for the reason below.
+          if (await _claims.abandon(event, claim)) await _acknowledge(event);
           debugPrint('host alarm event handler failed for ${event.id} '
               '$maxHandlerAttempts times, giving up: $e\n$st');
         }
@@ -375,9 +413,31 @@ class HostAlarmEventBridge {
         await _claims.release(event, claim);
         rethrow;
       }
-      await _claims.complete(event, claim);
+      // Durably `done`, so a death after this costs a redelivery — which the
+      // null-claim branch above then releases — rather than the event. **And
+      // only if the settle LANDED:** a lease bounds how long a claim is
+      // RESPECTED, not how long a handler runs, so a worker overtaken inside
+      // its handler writes a correct no-op here, while releasing the marker
+      // would not be one and would leave its successor unrecoverable. The
+      // fence has to reach the side effect, not just the row.
+      if (await _claims.complete(event, claim)) await _acknowledge(event);
     } finally {
       _handlerDepth--;
+    }
+  }
+
+  /// Releases the host's marker for [event], and never throws: a failed
+  /// release costs one redelivery that the claim row turns into a no-op, where
+  /// letting it escape would unwind [_runHandler] *after* the claim was
+  /// already settled.
+  Future<void> _acknowledge(HostAlarmEvent event) async {
+    final ack = event.acknowledge;
+    if (ack == null) return;
+    try {
+      await ack();
+    } on Object catch (e) {
+      debugPrint('host alarm event acknowledgement failed for ${event.id} '
+          '(harmless: it will be redelivered and acknowledged again): $e');
     }
   }
 
