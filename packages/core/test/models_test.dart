@@ -259,11 +259,12 @@ void main() {
       expect(a.enabled, isTrue);
     });
 
-    test('the dev-only 1-minute window is a real cap', () {
-      // The gate decides who is OFFERED a one-minute window (which options
-      // appear at all is `CheckCascade.retryOptionsFor`, locked in wind_test);
-      // an alarm already holding one must still compute its cap. The storage
-      // round-trip lives in repos_test now, where the columns are.
+    test('a stored 1-minute window is still a real cap', () {
+      // 1 was the dev-gated option until 2026-08-25 and is 15 now, but the cap
+      // is arithmetic on whatever the alarm HOLDS — the gate only decides what
+      // is offered (`minuteOptionsFor`, locked in wind_test), never what an
+      // already-saved alarm computes. The storage round-trip lives in
+      // repos_test now, where the columns are.
       final short = alarm.copyWith(retryMinutesAfter: 1);
       expect(short.retryCapAt(DateTime(2026, 7, 12, 6, 0)),
           DateTime(2026, 7, 12, 6, 1));

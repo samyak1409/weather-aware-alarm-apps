@@ -1,5 +1,8 @@
 import 'package:core/core.dart';
+import 'package:flutter/cupertino.dart'
+    show CupertinoDatePicker;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nivaat/src/alarm_sheet.dart';
 import 'package:nivaat/src/controller.dart';
@@ -33,7 +36,7 @@ void main() {
 
   Future<void> openSheet(
     WidgetTester t,
-    NivaatAlarm alarm, {
+    NivaatAlarm? alarm, {
     double scale = 1.0,
   }) async {
     await t.pumpWidget(MaterialApp(
@@ -71,6 +74,10 @@ void main() {
   const blank = NivaatAlarm(
       id: 1, hour: 6, minute: 0, courtId: 'c1', weekdays: <int>{});
 
+  // The wheel IS the clock since 2026-08-25 — there is no `06:00` text at the
+  // top of the sheet any more, only two spinning columns and a colon.
+  Finder heroClock() => find.byType(CupertinoDatePicker);
+
   Finder countdown() => find.byWidgetPredicate(
       (w) => w is Text && w.data != null && w.data!.startsWith('in '));
 
@@ -78,20 +85,20 @@ void main() {
     await t.binding.setSurfaceSize(const Size(900, 1400));
     addTearDown(() => t.binding.setSurfaceSize(null));
 
-    // Measured clock→Court, not screen coordinates: a bottom sheet is anchored
+    // Measured wheel→Court, not screen coordinates: a bottom sheet is anchored
     // to the bottom edge, so a slot that collapses leaves everything BELOW it
-    // in place and shoves the hero clock and title down instead (24px, the
-    // slot's whole height). Screen-absolute positions of the rows underneath
+    // in place and shoves the wheel and title down instead (24px, the slot's
+    // whole height). Screen-absolute positions of the rows underneath
     // therefore prove nothing.
     await openSheet(t, filled);
     expect(countdown(), findsOneWidget, reason: 'fixture shows a countdown');
     final withLabel =
-        t.getRect(find.text('Court')).top - t.getRect(find.text('06:00')).bottom;
+        t.getRect(find.text('Court')).top - t.getRect(heroClock()).bottom;
 
     await openSheet(t, blank);
     expect(countdown(), findsNothing, reason: 'no weekday can fire');
     final withoutLabel =
-        t.getRect(find.text('Court')).top - t.getRect(find.text('06:00')).bottom;
+        t.getRect(find.text('Court')).top - t.getRect(heroClock()).bottom;
 
     expect(withoutLabel, withLabel,
         reason: 'an empty Text still lays out a full line box, so the slot is '
@@ -189,16 +196,26 @@ void main() {
     // Compare INTRINSIC width against the space available, not the laid-out
     // rect: the rect is clamped to its parent, so a label that needs 79px in a
     // 52px segment still measures 52 and looks fine. Clamped IS clipped.
-    final label = t.renderObject<RenderBox>(find.text('60m'));
+    //
+    // Three rows carry these segments (the play-window pair joined Keep
+    // checking on 2026-08-25), and since the dev extra became shared they are
+    // the same control with the same options — so any of them measures the
+    // fit. `.last` is Keep checking, kept only because the divisor below is
+    // written from ITS value.
+    expect(find.text('60m'), findsNWidgets(3),
+        reason: 'one per minutes row — if this changes, so does `.last`');
+    final label = t.renderObject<RenderBox>(find.text('60m').last);
     final box = t.getRect(find
-        .ancestor(of: find.text('60m'), matching: find.byType(ClipRRect))
+        .ancestor(of: find.text('60m').last, matching: find.byType(ClipRRect))
         .first);
     // Derived from the same call the widget builds from, not the base list:
-    // the control also renders the dev-only 1m and any value the alarm already
-    // holds, so a fixture on a 1m window lays out THREE segments and a fixed
-    // divisor of 2 would measure a per-segment width that is not on screen.
+    // the control also renders the dev-gated option and any value the alarm
+    // already holds, so an off-list alarm WOULD lay out three segments and a
+    // fixed divisor of 2 would measure a width that is not on screen. (This
+    // fixture takes the default 30, so today it really is two.)
     final perSegment = box.width /
-        CheckCascade.retryOptionsFor(
+        minuteOptionsFor(
+          base: CheckCascade.retryMinutesOptions,
           devMode: DevMode.enabled.value,
           selected: filled.retryMinutesAfter,
         ).length;
@@ -208,5 +225,207 @@ void main() {
     expect(label.getMinIntrinsicHeight(perSegment),
         lessThanOrEqualTo(box.height),
         reason: 'the label is taller than the control');
+  });
+
+  group('where a new alarm opens (2026-08-25)', () {
+    // Pure and top-level so this can be asserted at all — the draft used to be
+    // computed inline from `TimeOfDay.now()`, where no test could reach it and
+    // the floor shipped unnoticed.
+    test('the next slot, never the one just gone', () {
+      // 03:45 opened on 03:30 until 2026-08-25 — a time already past, so the
+      // countdown under the clock read "in 23h 45m" and a brand-new alarm's
+      // first impression was one a whole day away.
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 3, 45)), (4, 0));
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 3, 1)), (3, 30));
+    });
+
+    test('a slot boundary moves on, it does not stand still', () {
+      // Ceiling the MINUTE is not enough: at 03:30:20 the ceiling of 30 is 30,
+      // twenty seconds in the past, and the day-away countdown comes back.
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 3, 30)), (4, 0));
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 3, 30, 20)), (4, 0));
+    });
+
+    test('the last slot of the day wraps to midnight', () {
+      // Modular arithmetic on the hour would give 24 here — a value
+      // `NivaatAlarm` would store and `CupertinoDatePicker` would assert on.
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 23, 45)), (0, 0));
+      expect(nivaatSeedAlarmTime(DateTime(2026, 8, 25, 23, 59, 59)), (0, 0));
+    });
+
+    test('every minute of the day lands on the grid, strictly ahead', () {
+      // The property the three cases above are examples of, and the one that
+      // fails the moment anyone floors again: 720 of these seeds are the same
+      // minute the clock is on.
+      final midnight = DateTime(2026, 8, 25);
+      for (var m = 0; m < 24 * 60; m++) {
+        final now = midnight.add(Duration(minutes: m));
+        final (hour, minute) = nivaatSeedAlarmTime(now);
+        expect(minute % kNivaatAlarmMinuteInterval, 0,
+            reason: 'the picker only offers the grid ($now)');
+        final seeded = DateTime(now.year, now.month, now.day, hour, minute);
+        final ahead = seeded.isAfter(now)
+            ? seeded
+            // Past midnight the seed belongs to tomorrow.
+            : seeded.add(const Duration(days: 1));
+        expect(ahead.difference(now).inMinutes,
+            inInclusiveRange(1, kNivaatAlarmMinuteInterval),
+            reason: 'ahead, and by less than one slot ($now)');
+      }
+    });
+  });
+
+  test('the wheel keeps the clock\'s size until a phone cannot hold it', () {
+    // `CupertinoDatePicker` does not shrink to fit: given too little width it
+    // overlaps its own columns, reports a layout error in debug and says
+    // nothing in release. So the size is chosen before it is handed over.
+    //
+    // Widths here are the SHEET's content width — screen less its 24 of
+    // padding either side — since the wheel moved inline (2026-08-25).
+    for (final width in [312.0, 342.0, 364.0, 382.0]) {
+      expect(nivaatWheelFontSize(full: 64, available: width), 64,
+          reason: 'a ${width + 48}pt phone holds the clock\'s own type');
+    }
+    final small = nivaatWheelFontSize(full: 64, available: 232);
+    expect(small, lessThan(64));
+    expect(small, greaterThan(0), reason: 'shrunk, never inverted');
+    // Monotone, so there is no width where asking for more room gives a
+    // smaller wheel.
+    var last = 0.0;
+    for (var w = 160.0; w <= 460; w += 5) {
+      final size = nivaatWheelFontSize(full: 64, available: w);
+      expect(size, greaterThanOrEqualTo(last), reason: 'at ${w}pt');
+      last = size;
+    }
+  });
+
+  testWidgets('an off-grid saved alarm opens the wheel rather than tripping it',
+      (t) async {
+    // `CupertinoDatePicker` ASSERTS its initial minute is on `minuteInterval`,
+    // so an off-grid stored value would crash the editor open — and the wheel
+    // is the sheet's only display of the time now, so showing 06:00 over a
+    // draft that still said 06:17 would save the 17 back.
+    //
+    // Nothing has written an off-grid minute since the grid landed; this is
+    // about the two seed paths agreeing, which is what stops the day the grid
+    // changes from being a crash.
+    await t.binding.setSurfaceSize(const Size(900, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await openSheet(
+        t, const NivaatAlarm(id: 1, hour: 6, minute: 17, courtId: 'c1'));
+
+    expect(t.takeException(), isNull, reason: 'the wheel drew at all');
+    expect(find.text('06:00'), findsOneWidget,
+        reason: "the timeline's first step is the SNAPPED draft");
+    expect(find.text('06:17'), findsNothing);
+  });
+
+  testWidgets('a clashing time TAKES the countdown\'s slot, and moves nothing',
+      (t) async {
+    // The message went above Save first, in the same grey as the timeline's
+    // footnote at the far end of a sheet that now scrolls; then here as an
+    // extra line in brighter type, which shifted the whole sheet the instant
+    // it appeared. It replaces the countdown now — which is meaningless
+    // anyway, since this time cannot be saved (Samyak, 2026-08-25).
+    await t.binding.setSurfaceSize(const Size(900, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    // Derived from `now`, never a literal: the seed IS the next half-hour
+    // slot, so this is the one time a new sheet is guaranteed to open on.
+    final (hour, minute) = nivaatSeedAlarmTime(DateTime.now());
+
+    await openSheet(t, null);
+    expect(countdown(), findsOneWidget, reason: 'nothing clashes yet');
+    final clear = t.getRect(find.text('Court')).top - t.getRect(heroClock()).bottom;
+
+    await controller.upsertAlarm(
+        NivaatAlarm(id: 1, hour: hour, minute: minute, courtId: 'c1'));
+    await openSheet(t, null);
+
+    expect(countdown(), findsNothing,
+        reason: 'the clash speaks instead, not as well');
+    expect(find.textContaining('Another alarm'), findsOneWidget);
+    expect(
+      t.getRect(find.text('Court')).top - t.getRect(heroClock()).bottom,
+      clear,
+      reason: 'one line either way — the sheet must not jump when it appears',
+    );
+    // And it is the quiet caption type, like the countdown it replaced: a
+    // brighter one was the other half of what Samyak turned down.
+    final style = t
+        .widget<RichText>(find.descendant(
+            of: find.textContaining('Another alarm'),
+            matching: find.byType(RichText)))
+        .text
+        .style!;
+    expect(style.color, buildOledTheme(AppPalette.wind).textTheme.bodyMedium!.color);
+  });
+
+  testWidgets('spinning the wheel moves the draft, with nothing to confirm',
+      (t) async {
+    // The wheel used to live in a dialog behind a `Set` button, so the
+    // countdown under it — the whole reason the time sits at the top of this
+    // sheet — was hidden by the modal answering it, and only caught up when
+    // you pressed Set. Inline, it moves as you spin.
+    await t.binding.setSurfaceSize(const Size(900, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await openSheet(t, filled);
+
+    expect(find.text('Set'), findsNothing,
+        reason: 'the draft IS the sheet state; Save is the only commit');
+    expect(find.text('06:00'), findsOneWidget,
+        reason: "the timeline's first step, which is the draft's own time");
+
+    // On the HOUR column, not the picker's centre — the centre is the colon,
+    // which is a plain `Text` and scrolls nothing.
+    await t.drag(find.text('06'), const Offset(0, -100));
+    await t.pumpAndSettle();
+
+    expect(find.text('06:00'), findsNothing,
+        reason: 'the wheel took the drag and the sheet followed it');
+    // And the sheet did not scroll away under the gesture instead.
+    expect(find.byType(CupertinoDatePicker), findsOneWidget);
+  });
+
+  testWidgets('the wheel is the clock, in the clock\'s own type', (t) async {
+    // It was a `TextButton` reading `04:00` that opened a dialog holding a
+    // 22px wheel, so touching the biggest thing on the screen produced the
+    // smallest. Now the wheel sits where that text was — and there is no
+    // dialog to confirm, which is why nothing here taps anything.
+    //
+    // A PIN, in `check_scheduler_test`'s sense: it cannot prove 64 looks
+    // right, only that shrinking it again is deliberate. The WIDTH this costs
+    // is budgeted in `nivaatWheelFontSize` from Roboto's metrics and can only
+    // be confirmed on a device — flutter_test's font draws every glyph a full
+    // em wide, so nothing measured here stands in for a real phone.
+    await t.binding.setSurfaceSize(const Size(900, 1400));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+    await openSheet(t, filled);
+
+    expect(find.byType(CupertinoDatePicker), findsOneWidget,
+        reason: 'no tap: the wheel is already there');
+    // Read off the PAINTED digits rather than the theme handed to the wheel:
+    // the clamp and the Cupertino theme both sit between the two, and it is
+    // what lands on screen that was wrong.
+    final clock = buildOledTheme(AppPalette.wind).textTheme.displayLarge!;
+    final wheel = t
+        .renderObject<RenderParagraph>(find.descendant(
+            of: find.byType(CupertinoDatePicker),
+            matching: find.descendant(
+                of: find.text('06'), matching: find.byType(RichText))))
+        .text
+        .style!;
+    expect(wheel.fontSize, clock.fontSize);
+    expect(wheel.fontWeight, clock.fontWeight);
+    expect(wheel.letterSpacing, clock.letterSpacing);
+    expect(find.descendant(of: find.byType(CupertinoDatePicker),
+        matching: find.text(':')), findsOneWidget,
+        reason: 'the colon is what makes it the clock you tapped');
+
+    final picker =
+        t.widget<CupertinoDatePicker>(find.byType(CupertinoDatePicker));
+    expect(picker.itemExtent, greaterThanOrEqualTo(clock.fontSize! * 1.2),
+        reason: 'a row shorter than its line box clips the digits');
+    expect(picker.minuteInterval, kNivaatAlarmMinuteInterval);
   });
 }

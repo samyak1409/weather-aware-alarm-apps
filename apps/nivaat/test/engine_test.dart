@@ -61,8 +61,19 @@ void main() {
     // a bare "18:00" would read as this morning.
     expect(ring.scheduled[todayRing]!.body,
         'wind 3 (≤4) · gusts 5 (≤15) km/h · checked 11 Jul 18:00');
-    expect(api.lastCallWasCurrent, isFalse, reason: 'far out uses forecast');
-    expect(checks.booked[7], DateTime(2026, 7, 12, 5, 0)); // T-1h, first rung
+    // **The window asked for is when you PLAY, never the alarm instant.**
+    // Defaults are 30 minutes to get on court and 30 of play, so a 06:00 alarm
+    // is decided on 06:30-07:00 — and this pass runs at T-12h, which used to
+    // be exactly when the old code read the wrong slot.
+    expect(api.asked.last,
+        (alarmAt.add(const Duration(minutes: 30)),
+            alarmAt.add(const Duration(minutes: 60))));
+    // Rungs are booked ALL AT ONCE now, so `booked` holds the soonest still
+    // ahead: T-24h and T-12h are gone at 18:00 the evening before, leaving
+    // T-6h at midnight.
+    expect(checks.booked[7], DateTime(2026, 7, 12, 0, 0));
+    expect(checks.bookedRungs[7]!.length, greaterThan(1),
+        reason: 'the whole remaining ladder is booked, not just the next rung');
   });
 
   test('windy forecast far out: no ring, cascade continues', () async {
@@ -79,7 +90,9 @@ void main() {
     // T-2m check persists the in-flight occurrence...
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 2)));
-    expect(api.lastCallWasCurrent, isTrue, reason: 'within live window');
+    // One code path now — near and far read the same play window. The old
+    // `currentWind` switch read "now" instead of the alarm's own slot, which
+    // at T-2m meant deciding a 06:00 alarm on the 05:45 wind.
     // ...then the T-0 check runs.
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
     // Post-T schedule holds pending — settle when audible.
@@ -96,6 +109,18 @@ void main() {
     expect(history.first.outcome, CheckOutcome.rang);
     expect(history.first.ringDisposition, RingDisposition.rang);
     expect(history.first.volume, 0.85);
+    // **A rang row names its slot too** (2026-08-25). Skipped rows carried one
+    // from the day the window rule landed; ring rows did not, so the log
+    // explained a windy morning and shrugged at a calm one. The slot is the
+    // windiest minute of the play window, so it is on the grid and inside
+    // that window — never the alarm time, which is what a reader would
+    // otherwise assume the numbers were taken at.
+    final slot = history.first.slotAt;
+    final (playFrom, playTo) = alarm.playWindow(alarmAt);
+    expect(slot, isNotNull, reason: 'the whole point of ringSlotAt');
+    expect(slot!.isBefore(playFrom), isFalse);
+    expect(slot.isAfter(playTo), isFalse);
+    expect(slot.minute % 15, 0, reason: "Open-Meteo's grid");
     // Finalising doesn't stop at the closed occurrence: the same pass
     // evaluates tomorrow — pre-arms it (still calm) and books its ladder —
     // so the cascade never sleeps until the next manual app open.
@@ -113,9 +138,39 @@ void main() {
     expect(ring.scheduled[lateRing]!.at,
         alarmAt.add(const Duration(seconds: 10)),
         reason: "the T-0 ring survives the roll-on pre-arm");
-    expect(checks.booked[7],
-        alarmAt.add(const Duration(days: 1, hours: -1)),
-        reason: "tomorrow's first rung (T-1h) booked");
+    expect(checks.booked[7], alarmAt.add(const Duration(hours: 12)),
+        reason: "tomorrow's soonest remaining rung (T-12h) booked — T-24h for "
+            'tomorrow is this very instant, so it is already behind us');
+  });
+
+  test('a DEAD FETCH at T-0 leaves the armed ring alone', () async {
+    // The other half of the T-0 rule, and it had no test until 2026-08-30
+    // (Cursor Grok 4.6): T-0 re-decides an armed ring and cancels it if the
+    // play window has turned windy — but only WHEN THE FETCH RETURNS. Both the
+    // arm and the skip-cancel sit under `if (decision != null)`, so a network
+    // blip at exactly T cannot cost a ring the ladder already decided.
+    //
+    // Without this, `turns windy at T-0` alone would let a change that
+    // cancelled on ANY T-0 outcome keep passing, which is the failure mode the
+    // rule exists to prevent — a dead network is the commonest thing that can
+    // happen at 6am and the worst possible reason to be left unwoken.
+    api.sample = wind(5.0, 5.0); // calm at T-30m -> ring pre-armed
+    await engine.evaluateAlarm(alarm, [court],
+        now: alarmAt.subtract(const Duration(minutes: 30)));
+    expect(ring.scheduled, isNotEmpty, reason: 'pre-armed, or this proves nothing');
+    final armed = ring.scheduled[todayRing]!.at;
+
+    api.fail = true; // the fetch dies at T
+    await engine.evaluateAlarm(alarm, [court], now: alarmAt);
+
+    expect(ring.scheduled[todayRing]?.at, armed,
+        reason: 'the ring the ladder decided still stands, at its own time');
+    // And the pass is NOT a no-op — it says so, and books the next retry, so
+    // the still-checking card can sit beside a pre-arm that then sounds.
+    expect(notifier.extended, hasLength(1),
+        reason: 'the morning is on the record as still checking');
+    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 15)),
+        reason: 'the retry after T is booked either way');
   });
 
   test('turns windy at T-0: ring cancelled, heads-up posted (no final card yet)',
@@ -141,8 +196,8 @@ void main() {
     expect(notifier.shown, isEmpty, reason: 'no FINAL card until the cap');
     expect(notifier.extended, hasLength(1), reason: '"still checking" card at T');
     expect(notifier.extended.first.$1.outcome, CheckOutcome.skippedWindy);
-    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 1)),
-        reason: 'first retry booked');
+    expect(checks.booked[7], alarmAt.add(const Duration(minutes: 15)),
+        reason: 'first retry booked, on the 15-minute wind grid');
   });
 
   test('per-alarm 1-min retry: watchedUntil = T+1m, finalises at that cap',
@@ -1125,9 +1180,8 @@ void main() {
     // And the cascade survives the mid-ring return: with no post-T checks
     // left to book themselves, the next occurrence's first rung is booked
     // here (its own id space — never touches the sounding ring).
-    expect(checks.booked[7],
-        alarmAt.add(const Duration(days: 1, hours: -1)),
-        reason: "tomorrow's T-1h check keeps Android's cascade alive");
+    expect(checks.booked[7], alarmAt.add(const Duration(hours: 12)),
+        reason: "tomorrow's T-12h check keeps Android's cascade alive");
 
     // A second mid-ring pass (another resync) must not double-log.
     await engine.evaluateAlarm(alarm, [court],
@@ -1828,16 +1882,18 @@ void main() {
 
   group('nivaatHistoryLine', () {
     final at = DateTime(2026, 7, 22, 6);
-    HistoryRecord row(CheckOutcome outcome, {double? volume}) => HistoryRecord(
-        alarmId: 7,
-        courtId: 'c1',
-        at: at,
-        outcome: outcome,
-        courtSpeedKmh: 3,
-        rawGustKmh: 16,
-        courtSpeedLimitKmh: 4,
-        rawGustLimitKmh: 14.667,
-        volume: volume);
+    HistoryRecord row(CheckOutcome outcome, {double? volume, DateTime? slotAt}) =>
+        HistoryRecord(
+            alarmId: 7,
+            courtId: 'c1',
+            at: at,
+            outcome: outcome,
+            courtSpeedKmh: 3,
+            rawGustKmh: 16,
+            courtSpeedLimitKmh: 4,
+            rawGustLimitKmh: 14.667,
+            slotAt: slotAt,
+            volume: volume);
 
     test('quotes the volume it rang at, alongside the numbers', () {
       expect(nivaatHistoryLine(row(CheckOutcome.rang, volume: 0.85)),
@@ -1902,6 +1958,59 @@ void main() {
           reason: 'nothing was measured — no numbers to quote');
     });
 
+    test('the numbers name the slot they came from (2026-08-25)', () {
+      // The card learned this when the window rule landed; history had not,
+      // and it is the surface that has to explain a morning weeks later.
+      // `Skipped · wind 6 (≤4)` beside a sub reading `06:00 · last checked
+      // 06:00` invites exactly the wrong conclusion — that 06:00 was windy,
+      // when 06:00 may have been still and the six came from a slot three
+      // quarters of an hour later.
+      final slot = at.add(const Duration(minutes: 45));
+      expect(
+        nivaatHistoryLine(row(CheckOutcome.skippedWindy, slotAt: slot)),
+        'Skipped · wind 3 (≤4) · gusts 16 (≤15) km/h · at 06:45',
+      );
+      // A ring names it too — there, it is the windiest minute you would have
+      // played through, which is the number that earned the ring.
+      expect(
+        nivaatHistoryLine(
+            row(CheckOutcome.rang, volume: 0.85, slotAt: slot)),
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 16 (≤15) km/h · at 06:45',
+      );
+      // Trailing, where the CARD puts it up front: the card's `Too windy at
+      // 06:45` reads as a condition of a moment, while `Skipped at 06:45`
+      // would read as when the skip was decided — a different fact, and one
+      // the sub already carries.
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedWindy, slotAt: slot)),
+          isNot(startsWith('Skipped at')));
+    });
+
+    test('a slot from another day carries its date, like every other time', () {
+      // Last night's 22:00 reading behind a 06:00 alarm — a bare `22:00` here
+      // would read as this morning, four hours after the alarm.
+      expect(
+        nivaatHistoryLine(row(CheckOutcome.skippedWindy,
+            slotAt: at.subtract(const Duration(hours: 8)))),
+        'Skipped · wind 3 (≤4) · gusts 16 (≤15) km/h · at 21 Jul 22:00',
+      );
+    });
+
+    test('no slot, no suffix — and no dangling "at"', () {
+      // Rows written before 2026-08-25 have no slot, and a no-data row never
+      // has one. Both must read exactly as they always did.
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedWindy)),
+          'Skipped · wind 3 (≤4) · gusts 16 (≤15) km/h');
+      expect(
+          nivaatHistoryLine(HistoryRecord(
+              alarmId: 7,
+              courtId: 'c1',
+              at: at,
+              outcome: CheckOutcome.rang,
+              slotAt: at)),
+          'Rang',
+          reason: 'a slot with no readings has nothing to be the slot OF');
+    });
+
     test('ring disposition overrides the wind outcome axis (N4a / N4b)', () {
       // Never reuse skippedNoData for a platform drop: that one means the
       // wind could not be read, which is a different fact about a different
@@ -1952,15 +2061,22 @@ void main() {
         skipRawGustKmh: 10,
       );
 
-  test('nivaatAlarmListSub: default retry stays silent; others show +Nm', () {
+  test('nivaatAlarmListSub: days, court, limit — and no minutes at all', () {
     expect(nivaatAlarmListSub(alarm, court), 'Every day · Home Court · ≤4 km/h');
+    // A non-default Keep checking used to show as `· +60m`. It was the alarm's
+    // only tunable minutes then; there are three now, and singling one out
+    // says less than showing none (Samyak, 2026-08-25). The row is identical
+    // whatever the three are set to — that is the assertion.
+    for (final minutes in [1, 15, 60]) {
+      expect(
+        nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: minutes), court),
+        'Every day · Home Court · ≤4 km/h',
+      );
+    }
     expect(
-      nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: 1), court),
-      'Every day · Home Court · ≤4 km/h · +1m',
-    );
-    expect(
-      nivaatAlarmListSub(alarm.copyWith(retryMinutesAfter: 60), court),
-      'Every day · Home Court · ≤4 km/h · +60m',
+      nivaatAlarmListSub(
+          alarm.copyWith(timeUntilPlayMinutes: 60, minPlayMinutes: 60), court),
+      'Every day · Home Court · ≤4 km/h',
     );
     // The `court removed` fallback was cut on 2026-08-15: deleting a court
     // deletes its alarms in the same step and only the UI isolate writes the
@@ -2394,4 +2510,300 @@ void main() {
         reason: 'the stale snapshot must not arm the time it was holding');
     expect(ring.log.where((l) => l.at == alarmAt), isEmpty);
   });
+
+  group('the play window (2026-08-25)', () {
+    test('the window asked for is T+ready .. T+ready+play, not T itself', () {
+      // The flaw this fixes: the old check read a single instant, and inside
+      // the last 15 minutes it read `current` — i.e. NOW — so a 06:00 alarm
+      // was decided on the 05:45 wind.
+      api.sample = wind(5.0, 5.0);
+      return engine
+          .evaluateAlarm(alarm, [court], now: alarmAt.subtract(const Duration(hours: 1)))
+          .then((_) {
+        expect(api.asked.last,
+            (alarmAt.add(const Duration(minutes: 30)),
+                alarmAt.add(const Duration(minutes: 60))));
+      });
+    });
+
+    test('ONE windy slot inside the window skips the whole morning', () async {
+      // Calm on arrival, windy ten minutes in. The old single-point check rang
+      // this morning; you would have got there and not been able to play.
+      final from = alarmAt.add(const Duration(minutes: 30));
+      api.window = [
+        wind(5.0, 5.0, from),
+        wind(20.0, 9.0, from.add(const Duration(minutes: 15))),
+        wind(5.0, 5.0, from.add(const Duration(minutes: 30))),
+      ];
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect(ring.scheduled, isEmpty, reason: 'the worst slot decides');
+    });
+
+    test('a RETRY judges its own window, not the one T would have had',
+        () async {
+      // Woken late, you get on court late — so a retry at T+15 must look at
+      // T+15+ready onwards. Re-judging T's window would decide the morning on
+      // wind from a time you will already have missed.
+      // The morning must SKIP first, or T has a committed ring and the pass at
+      // T+15 settles it and rolls on to tomorrow — a different occurrence, and
+      // a window a day away.
+      api.sample = wind(20.0, 9.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      final preT = api.asked.last;
+
+      api.sample = wind(5.0, 5.0);
+      final late = alarmAt.add(const Duration(minutes: 15));
+      await engine.evaluateAlarm(alarm, [court], now: late);
+      // The retry's OWN fetch. Finding calm air it also rings late, finalises
+      // the morning and rolls on — and the roll-on fetches tomorrow's window,
+      // so the last entry belongs to a different occurrence entirely.
+      final retry = api.asked[1];
+
+      expect(retry.$1.isAfter(preT.$1), isTrue,
+          reason: 'the retry looks further ahead than the pre-T check did');
+      // A late ring lands ~10s from now, and the window hangs off THAT.
+      expect(retry.$1.difference(late).inMinutes, 30);
+      expect(api.asked.last.$1.difference(late).inHours, greaterThan(20),
+          reason: "the roll-on asks about tomorrow, and is a separate fetch");
+    });
+
+    test('changing the play window is a CONTINUE edit, like the wind limit',
+        () {
+      // It re-decides the same morning under new settings; it does not move
+      // the occurrence, so there is nothing to abandon.
+      const a = NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1');
+      expect(
+          nivaatEditAbandonsInFlight(a, a.copyWith(minPlayMinutes: 60)), isFalse);
+      expect(
+          nivaatEditAbandonsInFlight(a, a.copyWith(timeUntilPlayMinutes: 60)),
+          isFalse);
+    });
+  });
+
+  group('the ladder is booked all at once (2026-08-25)', () {
+    test('every rung still ahead is booked, not just the next one', () async {
+      // The chain fix. One booking per pass meant a pass that died mid-fetch
+      // deleted every rung after it, and a lone alarm had no backstop at all.
+      //
+      // T-23h, not earlier: this fixture is a DAILY alarm, so anything before
+      // T-24h resolves to yesterday's occurrence instead. Which also means a
+      // daily alarm can never book its own T-24h rung — that instant is the
+      // previous morning's alarm — so eight is the real ceiling here and nine
+      // is only reachable for a weekly one.
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 23)));
+      expect(checks.bookedRungs[7]!.keys, [1, 2, 3, 4, 5, 6, 7, 8],
+          reason: 'the whole remaining ladder, T-12h through T-0');
+      expect(checks.bookedRungs[7]![1],
+          alarmAt.subtract(const Duration(hours: 12)));
+      expect(checks.bookedRungs[7]![8], alarmAt);
+    });
+
+    test('rungs already past are not booked', () async {
+      api.sample = wind(5.0, 5.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 2)));
+      // T-24h, -12h, -6h, -3h are behind us; -2h is this instant, not after.
+      expect(checks.bookedRungs[7]!.keys, [5, 6, 7, 8]);
+    });
+  });
+
+  group('a retired wind model (2026-08-25)', () {
+    test('is pruned from the stored list and the fetch retried', () async {
+      // Open-Meteo fails the WHOLE request on a name it does not recognise, and
+      // publishes no list of models — so this rejection is the only notice a
+      // hard-coded name has been retired.
+      final rejecting = _RejectsModels({'cma_grapes_global'}, wind(5.0, 5.0));
+      final store = NivaatStore();
+      await store.saveCourts([court]);
+      await store.saveAlarms([alarm]);
+      final e = NivaatEngine(
+        store: store,
+        scheduler: FakeRing(),
+        api: rejecting,
+        checks: FakeChecks(),
+        notifier: FakeNotifier(),
+      );
+      await e.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      expect(rejecting.calls, 2, reason: 'refused once, then retried');
+      expect(await store.loadWindModels(),
+          isNot(contains('cma_grapes_global')));
+      expect(await store.loadWindModels(), hasLength(6),
+          reason: 'only the named model goes');
+    });
+
+    test('a rejection naming something we never asked for does not loop',
+        () async {
+      final rejecting = _RejectsModels({'not_in_our_list'}, wind(5.0, 5.0));
+      final store = NivaatStore();
+      await store.saveCourts([court]);
+      await store.saveAlarms([alarm]);
+      final e = NivaatEngine(
+        store: store,
+        scheduler: FakeRing(),
+        api: rejecting,
+        checks: FakeChecks(),
+        notifier: FakeNotifier(),
+      );
+      // Soft-fails as a no-data morning rather than spinning.
+      await e.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect(rejecting.calls, 1);
+      expect(await store.loadWindModels(), hasLength(7));
+    });
+
+    test('FIVE retired at once still reaches the models that work', () async {
+      // The loop used to count UP while the list it was draining counted
+      // DOWN — `i <= models.length` re-read the live list — so the two met in
+      // the middle and seven names allowed only four prunes before the pass
+      // gave up with `wind model list did not settle`, a sentence describing
+      // something that had not happened. One retired name (the two cases
+      // above) never showed it. Five does: the pass has to get past the fifth
+      // refusal to reach the two names that answer.
+      final rejecting = _RejectsModels({
+        'ecmwf_ifs',
+        'ncep_gfs_global',
+        'dwd_icon_global',
+        'ukmo_global_deterministic_10km',
+        'cmc_gem_gdps',
+      }, wind(5.0, 5.0));
+      final ring = FakeRing();
+      final store = NivaatStore();
+      await store.saveCourts([court]);
+      await store.saveAlarms([alarm]);
+      final e = NivaatEngine(
+        store: store,
+        scheduler: ring,
+        api: rejecting,
+        checks: FakeChecks(),
+        notifier: FakeNotifier(),
+      );
+      await e.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      // Five refusals, each asking for one fewer name, then the request that
+      // answered. Before the fix the drain stopped at four and never got here.
+      expect(rejecting.sizes.take(6), [7, 6, 5, 4, 3, 2]);
+      expect(await store.loadWindModels(),
+          ['meteofrance_arpege_world', 'cma_grapes_global'],
+          reason: 'only the five named go, and order is preserved');
+      // The assertion that matters: a real verdict came out of it. Stopping
+      // early failed the fetch, which the engine reads as a no-data morning —
+      // so the alarm simply would not have been armed.
+      expect(ring.scheduled[todayRing]?.at, alarmAt,
+          reason: 'the surviving models decided the morning');
+    });
+
+    test('every name retired ends as no-data, not as a spin', () async {
+      // The far end of the same loop: drained to empty, it has to stop on the
+      // empty guard rather than run out of turns first.
+      final rejecting =
+          _RejectsModels(OpenMeteo.defaultWindModels.toSet(), wind(5.0, 5.0));
+      final ring = FakeRing();
+      final store = NivaatStore();
+      await store.saveCourts([court]);
+      await store.saveAlarms([alarm]);
+      final e = NivaatEngine(
+        store: store,
+        scheduler: ring,
+        api: rejecting,
+        checks: FakeChecks(),
+        notifier: FakeNotifier(),
+      );
+      await e.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      // Seven refusals and then it STOPS. The eighth call is the bug this
+      // pins (2026-08-30): pruning the last name emptied the table, the reload
+      // inside the loop read an empty table as a fresh install and put all
+      // seven back, so the empty-list guard was never reached and every check
+      // burned an extra request re-seeding names it had just retired.
+      expect(rejecting.sizes, [7, 6, 5, 4, 3, 2, 1]);
+      expect(await store.loadWindModels(), isEmpty,
+          reason: 'a retired name stays retired across reads');
+      expect(ring.scheduled[todayRing], isNull,
+          reason: 'nothing answered, so the morning has no reading');
+    });
+  });
+
+  group('the home row dot (N15)', () {
+    test('records the verdict and the time the CHECK ran', () async {
+      api.sample = wind(5.0, 5.0);
+      final at = alarmAt.subtract(const Duration(hours: 1));
+      await engine.evaluateAlarm(alarm, [court], now: at);
+      final f = (await engine.store.loadForecasts())[7]!;
+      expect(f.willRing, isTrue);
+      expect(f.checkedAt, at,
+          reason: 'when the check ran — not the slot it read');
+    });
+
+    test('a failed fetch leaves the PREVIOUS verdict standing', () async {
+      // The row shows the check time beside the verdict, so an unchanged
+      // answer under an older timestamp is the honest signal. Overwriting it
+      // with "not going to ring" would invent a wind reading nobody took.
+      api.sample = wind(5.0, 5.0);
+      final first = alarmAt.subtract(const Duration(hours: 2));
+      await engine.evaluateAlarm(alarm, [court], now: first);
+
+      api.fail = true;
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+
+      final f = (await engine.store.loadForecasts())[7]!;
+      expect(f.willRing, isTrue);
+      expect(f.checkedAt, first, reason: 'stale, and says so');
+    });
+
+    test('a windy morning records a NOT-going verdict', () async {
+      api.sample = wind(20.0, 9.0);
+      await engine.evaluateAlarm(alarm, [court],
+          now: alarmAt.subtract(const Duration(hours: 1)));
+      expect((await engine.store.loadForecasts())[7]!.willRing, isFalse);
+    });
+  });
+}
+
+/// Refuses exactly one model name the way Open-Meteo does — a hard failure of
+/// the WHOLE request, naming the offender — then answers normally.
+/// Open-Meteo with some model names retired.
+///
+/// Takes a SET rather than one name (2026-08-30) because the number retired
+/// at once is exactly what `_windowFor`'s loop bound gets wrong — one name is
+/// the case that always worked.
+class _RejectsModels extends FakeApi {
+  _RejectsModels(this.bad, WindSample s) {
+    sample = s;
+  }
+
+  final Set<String> bad;
+  int calls = 0;
+
+  /// How many models each request asked for, in order — the shape of the
+  /// drain. A raw call COUNT is not safe to assert on here: a pass can roll on
+  /// into the next occurrence and fetch again, and that second pass is not
+  /// awaited by `evaluateAlarm`, so the count at assertion time is a race. The
+  /// first drain's prefix is not.
+  final List<int> sizes = [];
+
+  @override
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) {
+    calls++;
+    sizes.add(models.length);
+    // One offender per refusal, exactly as the real 400 body names one — so
+    // the caller has to come back for each, which is the whole point.
+    final dead = models.where(bad.contains);
+    if (dead.isNotEmpty) throw OpenMeteoUnknownModel(dead.first);
+    return super.windWindow(lat, lon, from, to, models: models);
+  }
 }

@@ -12,12 +12,18 @@ import workmanager_apple
   ) -> Bool {
     UNUserNotificationCenter.current().delegate = self
     SwiftAlarmPlugin.registerBackgroundTasks()
+    // **The ONLY place the BGAppRefresh cadence is set** — Dart's
+    // `registerPeriodicTask(frequency:)` is ignored on iOS, so this number is
+    // what every re-submission uses. It was 30 until 2026-08-30, two weeks
+    // after the Dart constant said 15. Why 15, and why Dart cannot say it:
+    // `IosCheckScheduler.refreshFrequency`. Kept in step with it by
+    // `check_scheduler_test`, which reads this file.
     WorkmanagerPlugin.registerPeriodicTask(
       withIdentifier: "com.samyak.nivaat.refresh",
-      frequency: NSNumber(value: 30 * 60)
+      frequency: NSNumber(value: 15 * 60)
     )
     // Overnight/idle trigger for the wind-check cascade; earliestBeginDate is
-    // set per cascade rung from Dart (see IosCheckScheduler.scheduleCheck).
+    // set per cascade rung from Dart (see IosCheckScheduler.scheduleChecks).
     WorkmanagerPlugin.registerBGProcessingTask(
       withIdentifier: "com.samyak.nivaat.processing"
     )

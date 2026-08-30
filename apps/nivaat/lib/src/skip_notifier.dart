@@ -35,14 +35,57 @@ const String kNivaatUnknownRing = "Couldn't confirm";
 const String kNivaatSkipped = 'Skipped';
 const String kNivaatCancelled = 'Cancelled';
 
+/// What a verdict is CALLED, in the one place both surfaces read it from
+/// (Samyak, 2026-08-25).
+///
+/// The card said `Too windy at 06:45`; the home row's ⓘ was inventing its own
+/// vocabulary (`Worst at 06:45`) for the same fact. Two names for one thing is
+/// how a screen stops sounding like the app it is part of, so there is now one
+/// mapping and both call it.
+///
+/// **Null for a ring, because a ring has no reason to give** (Samyak,
+/// 2026-08-25). It said `Calm`, and he took it out for the right reason: a
+/// skip is caused by ONE slot and can be pinned to it, while a ring is the
+/// whole window clearing — so `Calm at 04:45` claimed a moment that was never
+/// special and quietly implied the rest of the window was not. `Calm from
+/// 04:30 to 05:00` would have been true, and would have said nothing the
+/// numbers beside it do not.
+///
+/// `CheckOutcome.skippedNoData` has no verdict to map from either — nothing
+/// was measured, so there was never a decision — and keeps its own phrasing at
+/// the one call site that can produce it.
+String? nivaatWindWord(WindVerdict verdict) => switch (verdict) {
+      WindVerdict.tooWindy => 'Too windy',
+      WindVerdict.tooGusty => 'Too gusty',
+      WindVerdict.ring => null,
+    };
+
 // One reason phrase, shared by both cards (within-notification consistency).
 // Court-free since 2026-07-22 — the title names it now.
-String _reason(HistoryRecord record) => switch (record.outcome) {
-      CheckOutcome.skippedWindy => 'Too windy',
-      CheckOutcome.skippedGusty => 'Too gusty',
-      CheckOutcome.skippedNoData => "Couldn't reach the wind",
-      CheckOutcome.rang => '',
-    };
+/// **The reason names the SLOT that failed** (2026-08-25), because the numbers
+/// beside it belong to that slot and not to the check that read it.
+///
+/// A morning is decided across the whole play window now, so `Too windy · wind
+/// 6 (≤4) · last checked 06:00` was quietly contradictory: 06:00 may have been
+/// perfectly calm, and the six came from a slot three quarters of an hour
+/// later. `Too windy at 06:45` says which moment it is talking about.
+///
+/// The slot is dropped when there is none — a no-data row carries no numbers,
+/// and neither does a ring.
+String _reason(HistoryRecord record) {
+  final word = switch (record.outcome) {
+    // `!` — both map to a skip verdict, which always has a word.
+    CheckOutcome.skippedWindy => nivaatWindWord(WindVerdict.tooWindy)!,
+    CheckOutcome.skippedGusty => nivaatWindWord(WindVerdict.tooGusty)!,
+    CheckOutcome.skippedNoData => "Couldn't reach the wind",
+    CheckOutcome.rang => '',
+  };
+  final slot = record.slotAt;
+  if (word.isEmpty || slot == null || record.windGustSummary.isEmpty) {
+    return word;
+  }
+  return '$word at ${fmtCheckTime(slot, record.at)}';
+}
 
 /// ` · last checked HH:MM` — the freshness of the reading behind this row.
 /// One helper for every surface, so a card and its history row can't drift.

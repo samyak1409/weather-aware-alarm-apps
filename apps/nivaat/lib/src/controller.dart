@@ -23,6 +23,11 @@ class NivaatController extends ChangeNotifier {
   /// Per-alarm cascade state (alarm id → in-flight occurrence). Feeds the
   /// home "still checking" cue so it only shows while retries actually run.
   Map<int, CheckState> checkStates = {};
+
+  /// The latest wind verdict per alarm, for the home row's dot (N15). Written
+  /// by whichever isolate ran the check — including the background ones — so
+  /// this is re-read on every resync rather than kept in step by hand.
+  Map<int, AlarmForecast> forecasts = {};
   bool loaded = false;
 
   /// Most recent fire-and-forget cleanup or evaluate kicked off by
@@ -154,6 +159,7 @@ class NivaatController extends ChangeNotifier {
     _alarmIdSeq = await store.loadAlarmIdSeq() ?? 1;
     history = await _loadHistory();
     await _reloadCheckStates();
+    forecasts = await store.loadForecasts();
   }
 
   Future<void> _reloadCheckStates() async {
@@ -176,6 +182,7 @@ class NivaatController extends ChangeNotifier {
       await engine.evaluateAll();
       history = await _loadHistory();
       await _reloadCheckStates();
+      forecasts = await store.loadForecasts();
       notifyListeners();
     } on Exception catch (e, st) {
       // Never-brick: a wind fetch / plugin hiccup must not take the process
@@ -225,6 +232,9 @@ class NivaatController extends ChangeNotifier {
     for (final a in orphaned) {
       await engine.evaluateAlarm(a.copyWith(enabled: false), courts);
     }
+    // And forget what the cascade teardown does not reach — the same sweep
+    // `deleteAlarm` does, because this deletes alarms just as surely.
+    await _forgetAlarms({for (final a in orphaned) a.id});
     // Then delete the court's whole skip/ring log — after the cancels, so
     // nothing re-adds a row for an alarm we just removed.
     await store.removeHistoryForCourt(id);
@@ -263,7 +273,8 @@ class NivaatController extends ChangeNotifier {
     // cannot write, which is what lets [_reload] stay quiet about it — would
     // otherwise be silent damage: `upsertAlarm` reads a colliding id as an EDIT
     // and overwrites the alarm already wearing it. A free number always exists,
-    // since N18 caps coexisting alarms at 1440 inside a 9999-wide block.
+    // since N18 plus the half-hour wheel cap coexisting alarms at 48 inside a
+    // 9999-wide block (it was 1440 while any minute could be picked).
     var id = 1;
     while (used.contains(id)) {
       id++;
@@ -345,14 +356,33 @@ class NivaatController extends ChangeNotifier {
   /// row reading "watching until 06:30" that nothing will ever answer. What it
   /// does NOT do is keep the card: a notification for an alarm that no longer
   /// exists is an orphan, which is the bug that started all this.
+  /// Forget every trace of alarms that no longer exist — **both delete paths
+  /// go through this** (2026-08-30).
+  ///
+  /// It was inline in [deleteAlarm] and simply missing from [removeCourt],
+  /// which deletes alarms too: a court's alarms went, their forecast rows
+  /// stayed, and `nextAlarmId` hands a number back on its fallback path, so a
+  /// newly created alarm could open showing the dead one's verdict until its
+  /// first check landed. The same sweep at both sites is the only version of
+  /// this that cannot drift — history already has `removeHistoryForCourt` for
+  /// exactly this reason.
+  ///
+  /// The verdict is the one piece of per-alarm state nothing else clears: it
+  /// outlives the occurrence on purpose (the dot has to keep saying something
+  /// for tomorrow's alarm all day today), so no cascade teardown reaches it.
+  Future<void> _forgetAlarms(Set<int> ids) async {
+    checkStates = Map.of(checkStates)..removeWhere((id, _) => ids.contains(id));
+    forecasts = Map.of(forecasts)..removeWhere((id, _) => ids.contains(id));
+    for (final id in ids) {
+      await store.clearForecast(id);
+    }
+  }
+
   Future<void> deleteAlarm(int id) async {
     final removed = alarms.where((a) => a.id == id).toList();
     alarms = alarms.where((a) => a.id != id).toList();
     await store.saveAlarms(alarms);
-    checkStates = {
-      for (final e in checkStates.entries)
-        if (e.key != id) e.key: e.value
-    };
+    await _forgetAlarms({id});
     notifyListeners();
     // Fire-and-forget in production — a delete must feel instant — but the
     // handle is kept so a test can await the disarming it triggers.
@@ -370,6 +400,7 @@ class NivaatController extends ChangeNotifier {
     await engine.evaluateAlarm(alarm, courts, now: now);
     history = await _loadHistory();
     await _reloadCheckStates();
+    forecasts = await store.loadForecasts();
     notifyListeners();
   }
 

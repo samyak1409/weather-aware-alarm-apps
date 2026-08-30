@@ -10,6 +10,7 @@ import 'package:sqlite3/common.dart';
 // `tables.dart`'s: the enums behind every `textEnum` column live there.
 import '../models.dart';
 import '../repos.dart';
+import '../wind.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -44,6 +45,8 @@ part 'app_database.g.dart';
     HostEventClaims,
     AlarmKitHandles,
     OutboxEntries,
+    WindModels,
+    AlarmForecastEntries,
   ],
 )
 class AppDatabase extends _$AppDatabase {

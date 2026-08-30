@@ -113,6 +113,67 @@ void main() {
     });
   });
 
+  group('how long a toast stays up (2026-08-25)', () {
+    test('one second per ten characters — the message sets its own hold', () {
+      // A flat two seconds was set when every toast was one short line. It is
+      // generous for a three-word answer and not enough for the wind detail
+      // behind a Nivaat home row, which is three clauses of numbers.
+      expect(toastHold('Saved using GPS'), const Duration(milliseconds: 1500),
+          reason: "Samyak's own worked example: 15 characters, 1.5s");
+      expect(toastHold('Too windy at 16:45 · wind 4 (≤6) · gusts 9 (≤13) km/h'),
+          const Duration(milliseconds: 5300));
+      // Exactly proportional, with nothing rounding it off at either end.
+      for (final n in [1, 7, 40, 300]) {
+        expect(toastHold('x' * n), Duration(milliseconds: n * 100));
+      }
+    });
+
+    test('unclamped at both ends — the rule is the whole rule', () {
+      // I proposed a 1.5s floor and a 6s ceiling; Samyak took both out. The
+      // states they guarded are not states this code has: nothing in either
+      // app calls this with an empty string or with prose.
+      expect(toastHold('ok'), const Duration(milliseconds: 200));
+      expect(toastHold('x' * 500), const Duration(seconds: 50));
+    });
+
+    test('never shorter for a longer message', () {
+      var last = Duration.zero;
+      for (var n = 0; n <= 200; n++) {
+        final hold = toastHold('x' * n);
+        expect(hold, greaterThanOrEqualTo(last), reason: 'at $n characters');
+        last = hold;
+      }
+    });
+
+    testWidgets('the pill really holds for that long, then leaves',
+        (tester) async {
+      // The rule is only worth having if the widget reads it — this is the
+      // wiring, not the arithmetic.
+      const message = 'Saved using GPS';
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () =>
+                  showAppToast(context, message, accent: AppPalette.dawn),
+              child: const Text('go'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('go'));
+      await tester.pumpAndSettle();
+      expect(find.text(message), findsOneWidget);
+
+      // Still up a hair before its hold is out...
+      await tester.pump(toastHold(message) - const Duration(milliseconds: 100));
+      expect(find.text(message), findsOneWidget);
+      // ...and gone once the hold and the fade have both run.
+      await tester.pumpAndSettle();
+      expect(find.text(message), findsNothing);
+    });
+  });
+
   group('showAppToast with nothing to centre on', () {
     testWidgets('falls back to just above the bottom edge', (tester) async {
       // The documented default for a caller with no anchor. CraftedBy always
@@ -124,7 +185,12 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               onPressed: () =>
-                  showAppToast(context, 'hello', accent: AppPalette.dawn),
+                  // A real message, not 'hello': the hold is its own length
+                  // now, and five characters is half a second — less than the
+                  // button's ink ripple keeps frames scheduled for, so
+                  // `pumpAndSettle` would run past the toast and find nothing.
+                  showAppToast(
+                      context, 'Saved using GPS', accent: AppPalette.dawn),
               child: const Text('go'),
             ),
           ),
@@ -135,7 +201,8 @@ void main() {
 
       expect(tester.takeException(), isNull);
       final pill = tester.getRect(find
-          .ancestor(of: find.text('hello'), matching: find.byType(Material))
+          .ancestor(
+              of: find.text('Saved using GPS'), matching: find.byType(Material))
           .first);
       expect(tester.getRect(find.byType(Scaffold)).bottom - pill.bottom,
           closeTo(10, 0.5),

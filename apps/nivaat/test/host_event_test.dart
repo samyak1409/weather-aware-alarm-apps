@@ -293,7 +293,7 @@ void main() {
   test('lateRing role decodes separately from alarmAt', () {
     expect(NivaatIds.ringRoleOf(NivaatIds.lateRing(3)), RingLockerRole.lateRing);
     expect(NivaatIds.ringRoleOf(NivaatIds.nextRing(3)), RingLockerRole.nextRing);
-    expect(NivaatIds.ringRoleOf(NivaatIds.check(3)), isNull);
+    expect(NivaatIds.ringRoleOf(NivaatIds.retryCheck(3)), isNull);
   });
 
   test('C1: drop mid hold+rollOn settles once — only one roll-on', () async {

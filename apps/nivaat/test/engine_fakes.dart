@@ -371,15 +371,15 @@ class GatedApi extends FakeApi {
   }
 
   @override
-  Future<WindSample> forecastWindAt(double lat, double lon, DateTime at) async {
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) async {
     await _park();
-    return super.forecastWindAt(lat, lon, at);
-  }
-
-  @override
-  Future<WindSample> currentWind(double lat, double lon) async {
-    await _park();
-    return super.currentWind(lat, lon);
+    return super.windWindow(lat, lon, from, to, models: models);
   }
 }
 
@@ -394,7 +394,7 @@ class FakeChecks implements CheckScheduler {
   @override
   Future<void> initialize() async {}
 
-  /// Makes [scheduleCheck] THROW rather than decline.
+  /// Makes [scheduleChecks] THROW rather than decline.
   ///
   /// [accepts] models a booking the platform refuses, which the engine
   /// soft-fails and logs; this models the plugin call itself failing, which
@@ -403,37 +403,79 @@ class FakeChecks implements CheckScheduler {
   /// day out never gets as far as `scheduleRing`.
   bool throwOnSchedule = false;
 
+  /// Every rung booked, per alarm — `rung index -> when`. `booked` keeps the
+  /// SOONEST of them, which is what the old single-booking assertions meant.
+  final Map<int, Map<int, DateTime>> bookedRungs = {};
+
   @override
-  Future<bool> scheduleCheck(int alarmId, DateTime at) async {
+  Future<bool> scheduleChecks(int alarmId, Map<int, DateTime> rungs) async {
     if (throwOnSchedule) throw Exception('check booking failed');
     if (!accepts) return false;
-    booked[alarmId] = at;
+    if (rungs.isEmpty) return true;
+    (bookedRungs[alarmId] ??= {}).addAll(rungs);
+    booked[alarmId] = rungs.values.reduce((a, b) => a.isBefore(b) ? a : b);
     return true;
   }
 
   @override
-  Future<void> cancelCheck(int alarmId) async => booked.remove(alarmId);
+  Future<void> cancelChecks(int alarmId) async {
+    booked.remove(alarmId);
+    bookedRungs.remove(alarmId);
+  }
 }
+
+/// The 15-minute grid the real API answers on.
+DateTime _floor(DateTime t) =>
+    DateTime(t.year, t.month, t.day, t.hour, t.minute ~/ 15 * 15);
 
 class FakeApi extends OpenMeteo {
   FakeApi();
 
+  /// The reading every slot of the window returns. One value is enough for
+  /// most cases — a window whose slots all agree decides exactly as the old
+  /// single sample did, which is what keeps the pre-window fixtures meaningful.
   WindSample? sample;
+
+  /// Per-slot readings, when a test needs the slots to DISAGREE — the whole
+  /// point of the window rule is that the worst one decides. Overrides
+  /// [sample] when set.
+  List<WindSample>? window;
+
   bool fail = false;
-  bool lastCallWasCurrent = false;
+
+  /// The windows asked for, in order — `(from, to)` — so a test can assert
+  /// that a retry judged its OWN window rather than re-judging T's.
+  final List<(DateTime, DateTime)> asked = [];
 
   @override
-  Future<WindSample> forecastWindAt(double lat, double lon, DateTime target) async {
-    lastCallWasCurrent = false;
-    if (fail || sample == null) throw OpenMeteoException('down');
-    return sample!;
-  }
-
-  @override
-  Future<WindSample> currentWind(double lat, double lon) async {
-    lastCallWasCurrent = true;
-    if (fail || sample == null) throw OpenMeteoException('down');
-    return sample!;
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) async {
+    asked.add((from, to));
+    if (fail) throw OpenMeteoException('down');
+    if (window != null) return window!;
+    if (sample == null) throw OpenMeteoException('down');
+    // Every 15-minute slot the window covers, all carrying `sample` — the
+    // real client returns one entry per slot and the engine's worst-slot rule
+    // has to see that shape even when the values are flat.
+    // Floored to the quarter hour, exactly as the real client does: it sends
+    // `start_minutely_15` through `OpenMeteo.slotKey`, so production slots are
+    // always ON the grid. A fake handing back 06:34:10 would put a time in the
+    // card that the API could never produce.
+    final out = <WindSample>[];
+    for (var at = _floor(from); !at.isAfter(to);
+        at = at.add(const Duration(minutes: 15))) {
+      out.add(WindSample(
+        rawSpeedKmh: sample!.rawSpeedKmh,
+        rawGustKmh: sample!.rawGustKmh,
+        slotAt: at,
+      ));
+    }
+    return out;
   }
 }
 
@@ -471,11 +513,11 @@ class SeqWatchingStore extends NivaatStore {
   }
 }
 
-WindSample wind(double rawSpeed, double rawGust) => WindSample(
+WindSample wind(double rawSpeed, double rawGust, [DateTime? slotAt]) =>
+    WindSample(
       rawSpeedKmh: rawSpeed,
       rawGustKmh: rawGust,
-      observedAt: DateTime(2026, 7, 11),
-      isForecast: false,
+      slotAt: slotAt ?? DateTime(2026, 7, 11),
     );
 
 const court = SavedLocation(id: 'c1', name: 'Home Court', lat: 26.17, lon: 75.79);

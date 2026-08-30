@@ -96,6 +96,42 @@ void main() {
     expect(controller.history, isEmpty);
   });
 
+  group('deleting an alarm forgets its forecast verdict (2026-08-30)', () {
+    // The verdict outlives the occurrence on purpose — the dot has to keep
+    // saying something for tomorrow's alarm all day today — so no cascade
+    // teardown reaches it and the delete paths have to sweep it themselves.
+    // `nextAlarmId` hands a number back on its fallback path, so a leftover
+    // row shows the DEAD alarm's verdict on a freshly created one.
+    const alarm = NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1');
+
+    Future<void> withAlarm() async {
+      await build();
+      await store.saveAlarms(const [alarm]);
+      await controller.init();
+      await controller.lastEvaluation;
+      expect(await store.loadForecasts(), contains(1),
+          reason: 'the check recorded a verdict, or this proves nothing');
+    }
+
+    test('deleteAlarm clears it', () async {
+      await withAlarm();
+      await controller.deleteAlarm(1);
+      expect(await store.loadForecasts(), isEmpty);
+      expect(controller.forecasts, isEmpty);
+    });
+
+    test('removeCourt clears it too — it deletes alarms just as surely',
+        () async {
+      // This is the half that was missing: the sweep landed at the site it was
+      // noticed and not at its sibling.
+      await withAlarm();
+      await controller.removeCourt('c1');
+      expect(controller.alarms, isEmpty, reason: 'the court took its alarms');
+      expect(await store.loadForecasts(), isEmpty);
+      expect(controller.forecasts, isEmpty);
+    });
+  });
+
   test('resync before init must not wipe history against the empty courts default',
       () async {
     // Open-during-ring / early resume / ui-resync ping can call resync while

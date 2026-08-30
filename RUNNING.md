@@ -66,7 +66,7 @@ Deny-testing tip: Android lets an app re-show the notification dialog only once 
 
 **iOS simulator — UI and flows only; two hard limits:**
 
-1. **Background tasks never fire.** Apple doesn't support `BGTaskScheduler` on the simulator ([docs](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/error/code/unavailable), [workmanager #397](https://github.com/fluttercommunity/flutter_workmanager/issues/397)). So Nivaat's closed-app wind-check cascade won't run; checks still evaluate whenever the app is open or foregrounded. Example: schedule a 6:00 alarm, close the app → no T-1h…T-0 checks happen; reopen the app at 5:58 → it catches up immediately.
+1. **Background tasks never fire.** Apple doesn't support `BGTaskScheduler` on the simulator ([docs](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/error/code/unavailable), [workmanager #397](https://github.com/fluttercommunity/flutter_workmanager/issues/397)). So Nivaat's closed-app wind-check cascade won't run; checks still evaluate whenever the app is open or foregrounded. Example: schedule a 6:00 alarm, close the app → none of the T−24h…T−0 ladder runs; reopen the app at 5:58 → it catches up immediately.
 2. **AlarmKit is flaky on the simulator** — alarms schedule and present, but sound playback and the Dynamic Island are unreliable ([known issue](https://medium.com/@wenzeljeremy/alertsounds-with-ios-simulators-88ee41871c44)). A silent alarm on the simulator is _not_ evidence of a bug.
 
 Bottom line: the simulator pass validates UI, permissions, scheduling logic, and foreground behavior. **Actual ring delivery (especially iOS background + sound) still needs one real-device pass before trusting it.**

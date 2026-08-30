@@ -521,6 +521,27 @@ class $NivaatAlarmsTable extends NivaatAlarms
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _timeUntilPlayMinutesMeta =
+      const VerificationMeta('timeUntilPlayMinutes');
+  @override
+  late final GeneratedColumn<int> timeUntilPlayMinutes = GeneratedColumn<int>(
+    'time_until_play_minutes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _minPlayMinutesMeta = const VerificationMeta(
+    'minPlayMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> minPlayMinutes = GeneratedColumn<int>(
+    'min_play_minutes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
   @override
   late final GeneratedColumnWithTypeConverter<Set<int>, String> weekdays =
       GeneratedColumn<String>(
@@ -563,6 +584,8 @@ class $NivaatAlarmsTable extends NivaatAlarms
     courtId,
     courtSpeedLimitKmh,
     retryMinutesAfter,
+    timeUntilPlayMinutes,
+    minPlayMinutes,
     weekdays,
     enabled,
     position,
@@ -628,6 +651,28 @@ class $NivaatAlarmsTable extends NivaatAlarms
     } else if (isInserting) {
       context.missing(_retryMinutesAfterMeta);
     }
+    if (data.containsKey('time_until_play_minutes')) {
+      context.handle(
+        _timeUntilPlayMinutesMeta,
+        timeUntilPlayMinutes.isAcceptableOrUnknown(
+          data['time_until_play_minutes']!,
+          _timeUntilPlayMinutesMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_timeUntilPlayMinutesMeta);
+    }
+    if (data.containsKey('min_play_minutes')) {
+      context.handle(
+        _minPlayMinutesMeta,
+        minPlayMinutes.isAcceptableOrUnknown(
+          data['min_play_minutes']!,
+          _minPlayMinutesMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_minPlayMinutesMeta);
+    }
     if (data.containsKey('enabled')) {
       context.handle(
         _enabledMeta,
@@ -677,6 +722,14 @@ class $NivaatAlarmsTable extends NivaatAlarms
         DriftSqlType.int,
         data['${effectivePrefix}retry_minutes_after'],
       )!,
+      timeUntilPlayMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}time_until_play_minutes'],
+      )!,
+      minPlayMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}min_play_minutes'],
+      )!,
       weekdays: $NivaatAlarmsTable.$converterweekdays.fromSql(
         attachedDatabase.typeMapping.read(
           DriftSqlType.string,
@@ -709,6 +762,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
   final String courtId;
   final int courtSpeedLimitKmh;
   final int retryMinutesAfter;
+  final int timeUntilPlayMinutes;
+  final int minPlayMinutes;
   final Set<int> weekdays;
   final bool enabled;
   final int position;
@@ -719,6 +774,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
     required this.courtId,
     required this.courtSpeedLimitKmh,
     required this.retryMinutesAfter,
+    required this.timeUntilPlayMinutes,
+    required this.minPlayMinutes,
     required this.weekdays,
     required this.enabled,
     required this.position,
@@ -732,6 +789,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
     map['court_id'] = Variable<String>(courtId);
     map['court_speed_limit_kmh'] = Variable<int>(courtSpeedLimitKmh);
     map['retry_minutes_after'] = Variable<int>(retryMinutesAfter);
+    map['time_until_play_minutes'] = Variable<int>(timeUntilPlayMinutes);
+    map['min_play_minutes'] = Variable<int>(minPlayMinutes);
     {
       map['weekdays'] = Variable<String>(
         $NivaatAlarmsTable.$converterweekdays.toSql(weekdays),
@@ -750,6 +809,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
       courtId: Value(courtId),
       courtSpeedLimitKmh: Value(courtSpeedLimitKmh),
       retryMinutesAfter: Value(retryMinutesAfter),
+      timeUntilPlayMinutes: Value(timeUntilPlayMinutes),
+      minPlayMinutes: Value(minPlayMinutes),
       weekdays: Value(weekdays),
       enabled: Value(enabled),
       position: Value(position),
@@ -768,6 +829,10 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
       courtId: serializer.fromJson<String>(json['courtId']),
       courtSpeedLimitKmh: serializer.fromJson<int>(json['courtSpeedLimitKmh']),
       retryMinutesAfter: serializer.fromJson<int>(json['retryMinutesAfter']),
+      timeUntilPlayMinutes: serializer.fromJson<int>(
+        json['timeUntilPlayMinutes'],
+      ),
+      minPlayMinutes: serializer.fromJson<int>(json['minPlayMinutes']),
       weekdays: serializer.fromJson<Set<int>>(json['weekdays']),
       enabled: serializer.fromJson<bool>(json['enabled']),
       position: serializer.fromJson<int>(json['position']),
@@ -783,6 +848,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
       'courtId': serializer.toJson<String>(courtId),
       'courtSpeedLimitKmh': serializer.toJson<int>(courtSpeedLimitKmh),
       'retryMinutesAfter': serializer.toJson<int>(retryMinutesAfter),
+      'timeUntilPlayMinutes': serializer.toJson<int>(timeUntilPlayMinutes),
+      'minPlayMinutes': serializer.toJson<int>(minPlayMinutes),
       'weekdays': serializer.toJson<Set<int>>(weekdays),
       'enabled': serializer.toJson<bool>(enabled),
       'position': serializer.toJson<int>(position),
@@ -796,6 +863,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
     String? courtId,
     int? courtSpeedLimitKmh,
     int? retryMinutesAfter,
+    int? timeUntilPlayMinutes,
+    int? minPlayMinutes,
     Set<int>? weekdays,
     bool? enabled,
     int? position,
@@ -806,6 +875,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
     courtId: courtId ?? this.courtId,
     courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
     retryMinutesAfter: retryMinutesAfter ?? this.retryMinutesAfter,
+    timeUntilPlayMinutes: timeUntilPlayMinutes ?? this.timeUntilPlayMinutes,
+    minPlayMinutes: minPlayMinutes ?? this.minPlayMinutes,
     weekdays: weekdays ?? this.weekdays,
     enabled: enabled ?? this.enabled,
     position: position ?? this.position,
@@ -822,6 +893,12 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
       retryMinutesAfter: data.retryMinutesAfter.present
           ? data.retryMinutesAfter.value
           : this.retryMinutesAfter,
+      timeUntilPlayMinutes: data.timeUntilPlayMinutes.present
+          ? data.timeUntilPlayMinutes.value
+          : this.timeUntilPlayMinutes,
+      minPlayMinutes: data.minPlayMinutes.present
+          ? data.minPlayMinutes.value
+          : this.minPlayMinutes,
       weekdays: data.weekdays.present ? data.weekdays.value : this.weekdays,
       enabled: data.enabled.present ? data.enabled.value : this.enabled,
       position: data.position.present ? data.position.value : this.position,
@@ -837,6 +914,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
           ..write('courtId: $courtId, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('retryMinutesAfter: $retryMinutesAfter, ')
+          ..write('timeUntilPlayMinutes: $timeUntilPlayMinutes, ')
+          ..write('minPlayMinutes: $minPlayMinutes, ')
           ..write('weekdays: $weekdays, ')
           ..write('enabled: $enabled, ')
           ..write('position: $position')
@@ -852,6 +931,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
     courtId,
     courtSpeedLimitKmh,
     retryMinutesAfter,
+    timeUntilPlayMinutes,
+    minPlayMinutes,
     weekdays,
     enabled,
     position,
@@ -866,6 +947,8 @@ class AlarmRow extends DataClass implements Insertable<AlarmRow> {
           other.courtId == this.courtId &&
           other.courtSpeedLimitKmh == this.courtSpeedLimitKmh &&
           other.retryMinutesAfter == this.retryMinutesAfter &&
+          other.timeUntilPlayMinutes == this.timeUntilPlayMinutes &&
+          other.minPlayMinutes == this.minPlayMinutes &&
           other.weekdays == this.weekdays &&
           other.enabled == this.enabled &&
           other.position == this.position);
@@ -878,6 +961,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
   final Value<String> courtId;
   final Value<int> courtSpeedLimitKmh;
   final Value<int> retryMinutesAfter;
+  final Value<int> timeUntilPlayMinutes;
+  final Value<int> minPlayMinutes;
   final Value<Set<int>> weekdays;
   final Value<bool> enabled;
   final Value<int> position;
@@ -888,6 +973,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
     this.courtId = const Value.absent(),
     this.courtSpeedLimitKmh = const Value.absent(),
     this.retryMinutesAfter = const Value.absent(),
+    this.timeUntilPlayMinutes = const Value.absent(),
+    this.minPlayMinutes = const Value.absent(),
     this.weekdays = const Value.absent(),
     this.enabled = const Value.absent(),
     this.position = const Value.absent(),
@@ -899,6 +986,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
     required String courtId,
     required int courtSpeedLimitKmh,
     required int retryMinutesAfter,
+    required int timeUntilPlayMinutes,
+    required int minPlayMinutes,
     required Set<int> weekdays,
     required bool enabled,
     required int position,
@@ -907,6 +996,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
        courtId = Value(courtId),
        courtSpeedLimitKmh = Value(courtSpeedLimitKmh),
        retryMinutesAfter = Value(retryMinutesAfter),
+       timeUntilPlayMinutes = Value(timeUntilPlayMinutes),
+       minPlayMinutes = Value(minPlayMinutes),
        weekdays = Value(weekdays),
        enabled = Value(enabled),
        position = Value(position);
@@ -917,6 +1008,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
     Expression<String>? courtId,
     Expression<int>? courtSpeedLimitKmh,
     Expression<int>? retryMinutesAfter,
+    Expression<int>? timeUntilPlayMinutes,
+    Expression<int>? minPlayMinutes,
     Expression<String>? weekdays,
     Expression<bool>? enabled,
     Expression<int>? position,
@@ -929,6 +1022,9 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
       if (courtSpeedLimitKmh != null)
         'court_speed_limit_kmh': courtSpeedLimitKmh,
       if (retryMinutesAfter != null) 'retry_minutes_after': retryMinutesAfter,
+      if (timeUntilPlayMinutes != null)
+        'time_until_play_minutes': timeUntilPlayMinutes,
+      if (minPlayMinutes != null) 'min_play_minutes': minPlayMinutes,
       if (weekdays != null) 'weekdays': weekdays,
       if (enabled != null) 'enabled': enabled,
       if (position != null) 'position': position,
@@ -942,6 +1038,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
     Value<String>? courtId,
     Value<int>? courtSpeedLimitKmh,
     Value<int>? retryMinutesAfter,
+    Value<int>? timeUntilPlayMinutes,
+    Value<int>? minPlayMinutes,
     Value<Set<int>>? weekdays,
     Value<bool>? enabled,
     Value<int>? position,
@@ -953,6 +1051,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
       courtId: courtId ?? this.courtId,
       courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
       retryMinutesAfter: retryMinutesAfter ?? this.retryMinutesAfter,
+      timeUntilPlayMinutes: timeUntilPlayMinutes ?? this.timeUntilPlayMinutes,
+      minPlayMinutes: minPlayMinutes ?? this.minPlayMinutes,
       weekdays: weekdays ?? this.weekdays,
       enabled: enabled ?? this.enabled,
       position: position ?? this.position,
@@ -980,6 +1080,14 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
     if (retryMinutesAfter.present) {
       map['retry_minutes_after'] = Variable<int>(retryMinutesAfter.value);
     }
+    if (timeUntilPlayMinutes.present) {
+      map['time_until_play_minutes'] = Variable<int>(
+        timeUntilPlayMinutes.value,
+      );
+    }
+    if (minPlayMinutes.present) {
+      map['min_play_minutes'] = Variable<int>(minPlayMinutes.value);
+    }
     if (weekdays.present) {
       map['weekdays'] = Variable<String>(
         $NivaatAlarmsTable.$converterweekdays.toSql(weekdays.value),
@@ -1003,6 +1111,8 @@ class NivaatAlarmsCompanion extends UpdateCompanion<AlarmRow> {
           ..write('courtId: $courtId, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('retryMinutesAfter: $retryMinutesAfter, ')
+          ..write('timeUntilPlayMinutes: $timeUntilPlayMinutes, ')
+          ..write('minPlayMinutes: $minPlayMinutes, ')
           ..write('weekdays: $weekdays, ')
           ..write('enabled: $enabled, ')
           ..write('position: $position')
@@ -1369,6 +1479,15 @@ class $HistoryEntriesTable extends HistoryEntries
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  @override
+  late final GeneratedColumnWithTypeConverter<DateTime?, int> slotAt =
+      GeneratedColumn<int>(
+        'slot_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+      ).withConverter<DateTime?>($HistoryEntriesTable.$converterslotAt);
   static const VerificationMeta _volumeMeta = const VerificationMeta('volume');
   @override
   late final GeneratedColumn<double> volume = GeneratedColumn<double>(
@@ -1417,6 +1536,7 @@ class $HistoryEntriesTable extends HistoryEntries
     rawGustKmh,
     courtSpeedLimitKmh,
     rawGustLimitKmh,
+    slotAt,
     volume,
     ringDisposition,
     hostEventKey,
@@ -1595,6 +1715,12 @@ class $HistoryEntriesTable extends HistoryEntries
         DriftSqlType.double,
         data['${effectivePrefix}raw_gust_limit_kmh'],
       ),
+      slotAt: $HistoryEntriesTable.$converterslotAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}slot_at'],
+        ),
+      ),
       volume: attachedDatabase.typeMapping.read(
         DriftSqlType.double,
         data['${effectivePrefix}volume'],
@@ -1628,6 +1754,8 @@ class $HistoryEntriesTable extends HistoryEntries
       nullableDateTimeMicros;
   static TypeConverter<DateTime?, int?> $convertercheckingEndedAt =
       nullableDateTimeMicros;
+  static TypeConverter<DateTime?, int?> $converterslotAt =
+      nullableDateTimeMicros;
   static JsonTypeConverter2<RingDisposition, String, String>
   $converterringDisposition = const EnumNameConverter<RingDisposition>(
     RingDisposition.values,
@@ -1653,6 +1781,14 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
   final double? rawGustKmh;
   final int? courtSpeedLimitKmh;
   final double? rawGustLimitKmh;
+
+  /// The 15-minute slot the numbers above DESCRIBE — the worst one in the play
+  /// window, which is the one that decided the morning.
+  ///
+  /// Distinct from [checkedAt], which is when the check ran. They differ by the
+  /// whole lead time, so a row saying `last checked 06:00` about wind measured
+  /// for 06:45 needs to name the 06:45 or it reads as a contradiction.
+  final DateTime? slotAt;
   final double? volume;
   final RingDisposition? ringDisposition;
   final String? hostEventKey;
@@ -1671,6 +1807,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
     this.rawGustLimitKmh,
+    this.slotAt,
     this.volume,
     this.ringDisposition,
     this.hostEventKey,
@@ -1722,6 +1859,11 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
     if (!nullToAbsent || rawGustLimitKmh != null) {
       map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh);
     }
+    if (!nullToAbsent || slotAt != null) {
+      map['slot_at'] = Variable<int>(
+        $HistoryEntriesTable.$converterslotAt.toSql(slotAt),
+      );
+    }
     if (!nullToAbsent || volume != null) {
       map['volume'] = Variable<double>(volume);
     }
@@ -1766,6 +1908,9 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
       rawGustLimitKmh: rawGustLimitKmh == null && nullToAbsent
           ? const Value.absent()
           : Value(rawGustLimitKmh),
+      slotAt: slotAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(slotAt),
       volume: volume == null && nullToAbsent
           ? const Value.absent()
           : Value(volume),
@@ -1802,6 +1947,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
       rawGustKmh: serializer.fromJson<double?>(json['rawGustKmh']),
       courtSpeedLimitKmh: serializer.fromJson<int?>(json['courtSpeedLimitKmh']),
       rawGustLimitKmh: serializer.fromJson<double?>(json['rawGustLimitKmh']),
+      slotAt: serializer.fromJson<DateTime?>(json['slotAt']),
       volume: serializer.fromJson<double?>(json['volume']),
       ringDisposition: $HistoryEntriesTable.$converterringDispositionn.fromJson(
         serializer.fromJson<String?>(json['ringDisposition']),
@@ -1831,6 +1977,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
       'rawGustKmh': serializer.toJson<double?>(rawGustKmh),
       'courtSpeedLimitKmh': serializer.toJson<int?>(courtSpeedLimitKmh),
       'rawGustLimitKmh': serializer.toJson<double?>(rawGustLimitKmh),
+      'slotAt': serializer.toJson<DateTime?>(slotAt),
       'volume': serializer.toJson<double?>(volume),
       'ringDisposition': serializer.toJson<String?>(
         $HistoryEntriesTable.$converterringDispositionn.toJson(ringDisposition),
@@ -1854,6 +2001,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
     Value<double?> rawGustKmh = const Value.absent(),
     Value<int?> courtSpeedLimitKmh = const Value.absent(),
     Value<double?> rawGustLimitKmh = const Value.absent(),
+    Value<DateTime?> slotAt = const Value.absent(),
     Value<double?> volume = const Value.absent(),
     Value<RingDisposition?> ringDisposition = const Value.absent(),
     Value<String?> hostEventKey = const Value.absent(),
@@ -1880,6 +2028,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
     rawGustLimitKmh: rawGustLimitKmh.present
         ? rawGustLimitKmh.value
         : this.rawGustLimitKmh,
+    slotAt: slotAt.present ? slotAt.value : this.slotAt,
     volume: volume.present ? volume.value : this.volume,
     ringDisposition: ringDisposition.present
         ? ringDisposition.value
@@ -1914,6 +2063,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
       rawGustLimitKmh: data.rawGustLimitKmh.present
           ? data.rawGustLimitKmh.value
           : this.rawGustLimitKmh,
+      slotAt: data.slotAt.present ? data.slotAt.value : this.slotAt,
       volume: data.volume.present ? data.volume.value : this.volume,
       ringDisposition: data.ringDisposition.present
           ? data.ringDisposition.value
@@ -1941,6 +2091,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
           ..write('rawGustKmh: $rawGustKmh, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt, ')
           ..write('volume: $volume, ')
           ..write('ringDisposition: $ringDisposition, ')
           ..write('hostEventKey: $hostEventKey')
@@ -1964,6 +2115,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
     rawGustKmh,
     courtSpeedLimitKmh,
     rawGustLimitKmh,
+    slotAt,
     volume,
     ringDisposition,
     hostEventKey,
@@ -1986,6 +2138,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
           other.rawGustKmh == this.rawGustKmh &&
           other.courtSpeedLimitKmh == this.courtSpeedLimitKmh &&
           other.rawGustLimitKmh == this.rawGustLimitKmh &&
+          other.slotAt == this.slotAt &&
           other.volume == this.volume &&
           other.ringDisposition == this.ringDisposition &&
           other.hostEventKey == this.hostEventKey);
@@ -2006,6 +2159,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
   final Value<double?> rawGustKmh;
   final Value<int?> courtSpeedLimitKmh;
   final Value<double?> rawGustLimitKmh;
+  final Value<DateTime?> slotAt;
   final Value<double?> volume;
   final Value<RingDisposition?> ringDisposition;
   final Value<String?> hostEventKey;
@@ -2024,6 +2178,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
     this.rawGustKmh = const Value.absent(),
     this.courtSpeedLimitKmh = const Value.absent(),
     this.rawGustLimitKmh = const Value.absent(),
+    this.slotAt = const Value.absent(),
     this.volume = const Value.absent(),
     this.ringDisposition = const Value.absent(),
     this.hostEventKey = const Value.absent(),
@@ -2043,6 +2198,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
     this.rawGustKmh = const Value.absent(),
     this.courtSpeedLimitKmh = const Value.absent(),
     this.rawGustLimitKmh = const Value.absent(),
+    this.slotAt = const Value.absent(),
     this.volume = const Value.absent(),
     this.ringDisposition = const Value.absent(),
     this.hostEventKey = const Value.absent(),
@@ -2067,6 +2223,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
     Expression<double>? rawGustKmh,
     Expression<int>? courtSpeedLimitKmh,
     Expression<double>? rawGustLimitKmh,
+    Expression<int>? slotAt,
     Expression<double>? volume,
     Expression<String>? ringDisposition,
     Expression<String>? hostEventKey,
@@ -2087,6 +2244,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
       if (courtSpeedLimitKmh != null)
         'court_speed_limit_kmh': courtSpeedLimitKmh,
       if (rawGustLimitKmh != null) 'raw_gust_limit_kmh': rawGustLimitKmh,
+      if (slotAt != null) 'slot_at': slotAt,
       if (volume != null) 'volume': volume,
       if (ringDisposition != null) 'ring_disposition': ringDisposition,
       if (hostEventKey != null) 'host_event_key': hostEventKey,
@@ -2108,6 +2266,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
     Value<double?>? rawGustKmh,
     Value<int?>? courtSpeedLimitKmh,
     Value<double?>? rawGustLimitKmh,
+    Value<DateTime?>? slotAt,
     Value<double?>? volume,
     Value<RingDisposition?>? ringDisposition,
     Value<String?>? hostEventKey,
@@ -2127,6 +2286,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
       rawGustKmh: rawGustKmh ?? this.rawGustKmh,
       courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
       rawGustLimitKmh: rawGustLimitKmh ?? this.rawGustLimitKmh,
+      slotAt: slotAt ?? this.slotAt,
       volume: volume ?? this.volume,
       ringDisposition: ringDisposition ?? this.ringDisposition,
       hostEventKey: hostEventKey ?? this.hostEventKey,
@@ -2192,6 +2352,11 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
     if (rawGustLimitKmh.present) {
       map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh.value);
     }
+    if (slotAt.present) {
+      map['slot_at'] = Variable<int>(
+        $HistoryEntriesTable.$converterslotAt.toSql(slotAt.value),
+      );
+    }
     if (volume.present) {
       map['volume'] = Variable<double>(volume.value);
     }
@@ -2225,6 +2390,7 @@ class HistoryEntriesCompanion extends UpdateCompanion<HistoryEntry> {
           ..write('rawGustKmh: $rawGustKmh, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt, ')
           ..write('volume: $volume, ')
           ..write('ringDisposition: $ringDisposition, ')
           ..write('hostEventKey: $hostEventKey')
@@ -2296,6 +2462,15 @@ class $CheckStatesTable extends CheckStates
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  @override
+  late final GeneratedColumnWithTypeConverter<DateTime?, int> ringSlotAt =
+      GeneratedColumn<int>(
+        'ring_slot_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+      ).withConverter<DateTime?>($CheckStatesTable.$converterringSlotAt);
   static const VerificationMeta _ringVolumeMeta = const VerificationMeta(
     'ringVolume',
   );
@@ -2344,6 +2519,15 @@ class $CheckStatesTable extends CheckStates
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  @override
+  late final GeneratedColumnWithTypeConverter<DateTime?, int> skipSlotAt =
+      GeneratedColumn<int>(
+        'skip_slot_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+      ).withConverter<DateTime?>($CheckStatesTable.$converterskipSlotAt);
   static const VerificationMeta _skipGustyMeta = const VerificationMeta(
     'skipGusty',
   );
@@ -2394,10 +2578,12 @@ class $CheckStatesTable extends CheckStates
     ringScheduled,
     ringCourtSpeedKmh,
     ringRawGustKmh,
+    ringSlotAt,
     ringVolume,
     cardShown,
     skipCourtSpeedKmh,
     skipRawGustKmh,
+    skipSlotAt,
     skipGusty,
     lastCheckAt,
     lastAttemptAt,
@@ -2529,6 +2715,12 @@ class $CheckStatesTable extends CheckStates
         DriftSqlType.double,
         data['${effectivePrefix}ring_raw_gust_kmh'],
       ),
+      ringSlotAt: $CheckStatesTable.$converterringSlotAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}ring_slot_at'],
+        ),
+      ),
       ringVolume: attachedDatabase.typeMapping.read(
         DriftSqlType.double,
         data['${effectivePrefix}ring_volume'],
@@ -2544,6 +2736,12 @@ class $CheckStatesTable extends CheckStates
       skipRawGustKmh: attachedDatabase.typeMapping.read(
         DriftSqlType.double,
         data['${effectivePrefix}skip_raw_gust_kmh'],
+      ),
+      skipSlotAt: $CheckStatesTable.$converterskipSlotAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}skip_slot_at'],
+        ),
       ),
       skipGusty: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
@@ -2574,6 +2772,10 @@ class $CheckStatesTable extends CheckStates
   }
 
   static TypeConverter<DateTime, int> $converteralarmAt = dateTimeMicros;
+  static TypeConverter<DateTime?, int?> $converterringSlotAt =
+      nullableDateTimeMicros;
+  static TypeConverter<DateTime?, int?> $converterskipSlotAt =
+      nullableDateTimeMicros;
   static TypeConverter<DateTime?, int?> $converterlastCheckAt =
       nullableDateTimeMicros;
   static TypeConverter<DateTime?, int?> $converterlastAttemptAt =
@@ -2586,10 +2788,16 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
   final bool ringScheduled;
   final double? ringCourtSpeedKmh;
   final double? ringRawGustKmh;
+
+  /// The slot behind the ring's reading, so a `Rang` history row can name the
+  /// moment its numbers came from exactly as a skipped row does. Its twin is
+  /// `skipSlotAt` above.
+  final DateTime? ringSlotAt;
   final double? ringVolume;
   final bool cardShown;
   final double? skipCourtSpeedKmh;
   final double? skipRawGustKmh;
+  final DateTime? skipSlotAt;
   final bool skipGusty;
   final DateTime? lastCheckAt;
   final DateTime? lastAttemptAt;
@@ -2600,10 +2808,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     required this.ringScheduled,
     this.ringCourtSpeedKmh,
     this.ringRawGustKmh,
+    this.ringSlotAt,
     this.ringVolume,
     required this.cardShown,
     this.skipCourtSpeedKmh,
     this.skipRawGustKmh,
+    this.skipSlotAt,
     required this.skipGusty,
     this.lastCheckAt,
     this.lastAttemptAt,
@@ -2625,6 +2835,11 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     if (!nullToAbsent || ringRawGustKmh != null) {
       map['ring_raw_gust_kmh'] = Variable<double>(ringRawGustKmh);
     }
+    if (!nullToAbsent || ringSlotAt != null) {
+      map['ring_slot_at'] = Variable<int>(
+        $CheckStatesTable.$converterringSlotAt.toSql(ringSlotAt),
+      );
+    }
     if (!nullToAbsent || ringVolume != null) {
       map['ring_volume'] = Variable<double>(ringVolume);
     }
@@ -2634,6 +2849,11 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     }
     if (!nullToAbsent || skipRawGustKmh != null) {
       map['skip_raw_gust_kmh'] = Variable<double>(skipRawGustKmh);
+    }
+    if (!nullToAbsent || skipSlotAt != null) {
+      map['skip_slot_at'] = Variable<int>(
+        $CheckStatesTable.$converterskipSlotAt.toSql(skipSlotAt),
+      );
     }
     map['skip_gusty'] = Variable<bool>(skipGusty);
     if (!nullToAbsent || lastCheckAt != null) {
@@ -2661,6 +2881,9 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
       ringRawGustKmh: ringRawGustKmh == null && nullToAbsent
           ? const Value.absent()
           : Value(ringRawGustKmh),
+      ringSlotAt: ringSlotAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ringSlotAt),
       ringVolume: ringVolume == null && nullToAbsent
           ? const Value.absent()
           : Value(ringVolume),
@@ -2671,6 +2894,9 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
       skipRawGustKmh: skipRawGustKmh == null && nullToAbsent
           ? const Value.absent()
           : Value(skipRawGustKmh),
+      skipSlotAt: skipSlotAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(skipSlotAt),
       skipGusty: Value(skipGusty),
       lastCheckAt: lastCheckAt == null && nullToAbsent
           ? const Value.absent()
@@ -2695,12 +2921,14 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
         json['ringCourtSpeedKmh'],
       ),
       ringRawGustKmh: serializer.fromJson<double?>(json['ringRawGustKmh']),
+      ringSlotAt: serializer.fromJson<DateTime?>(json['ringSlotAt']),
       ringVolume: serializer.fromJson<double?>(json['ringVolume']),
       cardShown: serializer.fromJson<bool>(json['cardShown']),
       skipCourtSpeedKmh: serializer.fromJson<double?>(
         json['skipCourtSpeedKmh'],
       ),
       skipRawGustKmh: serializer.fromJson<double?>(json['skipRawGustKmh']),
+      skipSlotAt: serializer.fromJson<DateTime?>(json['skipSlotAt']),
       skipGusty: serializer.fromJson<bool>(json['skipGusty']),
       lastCheckAt: serializer.fromJson<DateTime?>(json['lastCheckAt']),
       lastAttemptAt: serializer.fromJson<DateTime?>(json['lastAttemptAt']),
@@ -2716,10 +2944,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
       'ringScheduled': serializer.toJson<bool>(ringScheduled),
       'ringCourtSpeedKmh': serializer.toJson<double?>(ringCourtSpeedKmh),
       'ringRawGustKmh': serializer.toJson<double?>(ringRawGustKmh),
+      'ringSlotAt': serializer.toJson<DateTime?>(ringSlotAt),
       'ringVolume': serializer.toJson<double?>(ringVolume),
       'cardShown': serializer.toJson<bool>(cardShown),
       'skipCourtSpeedKmh': serializer.toJson<double?>(skipCourtSpeedKmh),
       'skipRawGustKmh': serializer.toJson<double?>(skipRawGustKmh),
+      'skipSlotAt': serializer.toJson<DateTime?>(skipSlotAt),
       'skipGusty': serializer.toJson<bool>(skipGusty),
       'lastCheckAt': serializer.toJson<DateTime?>(lastCheckAt),
       'lastAttemptAt': serializer.toJson<DateTime?>(lastAttemptAt),
@@ -2733,10 +2963,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     bool? ringScheduled,
     Value<double?> ringCourtSpeedKmh = const Value.absent(),
     Value<double?> ringRawGustKmh = const Value.absent(),
+    Value<DateTime?> ringSlotAt = const Value.absent(),
     Value<double?> ringVolume = const Value.absent(),
     bool? cardShown,
     Value<double?> skipCourtSpeedKmh = const Value.absent(),
     Value<double?> skipRawGustKmh = const Value.absent(),
+    Value<DateTime?> skipSlotAt = const Value.absent(),
     bool? skipGusty,
     Value<DateTime?> lastCheckAt = const Value.absent(),
     Value<DateTime?> lastAttemptAt = const Value.absent(),
@@ -2751,6 +2983,7 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     ringRawGustKmh: ringRawGustKmh.present
         ? ringRawGustKmh.value
         : this.ringRawGustKmh,
+    ringSlotAt: ringSlotAt.present ? ringSlotAt.value : this.ringSlotAt,
     ringVolume: ringVolume.present ? ringVolume.value : this.ringVolume,
     cardShown: cardShown ?? this.cardShown,
     skipCourtSpeedKmh: skipCourtSpeedKmh.present
@@ -2759,6 +2992,7 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     skipRawGustKmh: skipRawGustKmh.present
         ? skipRawGustKmh.value
         : this.skipRawGustKmh,
+    skipSlotAt: skipSlotAt.present ? skipSlotAt.value : this.skipSlotAt,
     skipGusty: skipGusty ?? this.skipGusty,
     lastCheckAt: lastCheckAt.present ? lastCheckAt.value : this.lastCheckAt,
     lastAttemptAt: lastAttemptAt.present
@@ -2779,6 +3013,9 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
       ringRawGustKmh: data.ringRawGustKmh.present
           ? data.ringRawGustKmh.value
           : this.ringRawGustKmh,
+      ringSlotAt: data.ringSlotAt.present
+          ? data.ringSlotAt.value
+          : this.ringSlotAt,
       ringVolume: data.ringVolume.present
           ? data.ringVolume.value
           : this.ringVolume,
@@ -2789,6 +3026,9 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
       skipRawGustKmh: data.skipRawGustKmh.present
           ? data.skipRawGustKmh.value
           : this.skipRawGustKmh,
+      skipSlotAt: data.skipSlotAt.present
+          ? data.skipSlotAt.value
+          : this.skipSlotAt,
       skipGusty: data.skipGusty.present ? data.skipGusty.value : this.skipGusty,
       lastCheckAt: data.lastCheckAt.present
           ? data.lastCheckAt.value
@@ -2808,10 +3048,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
           ..write('ringScheduled: $ringScheduled, ')
           ..write('ringCourtSpeedKmh: $ringCourtSpeedKmh, ')
           ..write('ringRawGustKmh: $ringRawGustKmh, ')
+          ..write('ringSlotAt: $ringSlotAt, ')
           ..write('ringVolume: $ringVolume, ')
           ..write('cardShown: $cardShown, ')
           ..write('skipCourtSpeedKmh: $skipCourtSpeedKmh, ')
           ..write('skipRawGustKmh: $skipRawGustKmh, ')
+          ..write('skipSlotAt: $skipSlotAt, ')
           ..write('skipGusty: $skipGusty, ')
           ..write('lastCheckAt: $lastCheckAt, ')
           ..write('lastAttemptAt: $lastAttemptAt, ')
@@ -2827,10 +3069,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
     ringScheduled,
     ringCourtSpeedKmh,
     ringRawGustKmh,
+    ringSlotAt,
     ringVolume,
     cardShown,
     skipCourtSpeedKmh,
     skipRawGustKmh,
+    skipSlotAt,
     skipGusty,
     lastCheckAt,
     lastAttemptAt,
@@ -2845,10 +3089,12 @@ class CheckStateRow extends DataClass implements Insertable<CheckStateRow> {
           other.ringScheduled == this.ringScheduled &&
           other.ringCourtSpeedKmh == this.ringCourtSpeedKmh &&
           other.ringRawGustKmh == this.ringRawGustKmh &&
+          other.ringSlotAt == this.ringSlotAt &&
           other.ringVolume == this.ringVolume &&
           other.cardShown == this.cardShown &&
           other.skipCourtSpeedKmh == this.skipCourtSpeedKmh &&
           other.skipRawGustKmh == this.skipRawGustKmh &&
+          other.skipSlotAt == this.skipSlotAt &&
           other.skipGusty == this.skipGusty &&
           other.lastCheckAt == this.lastCheckAt &&
           other.lastAttemptAt == this.lastAttemptAt &&
@@ -2861,10 +3107,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
   final Value<bool> ringScheduled;
   final Value<double?> ringCourtSpeedKmh;
   final Value<double?> ringRawGustKmh;
+  final Value<DateTime?> ringSlotAt;
   final Value<double?> ringVolume;
   final Value<bool> cardShown;
   final Value<double?> skipCourtSpeedKmh;
   final Value<double?> skipRawGustKmh;
+  final Value<DateTime?> skipSlotAt;
   final Value<bool> skipGusty;
   final Value<DateTime?> lastCheckAt;
   final Value<DateTime?> lastAttemptAt;
@@ -2875,10 +3123,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     this.ringScheduled = const Value.absent(),
     this.ringCourtSpeedKmh = const Value.absent(),
     this.ringRawGustKmh = const Value.absent(),
+    this.ringSlotAt = const Value.absent(),
     this.ringVolume = const Value.absent(),
     this.cardShown = const Value.absent(),
     this.skipCourtSpeedKmh = const Value.absent(),
     this.skipRawGustKmh = const Value.absent(),
+    this.skipSlotAt = const Value.absent(),
     this.skipGusty = const Value.absent(),
     this.lastCheckAt = const Value.absent(),
     this.lastAttemptAt = const Value.absent(),
@@ -2890,10 +3140,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     required bool ringScheduled,
     this.ringCourtSpeedKmh = const Value.absent(),
     this.ringRawGustKmh = const Value.absent(),
+    this.ringSlotAt = const Value.absent(),
     this.ringVolume = const Value.absent(),
     required bool cardShown,
     this.skipCourtSpeedKmh = const Value.absent(),
     this.skipRawGustKmh = const Value.absent(),
+    this.skipSlotAt = const Value.absent(),
     required bool skipGusty,
     this.lastCheckAt = const Value.absent(),
     this.lastAttemptAt = const Value.absent(),
@@ -2909,10 +3161,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     Expression<bool>? ringScheduled,
     Expression<double>? ringCourtSpeedKmh,
     Expression<double>? ringRawGustKmh,
+    Expression<int>? ringSlotAt,
     Expression<double>? ringVolume,
     Expression<bool>? cardShown,
     Expression<double>? skipCourtSpeedKmh,
     Expression<double>? skipRawGustKmh,
+    Expression<int>? skipSlotAt,
     Expression<bool>? skipGusty,
     Expression<int>? lastCheckAt,
     Expression<int>? lastAttemptAt,
@@ -2924,10 +3178,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
       if (ringScheduled != null) 'ring_scheduled': ringScheduled,
       if (ringCourtSpeedKmh != null) 'ring_court_speed_kmh': ringCourtSpeedKmh,
       if (ringRawGustKmh != null) 'ring_raw_gust_kmh': ringRawGustKmh,
+      if (ringSlotAt != null) 'ring_slot_at': ringSlotAt,
       if (ringVolume != null) 'ring_volume': ringVolume,
       if (cardShown != null) 'card_shown': cardShown,
       if (skipCourtSpeedKmh != null) 'skip_court_speed_kmh': skipCourtSpeedKmh,
       if (skipRawGustKmh != null) 'skip_raw_gust_kmh': skipRawGustKmh,
+      if (skipSlotAt != null) 'skip_slot_at': skipSlotAt,
       if (skipGusty != null) 'skip_gusty': skipGusty,
       if (lastCheckAt != null) 'last_check_at': lastCheckAt,
       if (lastAttemptAt != null) 'last_attempt_at': lastAttemptAt,
@@ -2941,10 +3197,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     Value<bool>? ringScheduled,
     Value<double?>? ringCourtSpeedKmh,
     Value<double?>? ringRawGustKmh,
+    Value<DateTime?>? ringSlotAt,
     Value<double?>? ringVolume,
     Value<bool>? cardShown,
     Value<double?>? skipCourtSpeedKmh,
     Value<double?>? skipRawGustKmh,
+    Value<DateTime?>? skipSlotAt,
     Value<bool>? skipGusty,
     Value<DateTime?>? lastCheckAt,
     Value<DateTime?>? lastAttemptAt,
@@ -2956,10 +3214,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
       ringScheduled: ringScheduled ?? this.ringScheduled,
       ringCourtSpeedKmh: ringCourtSpeedKmh ?? this.ringCourtSpeedKmh,
       ringRawGustKmh: ringRawGustKmh ?? this.ringRawGustKmh,
+      ringSlotAt: ringSlotAt ?? this.ringSlotAt,
       ringVolume: ringVolume ?? this.ringVolume,
       cardShown: cardShown ?? this.cardShown,
       skipCourtSpeedKmh: skipCourtSpeedKmh ?? this.skipCourtSpeedKmh,
       skipRawGustKmh: skipRawGustKmh ?? this.skipRawGustKmh,
+      skipSlotAt: skipSlotAt ?? this.skipSlotAt,
       skipGusty: skipGusty ?? this.skipGusty,
       lastCheckAt: lastCheckAt ?? this.lastCheckAt,
       lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
@@ -2987,6 +3247,11 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     if (ringRawGustKmh.present) {
       map['ring_raw_gust_kmh'] = Variable<double>(ringRawGustKmh.value);
     }
+    if (ringSlotAt.present) {
+      map['ring_slot_at'] = Variable<int>(
+        $CheckStatesTable.$converterringSlotAt.toSql(ringSlotAt.value),
+      );
+    }
     if (ringVolume.present) {
       map['ring_volume'] = Variable<double>(ringVolume.value);
     }
@@ -2998,6 +3263,11 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
     }
     if (skipRawGustKmh.present) {
       map['skip_raw_gust_kmh'] = Variable<double>(skipRawGustKmh.value);
+    }
+    if (skipSlotAt.present) {
+      map['skip_slot_at'] = Variable<int>(
+        $CheckStatesTable.$converterskipSlotAt.toSql(skipSlotAt.value),
+      );
     }
     if (skipGusty.present) {
       map['skip_gusty'] = Variable<bool>(skipGusty.value);
@@ -3026,10 +3296,12 @@ class CheckStatesCompanion extends UpdateCompanion<CheckStateRow> {
           ..write('ringScheduled: $ringScheduled, ')
           ..write('ringCourtSpeedKmh: $ringCourtSpeedKmh, ')
           ..write('ringRawGustKmh: $ringRawGustKmh, ')
+          ..write('ringSlotAt: $ringSlotAt, ')
           ..write('ringVolume: $ringVolume, ')
           ..write('cardShown: $cardShown, ')
           ..write('skipCourtSpeedKmh: $skipCourtSpeedKmh, ')
           ..write('skipRawGustKmh: $skipRawGustKmh, ')
+          ..write('skipSlotAt: $skipSlotAt, ')
           ..write('skipGusty: $skipGusty, ')
           ..write('lastCheckAt: $lastCheckAt, ')
           ..write('lastAttemptAt: $lastAttemptAt, ')
@@ -3158,6 +3430,15 @@ class $PendingRingsTable extends PendingRings
     requiredDuringInsert: false,
   );
   @override
+  late final GeneratedColumnWithTypeConverter<DateTime?, int> slotAt =
+      GeneratedColumn<int>(
+        'slot_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+      ).withConverter<DateTime?>($PendingRingsTable.$converterslotAt);
+  @override
   late final GeneratedColumnWithTypeConverter<DateTime?, int> lastCheckAt =
       GeneratedColumn<int>(
         'last_check_at',
@@ -3193,6 +3474,7 @@ class $PendingRingsTable extends PendingRings
     rawGustKmh,
     courtSpeedLimitKmh,
     rawGustLimitKmh,
+    slotAt,
     lastCheckAt,
     rollOnDone,
   ];
@@ -3342,6 +3624,12 @@ class $PendingRingsTable extends PendingRings
         DriftSqlType.double,
         data['${effectivePrefix}raw_gust_limit_kmh'],
       ),
+      slotAt: $PendingRingsTable.$converterslotAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}slot_at'],
+        ),
+      ),
       lastCheckAt: $PendingRingsTable.$converterlastCheckAt.fromSql(
         attachedDatabase.typeMapping.read(
           DriftSqlType.int,
@@ -3364,6 +3652,8 @@ class $PendingRingsTable extends PendingRings
       const EnumNameConverter<RingLockerRole>(RingLockerRole.values);
   static TypeConverter<DateTime, int> $converteroccurrenceAt = dateTimeMicros;
   static TypeConverter<DateTime, int> $converterscheduledFor = dateTimeMicros;
+  static TypeConverter<DateTime?, int?> $converterslotAt =
+      nullableDateTimeMicros;
   static TypeConverter<DateTime?, int?> $converterlastCheckAt =
       nullableDateTimeMicros;
 }
@@ -3380,6 +3670,10 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
   final double? rawGustKmh;
   final int? courtSpeedLimitKmh;
   final double? rawGustLimitKmh;
+
+  /// The slot behind those readings — carried so a disposition row settled
+  /// from a pending ring names the same moment its live twin would.
+  final DateTime? slotAt;
   final DateTime? lastCheckAt;
   final bool rollOnDone;
   const PendingRingRow({
@@ -3394,6 +3688,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
     this.rawGustLimitKmh,
+    this.slotAt,
     this.lastCheckAt,
     required this.rollOnDone,
   });
@@ -3433,6 +3728,11 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
     if (!nullToAbsent || rawGustLimitKmh != null) {
       map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh);
     }
+    if (!nullToAbsent || slotAt != null) {
+      map['slot_at'] = Variable<int>(
+        $PendingRingsTable.$converterslotAt.toSql(slotAt),
+      );
+    }
     if (!nullToAbsent || lastCheckAt != null) {
       map['last_check_at'] = Variable<int>(
         $PendingRingsTable.$converterlastCheckAt.toSql(lastCheckAt),
@@ -3465,6 +3765,9 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
       rawGustLimitKmh: rawGustLimitKmh == null && nullToAbsent
           ? const Value.absent()
           : Value(rawGustLimitKmh),
+      slotAt: slotAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(slotAt),
       lastCheckAt: lastCheckAt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastCheckAt),
@@ -3491,6 +3794,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
       rawGustKmh: serializer.fromJson<double?>(json['rawGustKmh']),
       courtSpeedLimitKmh: serializer.fromJson<int?>(json['courtSpeedLimitKmh']),
       rawGustLimitKmh: serializer.fromJson<double?>(json['rawGustLimitKmh']),
+      slotAt: serializer.fromJson<DateTime?>(json['slotAt']),
       lastCheckAt: serializer.fromJson<DateTime?>(json['lastCheckAt']),
       rollOnDone: serializer.fromJson<bool>(json['rollOnDone']),
     );
@@ -3512,6 +3816,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
       'rawGustKmh': serializer.toJson<double?>(rawGustKmh),
       'courtSpeedLimitKmh': serializer.toJson<int?>(courtSpeedLimitKmh),
       'rawGustLimitKmh': serializer.toJson<double?>(rawGustLimitKmh),
+      'slotAt': serializer.toJson<DateTime?>(slotAt),
       'lastCheckAt': serializer.toJson<DateTime?>(lastCheckAt),
       'rollOnDone': serializer.toJson<bool>(rollOnDone),
     };
@@ -3529,6 +3834,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
     Value<double?> rawGustKmh = const Value.absent(),
     Value<int?> courtSpeedLimitKmh = const Value.absent(),
     Value<double?> rawGustLimitKmh = const Value.absent(),
+    Value<DateTime?> slotAt = const Value.absent(),
     Value<DateTime?> lastCheckAt = const Value.absent(),
     bool? rollOnDone,
   }) => PendingRingRow(
@@ -3549,6 +3855,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
     rawGustLimitKmh: rawGustLimitKmh.present
         ? rawGustLimitKmh.value
         : this.rawGustLimitKmh,
+    slotAt: slotAt.present ? slotAt.value : this.slotAt,
     lastCheckAt: lastCheckAt.present ? lastCheckAt.value : this.lastCheckAt,
     rollOnDone: rollOnDone ?? this.rollOnDone,
   );
@@ -3577,6 +3884,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
       rawGustLimitKmh: data.rawGustLimitKmh.present
           ? data.rawGustLimitKmh.value
           : this.rawGustLimitKmh,
+      slotAt: data.slotAt.present ? data.slotAt.value : this.slotAt,
       lastCheckAt: data.lastCheckAt.present
           ? data.lastCheckAt.value
           : this.lastCheckAt,
@@ -3600,6 +3908,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
           ..write('rawGustKmh: $rawGustKmh, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt, ')
           ..write('lastCheckAt: $lastCheckAt, ')
           ..write('rollOnDone: $rollOnDone')
           ..write(')'))
@@ -3619,6 +3928,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
     rawGustKmh,
     courtSpeedLimitKmh,
     rawGustLimitKmh,
+    slotAt,
     lastCheckAt,
     rollOnDone,
   );
@@ -3637,6 +3947,7 @@ class PendingRingRow extends DataClass implements Insertable<PendingRingRow> {
           other.rawGustKmh == this.rawGustKmh &&
           other.courtSpeedLimitKmh == this.courtSpeedLimitKmh &&
           other.rawGustLimitKmh == this.rawGustLimitKmh &&
+          other.slotAt == this.slotAt &&
           other.lastCheckAt == this.lastCheckAt &&
           other.rollOnDone == this.rollOnDone);
 }
@@ -3653,6 +3964,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
   final Value<double?> rawGustKmh;
   final Value<int?> courtSpeedLimitKmh;
   final Value<double?> rawGustLimitKmh;
+  final Value<DateTime?> slotAt;
   final Value<DateTime?> lastCheckAt;
   final Value<bool> rollOnDone;
   const PendingRingsCompanion({
@@ -3667,6 +3979,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
     this.rawGustKmh = const Value.absent(),
     this.courtSpeedLimitKmh = const Value.absent(),
     this.rawGustLimitKmh = const Value.absent(),
+    this.slotAt = const Value.absent(),
     this.lastCheckAt = const Value.absent(),
     this.rollOnDone = const Value.absent(),
   });
@@ -3682,6 +3995,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
     this.rawGustKmh = const Value.absent(),
     this.courtSpeedLimitKmh = const Value.absent(),
     this.rawGustLimitKmh = const Value.absent(),
+    this.slotAt = const Value.absent(),
     this.lastCheckAt = const Value.absent(),
     required bool rollOnDone,
   }) : pluginId = Value(pluginId),
@@ -3702,6 +4016,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
     Expression<double>? rawGustKmh,
     Expression<int>? courtSpeedLimitKmh,
     Expression<double>? rawGustLimitKmh,
+    Expression<int>? slotAt,
     Expression<int>? lastCheckAt,
     Expression<bool>? rollOnDone,
   }) {
@@ -3718,6 +4033,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
       if (courtSpeedLimitKmh != null)
         'court_speed_limit_kmh': courtSpeedLimitKmh,
       if (rawGustLimitKmh != null) 'raw_gust_limit_kmh': rawGustLimitKmh,
+      if (slotAt != null) 'slot_at': slotAt,
       if (lastCheckAt != null) 'last_check_at': lastCheckAt,
       if (rollOnDone != null) 'roll_on_done': rollOnDone,
     });
@@ -3735,6 +4051,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
     Value<double?>? rawGustKmh,
     Value<int?>? courtSpeedLimitKmh,
     Value<double?>? rawGustLimitKmh,
+    Value<DateTime?>? slotAt,
     Value<DateTime?>? lastCheckAt,
     Value<bool>? rollOnDone,
   }) {
@@ -3750,6 +4067,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
       rawGustKmh: rawGustKmh ?? this.rawGustKmh,
       courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
       rawGustLimitKmh: rawGustLimitKmh ?? this.rawGustLimitKmh,
+      slotAt: slotAt ?? this.slotAt,
       lastCheckAt: lastCheckAt ?? this.lastCheckAt,
       rollOnDone: rollOnDone ?? this.rollOnDone,
     );
@@ -3797,6 +4115,11 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
     if (rawGustLimitKmh.present) {
       map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh.value);
     }
+    if (slotAt.present) {
+      map['slot_at'] = Variable<int>(
+        $PendingRingsTable.$converterslotAt.toSql(slotAt.value),
+      );
+    }
     if (lastCheckAt.present) {
       map['last_check_at'] = Variable<int>(
         $PendingRingsTable.$converterlastCheckAt.toSql(lastCheckAt.value),
@@ -3822,6 +4145,7 @@ class PendingRingsCompanion extends UpdateCompanion<PendingRingRow> {
           ..write('rawGustKmh: $rawGustKmh, ')
           ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
           ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt, ')
           ..write('lastCheckAt: $lastCheckAt, ')
           ..write('rollOnDone: $rollOnDone')
           ..write(')'))
@@ -5186,6 +5510,826 @@ class OutboxEntriesCompanion extends UpdateCompanion<OutboxEntry> {
   }
 }
 
+class $WindModelsTable extends WindModels
+    with TableInfo<$WindModelsTable, WindModel> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WindModelsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _positionMeta = const VerificationMeta(
+    'position',
+  );
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _retiredMeta = const VerificationMeta(
+    'retired',
+  );
+  @override
+  late final GeneratedColumn<bool> retired = GeneratedColumn<bool>(
+    'retired',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("retired" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [name, position, retired];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'wind_models';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<WindModel> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('position')) {
+      context.handle(
+        _positionMeta,
+        position.isAcceptableOrUnknown(data['position']!, _positionMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_positionMeta);
+    }
+    if (data.containsKey('retired')) {
+      context.handle(
+        _retiredMeta,
+        retired.isAcceptableOrUnknown(data['retired']!, _retiredMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {name};
+  @override
+  WindModel map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WindModel(
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      retired: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}retired'],
+      )!,
+    );
+  }
+
+  @override
+  $WindModelsTable createAlias(String alias) {
+    return $WindModelsTable(attachedDatabase, alias);
+  }
+}
+
+class WindModel extends DataClass implements Insertable<WindModel> {
+  final String name;
+  final int position;
+
+  /// **A rejected model is flagged, never deleted (2026-08-30).**
+  ///
+  /// Deleting it made an empty table mean two different things — "nobody has
+  /// seeded this yet" and "every name we had was rejected" — and the seeding
+  /// read cannot tell them apart, so a full sweep re-seeded the very names it
+  /// had just thrown away. Keeping the row makes the two states distinct: a
+  /// seeded table is never empty, so seeding is unambiguous, and a pruned name
+  /// stays pruned.
+  ///
+  /// It also buys the way back. A name absent from this table ENTIRELY is one
+  /// the app has never offered, so an app update that renames or adds a model
+  /// gets it inserted on the next read — which is the only recovery a build
+  /// with all seven names retired could have had anyway.
+  final bool retired;
+  const WindModel({
+    required this.name,
+    required this.position,
+    required this.retired,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['name'] = Variable<String>(name);
+    map['position'] = Variable<int>(position);
+    map['retired'] = Variable<bool>(retired);
+    return map;
+  }
+
+  WindModelsCompanion toCompanion(bool nullToAbsent) {
+    return WindModelsCompanion(
+      name: Value(name),
+      position: Value(position),
+      retired: Value(retired),
+    );
+  }
+
+  factory WindModel.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WindModel(
+      name: serializer.fromJson<String>(json['name']),
+      position: serializer.fromJson<int>(json['position']),
+      retired: serializer.fromJson<bool>(json['retired']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'name': serializer.toJson<String>(name),
+      'position': serializer.toJson<int>(position),
+      'retired': serializer.toJson<bool>(retired),
+    };
+  }
+
+  WindModel copyWith({String? name, int? position, bool? retired}) => WindModel(
+    name: name ?? this.name,
+    position: position ?? this.position,
+    retired: retired ?? this.retired,
+  );
+  WindModel copyWithCompanion(WindModelsCompanion data) {
+    return WindModel(
+      name: data.name.present ? data.name.value : this.name,
+      position: data.position.present ? data.position.value : this.position,
+      retired: data.retired.present ? data.retired.value : this.retired,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WindModel(')
+          ..write('name: $name, ')
+          ..write('position: $position, ')
+          ..write('retired: $retired')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(name, position, retired);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WindModel &&
+          other.name == this.name &&
+          other.position == this.position &&
+          other.retired == this.retired);
+}
+
+class WindModelsCompanion extends UpdateCompanion<WindModel> {
+  final Value<String> name;
+  final Value<int> position;
+  final Value<bool> retired;
+  final Value<int> rowid;
+  const WindModelsCompanion({
+    this.name = const Value.absent(),
+    this.position = const Value.absent(),
+    this.retired = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WindModelsCompanion.insert({
+    required String name,
+    required int position,
+    this.retired = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : name = Value(name),
+       position = Value(position);
+  static Insertable<WindModel> custom({
+    Expression<String>? name,
+    Expression<int>? position,
+    Expression<bool>? retired,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (name != null) 'name': name,
+      if (position != null) 'position': position,
+      if (retired != null) 'retired': retired,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WindModelsCompanion copyWith({
+    Value<String>? name,
+    Value<int>? position,
+    Value<bool>? retired,
+    Value<int>? rowid,
+  }) {
+    return WindModelsCompanion(
+      name: name ?? this.name,
+      position: position ?? this.position,
+      retired: retired ?? this.retired,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (retired.present) {
+      map['retired'] = Variable<bool>(retired.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WindModelsCompanion(')
+          ..write('name: $name, ')
+          ..write('position: $position, ')
+          ..write('retired: $retired, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AlarmForecastEntriesTable extends AlarmForecastEntries
+    with TableInfo<$AlarmForecastEntriesTable, AlarmForecastEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AlarmForecastEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _alarmIdMeta = const VerificationMeta(
+    'alarmId',
+  );
+  @override
+  late final GeneratedColumn<int> alarmId = GeneratedColumn<int>(
+    'alarm_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  late final GeneratedColumnWithTypeConverter<WindVerdict, String> verdict =
+      GeneratedColumn<String>(
+        'verdict',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      ).withConverter<WindVerdict>(
+        $AlarmForecastEntriesTable.$converterverdict,
+      );
+  @override
+  late final GeneratedColumnWithTypeConverter<DateTime, int> checkedAt =
+      GeneratedColumn<int>(
+        'checked_at',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: true,
+      ).withConverter<DateTime>($AlarmForecastEntriesTable.$convertercheckedAt);
+  static const VerificationMeta _courtSpeedKmhMeta = const VerificationMeta(
+    'courtSpeedKmh',
+  );
+  @override
+  late final GeneratedColumn<double> courtSpeedKmh = GeneratedColumn<double>(
+    'court_speed_kmh',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _rawGustKmhMeta = const VerificationMeta(
+    'rawGustKmh',
+  );
+  @override
+  late final GeneratedColumn<double> rawGustKmh = GeneratedColumn<double>(
+    'raw_gust_kmh',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _courtSpeedLimitKmhMeta =
+      const VerificationMeta('courtSpeedLimitKmh');
+  @override
+  late final GeneratedColumn<int> courtSpeedLimitKmh = GeneratedColumn<int>(
+    'court_speed_limit_kmh',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _rawGustLimitKmhMeta = const VerificationMeta(
+    'rawGustLimitKmh',
+  );
+  @override
+  late final GeneratedColumn<double> rawGustLimitKmh = GeneratedColumn<double>(
+    'raw_gust_limit_kmh',
+    aliasedName,
+    false,
+    type: DriftSqlType.double,
+    requiredDuringInsert: true,
+  );
+  @override
+  late final GeneratedColumnWithTypeConverter<DateTime, int> slotAt =
+      GeneratedColumn<int>(
+        'slot_at',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: true,
+      ).withConverter<DateTime>($AlarmForecastEntriesTable.$converterslotAt);
+  @override
+  List<GeneratedColumn> get $columns => [
+    alarmId,
+    verdict,
+    checkedAt,
+    courtSpeedKmh,
+    rawGustKmh,
+    courtSpeedLimitKmh,
+    rawGustLimitKmh,
+    slotAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'alarm_forecast_entries';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<AlarmForecastEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('alarm_id')) {
+      context.handle(
+        _alarmIdMeta,
+        alarmId.isAcceptableOrUnknown(data['alarm_id']!, _alarmIdMeta),
+      );
+    }
+    if (data.containsKey('court_speed_kmh')) {
+      context.handle(
+        _courtSpeedKmhMeta,
+        courtSpeedKmh.isAcceptableOrUnknown(
+          data['court_speed_kmh']!,
+          _courtSpeedKmhMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_courtSpeedKmhMeta);
+    }
+    if (data.containsKey('raw_gust_kmh')) {
+      context.handle(
+        _rawGustKmhMeta,
+        rawGustKmh.isAcceptableOrUnknown(
+          data['raw_gust_kmh']!,
+          _rawGustKmhMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_rawGustKmhMeta);
+    }
+    if (data.containsKey('court_speed_limit_kmh')) {
+      context.handle(
+        _courtSpeedLimitKmhMeta,
+        courtSpeedLimitKmh.isAcceptableOrUnknown(
+          data['court_speed_limit_kmh']!,
+          _courtSpeedLimitKmhMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_courtSpeedLimitKmhMeta);
+    }
+    if (data.containsKey('raw_gust_limit_kmh')) {
+      context.handle(
+        _rawGustLimitKmhMeta,
+        rawGustLimitKmh.isAcceptableOrUnknown(
+          data['raw_gust_limit_kmh']!,
+          _rawGustLimitKmhMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_rawGustLimitKmhMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {alarmId};
+  @override
+  AlarmForecastEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AlarmForecastEntry(
+      alarmId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}alarm_id'],
+      )!,
+      verdict: $AlarmForecastEntriesTable.$converterverdict.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}verdict'],
+        )!,
+      ),
+      checkedAt: $AlarmForecastEntriesTable.$convertercheckedAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}checked_at'],
+        )!,
+      ),
+      courtSpeedKmh: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}court_speed_kmh'],
+      )!,
+      rawGustKmh: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}raw_gust_kmh'],
+      )!,
+      courtSpeedLimitKmh: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}court_speed_limit_kmh'],
+      )!,
+      rawGustLimitKmh: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}raw_gust_limit_kmh'],
+      )!,
+      slotAt: $AlarmForecastEntriesTable.$converterslotAt.fromSql(
+        attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}slot_at'],
+        )!,
+      ),
+    );
+  }
+
+  @override
+  $AlarmForecastEntriesTable createAlias(String alias) {
+    return $AlarmForecastEntriesTable(attachedDatabase, alias);
+  }
+
+  static JsonTypeConverter2<WindVerdict, String, String> $converterverdict =
+      const EnumNameConverter<WindVerdict>(WindVerdict.values);
+  static TypeConverter<DateTime, int> $convertercheckedAt = dateTimeMicros;
+  static TypeConverter<DateTime, int> $converterslotAt = dateTimeMicros;
+}
+
+class AlarmForecastEntry extends DataClass
+    implements Insertable<AlarmForecastEntry> {
+  final int alarmId;
+
+  /// The verdict, not a "will it ring" flag: the row's ⓘ names the reason a
+  /// skip failed, and a bool cannot tell windy from gusty. See [AlarmForecast].
+  final WindVerdict verdict;
+
+  /// When the CHECK ran — the app-clock moment the row is "as per", which is
+  /// not the slot the reading describes. The row says "as per 16:00 check".
+  final DateTime checkedAt;
+
+  /// The reading behind the verdict, the limits it was judged against, and the
+  /// slot it describes. Stored rather than derived at render time for the
+  /// reason `HistoryEntries` keeps its own copies — see [AlarmForecast].
+  ///
+  /// Non-nullable: a row is only ever written from a real decision.
+  final double courtSpeedKmh;
+  final double rawGustKmh;
+  final int courtSpeedLimitKmh;
+  final double rawGustLimitKmh;
+  final DateTime slotAt;
+  const AlarmForecastEntry({
+    required this.alarmId,
+    required this.verdict,
+    required this.checkedAt,
+    required this.courtSpeedKmh,
+    required this.rawGustKmh,
+    required this.courtSpeedLimitKmh,
+    required this.rawGustLimitKmh,
+    required this.slotAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['alarm_id'] = Variable<int>(alarmId);
+    {
+      map['verdict'] = Variable<String>(
+        $AlarmForecastEntriesTable.$converterverdict.toSql(verdict),
+      );
+    }
+    {
+      map['checked_at'] = Variable<int>(
+        $AlarmForecastEntriesTable.$convertercheckedAt.toSql(checkedAt),
+      );
+    }
+    map['court_speed_kmh'] = Variable<double>(courtSpeedKmh);
+    map['raw_gust_kmh'] = Variable<double>(rawGustKmh);
+    map['court_speed_limit_kmh'] = Variable<int>(courtSpeedLimitKmh);
+    map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh);
+    {
+      map['slot_at'] = Variable<int>(
+        $AlarmForecastEntriesTable.$converterslotAt.toSql(slotAt),
+      );
+    }
+    return map;
+  }
+
+  AlarmForecastEntriesCompanion toCompanion(bool nullToAbsent) {
+    return AlarmForecastEntriesCompanion(
+      alarmId: Value(alarmId),
+      verdict: Value(verdict),
+      checkedAt: Value(checkedAt),
+      courtSpeedKmh: Value(courtSpeedKmh),
+      rawGustKmh: Value(rawGustKmh),
+      courtSpeedLimitKmh: Value(courtSpeedLimitKmh),
+      rawGustLimitKmh: Value(rawGustLimitKmh),
+      slotAt: Value(slotAt),
+    );
+  }
+
+  factory AlarmForecastEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AlarmForecastEntry(
+      alarmId: serializer.fromJson<int>(json['alarmId']),
+      verdict: $AlarmForecastEntriesTable.$converterverdict.fromJson(
+        serializer.fromJson<String>(json['verdict']),
+      ),
+      checkedAt: serializer.fromJson<DateTime>(json['checkedAt']),
+      courtSpeedKmh: serializer.fromJson<double>(json['courtSpeedKmh']),
+      rawGustKmh: serializer.fromJson<double>(json['rawGustKmh']),
+      courtSpeedLimitKmh: serializer.fromJson<int>(json['courtSpeedLimitKmh']),
+      rawGustLimitKmh: serializer.fromJson<double>(json['rawGustLimitKmh']),
+      slotAt: serializer.fromJson<DateTime>(json['slotAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'alarmId': serializer.toJson<int>(alarmId),
+      'verdict': serializer.toJson<String>(
+        $AlarmForecastEntriesTable.$converterverdict.toJson(verdict),
+      ),
+      'checkedAt': serializer.toJson<DateTime>(checkedAt),
+      'courtSpeedKmh': serializer.toJson<double>(courtSpeedKmh),
+      'rawGustKmh': serializer.toJson<double>(rawGustKmh),
+      'courtSpeedLimitKmh': serializer.toJson<int>(courtSpeedLimitKmh),
+      'rawGustLimitKmh': serializer.toJson<double>(rawGustLimitKmh),
+      'slotAt': serializer.toJson<DateTime>(slotAt),
+    };
+  }
+
+  AlarmForecastEntry copyWith({
+    int? alarmId,
+    WindVerdict? verdict,
+    DateTime? checkedAt,
+    double? courtSpeedKmh,
+    double? rawGustKmh,
+    int? courtSpeedLimitKmh,
+    double? rawGustLimitKmh,
+    DateTime? slotAt,
+  }) => AlarmForecastEntry(
+    alarmId: alarmId ?? this.alarmId,
+    verdict: verdict ?? this.verdict,
+    checkedAt: checkedAt ?? this.checkedAt,
+    courtSpeedKmh: courtSpeedKmh ?? this.courtSpeedKmh,
+    rawGustKmh: rawGustKmh ?? this.rawGustKmh,
+    courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
+    rawGustLimitKmh: rawGustLimitKmh ?? this.rawGustLimitKmh,
+    slotAt: slotAt ?? this.slotAt,
+  );
+  AlarmForecastEntry copyWithCompanion(AlarmForecastEntriesCompanion data) {
+    return AlarmForecastEntry(
+      alarmId: data.alarmId.present ? data.alarmId.value : this.alarmId,
+      verdict: data.verdict.present ? data.verdict.value : this.verdict,
+      checkedAt: data.checkedAt.present ? data.checkedAt.value : this.checkedAt,
+      courtSpeedKmh: data.courtSpeedKmh.present
+          ? data.courtSpeedKmh.value
+          : this.courtSpeedKmh,
+      rawGustKmh: data.rawGustKmh.present
+          ? data.rawGustKmh.value
+          : this.rawGustKmh,
+      courtSpeedLimitKmh: data.courtSpeedLimitKmh.present
+          ? data.courtSpeedLimitKmh.value
+          : this.courtSpeedLimitKmh,
+      rawGustLimitKmh: data.rawGustLimitKmh.present
+          ? data.rawGustLimitKmh.value
+          : this.rawGustLimitKmh,
+      slotAt: data.slotAt.present ? data.slotAt.value : this.slotAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AlarmForecastEntry(')
+          ..write('alarmId: $alarmId, ')
+          ..write('verdict: $verdict, ')
+          ..write('checkedAt: $checkedAt, ')
+          ..write('courtSpeedKmh: $courtSpeedKmh, ')
+          ..write('rawGustKmh: $rawGustKmh, ')
+          ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
+          ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    alarmId,
+    verdict,
+    checkedAt,
+    courtSpeedKmh,
+    rawGustKmh,
+    courtSpeedLimitKmh,
+    rawGustLimitKmh,
+    slotAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AlarmForecastEntry &&
+          other.alarmId == this.alarmId &&
+          other.verdict == this.verdict &&
+          other.checkedAt == this.checkedAt &&
+          other.courtSpeedKmh == this.courtSpeedKmh &&
+          other.rawGustKmh == this.rawGustKmh &&
+          other.courtSpeedLimitKmh == this.courtSpeedLimitKmh &&
+          other.rawGustLimitKmh == this.rawGustLimitKmh &&
+          other.slotAt == this.slotAt);
+}
+
+class AlarmForecastEntriesCompanion
+    extends UpdateCompanion<AlarmForecastEntry> {
+  final Value<int> alarmId;
+  final Value<WindVerdict> verdict;
+  final Value<DateTime> checkedAt;
+  final Value<double> courtSpeedKmh;
+  final Value<double> rawGustKmh;
+  final Value<int> courtSpeedLimitKmh;
+  final Value<double> rawGustLimitKmh;
+  final Value<DateTime> slotAt;
+  const AlarmForecastEntriesCompanion({
+    this.alarmId = const Value.absent(),
+    this.verdict = const Value.absent(),
+    this.checkedAt = const Value.absent(),
+    this.courtSpeedKmh = const Value.absent(),
+    this.rawGustKmh = const Value.absent(),
+    this.courtSpeedLimitKmh = const Value.absent(),
+    this.rawGustLimitKmh = const Value.absent(),
+    this.slotAt = const Value.absent(),
+  });
+  AlarmForecastEntriesCompanion.insert({
+    this.alarmId = const Value.absent(),
+    required WindVerdict verdict,
+    required DateTime checkedAt,
+    required double courtSpeedKmh,
+    required double rawGustKmh,
+    required int courtSpeedLimitKmh,
+    required double rawGustLimitKmh,
+    required DateTime slotAt,
+  }) : verdict = Value(verdict),
+       checkedAt = Value(checkedAt),
+       courtSpeedKmh = Value(courtSpeedKmh),
+       rawGustKmh = Value(rawGustKmh),
+       courtSpeedLimitKmh = Value(courtSpeedLimitKmh),
+       rawGustLimitKmh = Value(rawGustLimitKmh),
+       slotAt = Value(slotAt);
+  static Insertable<AlarmForecastEntry> custom({
+    Expression<int>? alarmId,
+    Expression<String>? verdict,
+    Expression<int>? checkedAt,
+    Expression<double>? courtSpeedKmh,
+    Expression<double>? rawGustKmh,
+    Expression<int>? courtSpeedLimitKmh,
+    Expression<double>? rawGustLimitKmh,
+    Expression<int>? slotAt,
+  }) {
+    return RawValuesInsertable({
+      if (alarmId != null) 'alarm_id': alarmId,
+      if (verdict != null) 'verdict': verdict,
+      if (checkedAt != null) 'checked_at': checkedAt,
+      if (courtSpeedKmh != null) 'court_speed_kmh': courtSpeedKmh,
+      if (rawGustKmh != null) 'raw_gust_kmh': rawGustKmh,
+      if (courtSpeedLimitKmh != null)
+        'court_speed_limit_kmh': courtSpeedLimitKmh,
+      if (rawGustLimitKmh != null) 'raw_gust_limit_kmh': rawGustLimitKmh,
+      if (slotAt != null) 'slot_at': slotAt,
+    });
+  }
+
+  AlarmForecastEntriesCompanion copyWith({
+    Value<int>? alarmId,
+    Value<WindVerdict>? verdict,
+    Value<DateTime>? checkedAt,
+    Value<double>? courtSpeedKmh,
+    Value<double>? rawGustKmh,
+    Value<int>? courtSpeedLimitKmh,
+    Value<double>? rawGustLimitKmh,
+    Value<DateTime>? slotAt,
+  }) {
+    return AlarmForecastEntriesCompanion(
+      alarmId: alarmId ?? this.alarmId,
+      verdict: verdict ?? this.verdict,
+      checkedAt: checkedAt ?? this.checkedAt,
+      courtSpeedKmh: courtSpeedKmh ?? this.courtSpeedKmh,
+      rawGustKmh: rawGustKmh ?? this.rawGustKmh,
+      courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
+      rawGustLimitKmh: rawGustLimitKmh ?? this.rawGustLimitKmh,
+      slotAt: slotAt ?? this.slotAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (alarmId.present) {
+      map['alarm_id'] = Variable<int>(alarmId.value);
+    }
+    if (verdict.present) {
+      map['verdict'] = Variable<String>(
+        $AlarmForecastEntriesTable.$converterverdict.toSql(verdict.value),
+      );
+    }
+    if (checkedAt.present) {
+      map['checked_at'] = Variable<int>(
+        $AlarmForecastEntriesTable.$convertercheckedAt.toSql(checkedAt.value),
+      );
+    }
+    if (courtSpeedKmh.present) {
+      map['court_speed_kmh'] = Variable<double>(courtSpeedKmh.value);
+    }
+    if (rawGustKmh.present) {
+      map['raw_gust_kmh'] = Variable<double>(rawGustKmh.value);
+    }
+    if (courtSpeedLimitKmh.present) {
+      map['court_speed_limit_kmh'] = Variable<int>(courtSpeedLimitKmh.value);
+    }
+    if (rawGustLimitKmh.present) {
+      map['raw_gust_limit_kmh'] = Variable<double>(rawGustLimitKmh.value);
+    }
+    if (slotAt.present) {
+      map['slot_at'] = Variable<int>(
+        $AlarmForecastEntriesTable.$converterslotAt.toSql(slotAt.value),
+      );
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AlarmForecastEntriesCompanion(')
+          ..write('alarmId: $alarmId, ')
+          ..write('verdict: $verdict, ')
+          ..write('checkedAt: $checkedAt, ')
+          ..write('courtSpeedKmh: $courtSpeedKmh, ')
+          ..write('rawGustKmh: $rawGustKmh, ')
+          ..write('courtSpeedLimitKmh: $courtSpeedLimitKmh, ')
+          ..write('rawGustLimitKmh: $rawGustLimitKmh, ')
+          ..write('slotAt: $slotAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -5202,6 +6346,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     this,
   );
   late final $OutboxEntriesTable outboxEntries = $OutboxEntriesTable(this);
+  late final $WindModelsTable windModels = $WindModelsTable(this);
+  late final $AlarmForecastEntriesTable alarmForecastEntries =
+      $AlarmForecastEntriesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -5216,6 +6363,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     hostEventClaims,
     alarmKitHandles,
     outboxEntries,
+    windModels,
+    alarmForecastEntries,
   ];
 }
 
@@ -5460,6 +6609,8 @@ typedef $$NivaatAlarmsTableCreateCompanionBuilder =
       required String courtId,
       required int courtSpeedLimitKmh,
       required int retryMinutesAfter,
+      required int timeUntilPlayMinutes,
+      required int minPlayMinutes,
       required Set<int> weekdays,
       required bool enabled,
       required int position,
@@ -5472,6 +6623,8 @@ typedef $$NivaatAlarmsTableUpdateCompanionBuilder =
       Value<String> courtId,
       Value<int> courtSpeedLimitKmh,
       Value<int> retryMinutesAfter,
+      Value<int> timeUntilPlayMinutes,
+      Value<int> minPlayMinutes,
       Value<Set<int>> weekdays,
       Value<bool> enabled,
       Value<int> position,
@@ -5513,6 +6666,16 @@ class $$NivaatAlarmsTableFilterComposer
 
   ColumnFilters<int> get retryMinutesAfter => $composableBuilder(
     column: $table.retryMinutesAfter,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get timeUntilPlayMinutes => $composableBuilder(
+    column: $table.timeUntilPlayMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get minPlayMinutes => $composableBuilder(
+    column: $table.minPlayMinutes,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5572,6 +6735,16 @@ class $$NivaatAlarmsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get timeUntilPlayMinutes => $composableBuilder(
+    column: $table.timeUntilPlayMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get minPlayMinutes => $composableBuilder(
+    column: $table.minPlayMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get weekdays => $composableBuilder(
     column: $table.weekdays,
     builder: (column) => ColumnOrderings(column),
@@ -5616,6 +6789,16 @@ class $$NivaatAlarmsTableAnnotationComposer
 
   GeneratedColumn<int> get retryMinutesAfter => $composableBuilder(
     column: $table.retryMinutesAfter,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get timeUntilPlayMinutes => $composableBuilder(
+    column: $table.timeUntilPlayMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get minPlayMinutes => $composableBuilder(
+    column: $table.minPlayMinutes,
     builder: (column) => column,
   );
 
@@ -5666,6 +6849,8 @@ class $$NivaatAlarmsTableTableManager
                 Value<String> courtId = const Value.absent(),
                 Value<int> courtSpeedLimitKmh = const Value.absent(),
                 Value<int> retryMinutesAfter = const Value.absent(),
+                Value<int> timeUntilPlayMinutes = const Value.absent(),
+                Value<int> minPlayMinutes = const Value.absent(),
                 Value<Set<int>> weekdays = const Value.absent(),
                 Value<bool> enabled = const Value.absent(),
                 Value<int> position = const Value.absent(),
@@ -5676,6 +6861,8 @@ class $$NivaatAlarmsTableTableManager
                 courtId: courtId,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 retryMinutesAfter: retryMinutesAfter,
+                timeUntilPlayMinutes: timeUntilPlayMinutes,
+                minPlayMinutes: minPlayMinutes,
                 weekdays: weekdays,
                 enabled: enabled,
                 position: position,
@@ -5688,6 +6875,8 @@ class $$NivaatAlarmsTableTableManager
                 required String courtId,
                 required int courtSpeedLimitKmh,
                 required int retryMinutesAfter,
+                required int timeUntilPlayMinutes,
+                required int minPlayMinutes,
                 required Set<int> weekdays,
                 required bool enabled,
                 required int position,
@@ -5698,6 +6887,8 @@ class $$NivaatAlarmsTableTableManager
                 courtId: courtId,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 retryMinutesAfter: retryMinutesAfter,
+                timeUntilPlayMinutes: timeUntilPlayMinutes,
+                minPlayMinutes: minPlayMinutes,
                 weekdays: weekdays,
                 enabled: enabled,
                 position: position,
@@ -5873,6 +7064,7 @@ typedef $$HistoryEntriesTableCreateCompanionBuilder =
       Value<double?> rawGustKmh,
       Value<int?> courtSpeedLimitKmh,
       Value<double?> rawGustLimitKmh,
+      Value<DateTime?> slotAt,
       Value<double?> volume,
       Value<RingDisposition?> ringDisposition,
       Value<String?> hostEventKey,
@@ -5893,6 +7085,7 @@ typedef $$HistoryEntriesTableUpdateCompanionBuilder =
       Value<double?> rawGustKmh,
       Value<int?> courtSpeedLimitKmh,
       Value<double?> rawGustLimitKmh,
+      Value<DateTime?> slotAt,
       Value<double?> volume,
       Value<RingDisposition?> ringDisposition,
       Value<String?> hostEventKey,
@@ -5982,6 +7175,12 @@ class $$HistoryEntriesTableFilterComposer
     column: $table.rawGustLimitKmh,
     builder: (column) => ColumnFilters(column),
   );
+
+  ColumnWithTypeConverterFilters<DateTime?, DateTime, int> get slotAt =>
+      $composableBuilder(
+        column: $table.slotAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
 
   ColumnFilters<double> get volume => $composableBuilder(
     column: $table.volume,
@@ -6079,6 +7278,11 @@ class $$HistoryEntriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get slotAt => $composableBuilder(
+    column: $table.slotAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<double> get volume => $composableBuilder(
     column: $table.volume,
     builder: (column) => ColumnOrderings(column),
@@ -6160,6 +7364,9 @@ class $$HistoryEntriesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumnWithTypeConverter<DateTime?, int> get slotAt =>
+      $composableBuilder(column: $table.slotAt, builder: (column) => column);
+
   GeneratedColumn<double> get volume =>
       $composableBuilder(column: $table.volume, builder: (column) => column);
 
@@ -6222,6 +7429,7 @@ class $$HistoryEntriesTableTableManager
                 Value<double?> rawGustKmh = const Value.absent(),
                 Value<int?> courtSpeedLimitKmh = const Value.absent(),
                 Value<double?> rawGustLimitKmh = const Value.absent(),
+                Value<DateTime?> slotAt = const Value.absent(),
                 Value<double?> volume = const Value.absent(),
                 Value<RingDisposition?> ringDisposition = const Value.absent(),
                 Value<String?> hostEventKey = const Value.absent(),
@@ -6240,6 +7448,7 @@ class $$HistoryEntriesTableTableManager
                 rawGustKmh: rawGustKmh,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
                 volume: volume,
                 ringDisposition: ringDisposition,
                 hostEventKey: hostEventKey,
@@ -6260,6 +7469,7 @@ class $$HistoryEntriesTableTableManager
                 Value<double?> rawGustKmh = const Value.absent(),
                 Value<int?> courtSpeedLimitKmh = const Value.absent(),
                 Value<double?> rawGustLimitKmh = const Value.absent(),
+                Value<DateTime?> slotAt = const Value.absent(),
                 Value<double?> volume = const Value.absent(),
                 Value<RingDisposition?> ringDisposition = const Value.absent(),
                 Value<String?> hostEventKey = const Value.absent(),
@@ -6278,6 +7488,7 @@ class $$HistoryEntriesTableTableManager
                 rawGustKmh: rawGustKmh,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
                 volume: volume,
                 ringDisposition: ringDisposition,
                 hostEventKey: hostEventKey,
@@ -6314,10 +7525,12 @@ typedef $$CheckStatesTableCreateCompanionBuilder =
       required bool ringScheduled,
       Value<double?> ringCourtSpeedKmh,
       Value<double?> ringRawGustKmh,
+      Value<DateTime?> ringSlotAt,
       Value<double?> ringVolume,
       required bool cardShown,
       Value<double?> skipCourtSpeedKmh,
       Value<double?> skipRawGustKmh,
+      Value<DateTime?> skipSlotAt,
       required bool skipGusty,
       Value<DateTime?> lastCheckAt,
       Value<DateTime?> lastAttemptAt,
@@ -6330,10 +7543,12 @@ typedef $$CheckStatesTableUpdateCompanionBuilder =
       Value<bool> ringScheduled,
       Value<double?> ringCourtSpeedKmh,
       Value<double?> ringRawGustKmh,
+      Value<DateTime?> ringSlotAt,
       Value<double?> ringVolume,
       Value<bool> cardShown,
       Value<double?> skipCourtSpeedKmh,
       Value<double?> skipRawGustKmh,
+      Value<DateTime?> skipSlotAt,
       Value<bool> skipGusty,
       Value<DateTime?> lastCheckAt,
       Value<DateTime?> lastAttemptAt,
@@ -6375,6 +7590,12 @@ class $$CheckStatesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnWithTypeConverterFilters<DateTime?, DateTime, int> get ringSlotAt =>
+      $composableBuilder(
+        column: $table.ringSlotAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
+
   ColumnFilters<double> get ringVolume => $composableBuilder(
     column: $table.ringVolume,
     builder: (column) => ColumnFilters(column),
@@ -6394,6 +7615,12 @@ class $$CheckStatesTableFilterComposer
     column: $table.skipRawGustKmh,
     builder: (column) => ColumnFilters(column),
   );
+
+  ColumnWithTypeConverterFilters<DateTime?, DateTime, int> get skipSlotAt =>
+      $composableBuilder(
+        column: $table.skipSlotAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
 
   ColumnFilters<bool> get skipGusty => $composableBuilder(
     column: $table.skipGusty,
@@ -6452,6 +7679,11 @@ class $$CheckStatesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get ringSlotAt => $composableBuilder(
+    column: $table.ringSlotAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<double> get ringVolume => $composableBuilder(
     column: $table.ringVolume,
     builder: (column) => ColumnOrderings(column),
@@ -6469,6 +7701,11 @@ class $$CheckStatesTableOrderingComposer
 
   ColumnOrderings<double> get skipRawGustKmh => $composableBuilder(
     column: $table.skipRawGustKmh,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get skipSlotAt => $composableBuilder(
+    column: $table.skipSlotAt,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -6523,6 +7760,12 @@ class $$CheckStatesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumnWithTypeConverter<DateTime?, int> get ringSlotAt =>
+      $composableBuilder(
+        column: $table.ringSlotAt,
+        builder: (column) => column,
+      );
+
   GeneratedColumn<double> get ringVolume => $composableBuilder(
     column: $table.ringVolume,
     builder: (column) => column,
@@ -6540,6 +7783,12 @@ class $$CheckStatesTableAnnotationComposer
     column: $table.skipRawGustKmh,
     builder: (column) => column,
   );
+
+  GeneratedColumnWithTypeConverter<DateTime?, int> get skipSlotAt =>
+      $composableBuilder(
+        column: $table.skipSlotAt,
+        builder: (column) => column,
+      );
 
   GeneratedColumn<bool> get skipGusty =>
       $composableBuilder(column: $table.skipGusty, builder: (column) => column);
@@ -6596,10 +7845,12 @@ class $$CheckStatesTableTableManager
                 Value<bool> ringScheduled = const Value.absent(),
                 Value<double?> ringCourtSpeedKmh = const Value.absent(),
                 Value<double?> ringRawGustKmh = const Value.absent(),
+                Value<DateTime?> ringSlotAt = const Value.absent(),
                 Value<double?> ringVolume = const Value.absent(),
                 Value<bool> cardShown = const Value.absent(),
                 Value<double?> skipCourtSpeedKmh = const Value.absent(),
                 Value<double?> skipRawGustKmh = const Value.absent(),
+                Value<DateTime?> skipSlotAt = const Value.absent(),
                 Value<bool> skipGusty = const Value.absent(),
                 Value<DateTime?> lastCheckAt = const Value.absent(),
                 Value<DateTime?> lastAttemptAt = const Value.absent(),
@@ -6610,10 +7861,12 @@ class $$CheckStatesTableTableManager
                 ringScheduled: ringScheduled,
                 ringCourtSpeedKmh: ringCourtSpeedKmh,
                 ringRawGustKmh: ringRawGustKmh,
+                ringSlotAt: ringSlotAt,
                 ringVolume: ringVolume,
                 cardShown: cardShown,
                 skipCourtSpeedKmh: skipCourtSpeedKmh,
                 skipRawGustKmh: skipRawGustKmh,
+                skipSlotAt: skipSlotAt,
                 skipGusty: skipGusty,
                 lastCheckAt: lastCheckAt,
                 lastAttemptAt: lastAttemptAt,
@@ -6626,10 +7879,12 @@ class $$CheckStatesTableTableManager
                 required bool ringScheduled,
                 Value<double?> ringCourtSpeedKmh = const Value.absent(),
                 Value<double?> ringRawGustKmh = const Value.absent(),
+                Value<DateTime?> ringSlotAt = const Value.absent(),
                 Value<double?> ringVolume = const Value.absent(),
                 required bool cardShown,
                 Value<double?> skipCourtSpeedKmh = const Value.absent(),
                 Value<double?> skipRawGustKmh = const Value.absent(),
+                Value<DateTime?> skipSlotAt = const Value.absent(),
                 required bool skipGusty,
                 Value<DateTime?> lastCheckAt = const Value.absent(),
                 Value<DateTime?> lastAttemptAt = const Value.absent(),
@@ -6640,10 +7895,12 @@ class $$CheckStatesTableTableManager
                 ringScheduled: ringScheduled,
                 ringCourtSpeedKmh: ringCourtSpeedKmh,
                 ringRawGustKmh: ringRawGustKmh,
+                ringSlotAt: ringSlotAt,
                 ringVolume: ringVolume,
                 cardShown: cardShown,
                 skipCourtSpeedKmh: skipCourtSpeedKmh,
                 skipRawGustKmh: skipRawGustKmh,
+                skipSlotAt: skipSlotAt,
                 skipGusty: skipGusty,
                 lastCheckAt: lastCheckAt,
                 lastAttemptAt: lastAttemptAt,
@@ -6687,6 +7944,7 @@ typedef $$PendingRingsTableCreateCompanionBuilder =
       Value<double?> rawGustKmh,
       Value<int?> courtSpeedLimitKmh,
       Value<double?> rawGustLimitKmh,
+      Value<DateTime?> slotAt,
       Value<DateTime?> lastCheckAt,
       required bool rollOnDone,
     });
@@ -6703,6 +7961,7 @@ typedef $$PendingRingsTableUpdateCompanionBuilder =
       Value<double?> rawGustKmh,
       Value<int?> courtSpeedLimitKmh,
       Value<double?> rawGustLimitKmh,
+      Value<DateTime?> slotAt,
       Value<DateTime?> lastCheckAt,
       Value<bool> rollOnDone,
     });
@@ -6773,6 +8032,12 @@ class $$PendingRingsTableFilterComposer
     column: $table.rawGustLimitKmh,
     builder: (column) => ColumnFilters(column),
   );
+
+  ColumnWithTypeConverterFilters<DateTime?, DateTime, int> get slotAt =>
+      $composableBuilder(
+        column: $table.slotAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
 
   ColumnWithTypeConverterFilters<DateTime?, DateTime, int> get lastCheckAt =>
       $composableBuilder(
@@ -6850,6 +8115,11 @@ class $$PendingRingsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get slotAt => $composableBuilder(
+    column: $table.slotAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get lastCheckAt => $composableBuilder(
     column: $table.lastCheckAt,
     builder: (column) => ColumnOrderings(column),
@@ -6917,6 +8187,9 @@ class $$PendingRingsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumnWithTypeConverter<DateTime?, int> get slotAt =>
+      $composableBuilder(column: $table.slotAt, builder: (column) => column);
+
   GeneratedColumnWithTypeConverter<DateTime?, int> get lastCheckAt =>
       $composableBuilder(
         column: $table.lastCheckAt,
@@ -6971,6 +8244,7 @@ class $$PendingRingsTableTableManager
                 Value<double?> rawGustKmh = const Value.absent(),
                 Value<int?> courtSpeedLimitKmh = const Value.absent(),
                 Value<double?> rawGustLimitKmh = const Value.absent(),
+                Value<DateTime?> slotAt = const Value.absent(),
                 Value<DateTime?> lastCheckAt = const Value.absent(),
                 Value<bool> rollOnDone = const Value.absent(),
               }) => PendingRingsCompanion(
@@ -6985,6 +8259,7 @@ class $$PendingRingsTableTableManager
                 rawGustKmh: rawGustKmh,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
                 lastCheckAt: lastCheckAt,
                 rollOnDone: rollOnDone,
               ),
@@ -7001,6 +8276,7 @@ class $$PendingRingsTableTableManager
                 Value<double?> rawGustKmh = const Value.absent(),
                 Value<int?> courtSpeedLimitKmh = const Value.absent(),
                 Value<double?> rawGustLimitKmh = const Value.absent(),
+                Value<DateTime?> slotAt = const Value.absent(),
                 Value<DateTime?> lastCheckAt = const Value.absent(),
                 required bool rollOnDone,
               }) => PendingRingsCompanion.insert(
@@ -7015,6 +8291,7 @@ class $$PendingRingsTableTableManager
                 rawGustKmh: rawGustKmh,
                 courtSpeedLimitKmh: courtSpeedLimitKmh,
                 rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
                 lastCheckAt: lastCheckAt,
                 rollOnDone: rollOnDone,
               ),
@@ -7766,6 +9043,443 @@ typedef $$OutboxEntriesTableProcessedTableManager =
       OutboxEntry,
       PrefetchHooks Function()
     >;
+typedef $$WindModelsTableCreateCompanionBuilder =
+    WindModelsCompanion Function({
+      required String name,
+      required int position,
+      Value<bool> retired,
+      Value<int> rowid,
+    });
+typedef $$WindModelsTableUpdateCompanionBuilder =
+    WindModelsCompanion Function({
+      Value<String> name,
+      Value<int> position,
+      Value<bool> retired,
+      Value<int> rowid,
+    });
+
+class $$WindModelsTableFilterComposer
+    extends Composer<_$AppDatabase, $WindModelsTable> {
+  $$WindModelsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get retired => $composableBuilder(
+    column: $table.retired,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$WindModelsTableOrderingComposer
+    extends Composer<_$AppDatabase, $WindModelsTable> {
+  $$WindModelsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get retired => $composableBuilder(
+    column: $table.retired,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$WindModelsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WindModelsTable> {
+  $$WindModelsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<int> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<bool> get retired =>
+      $composableBuilder(column: $table.retired, builder: (column) => column);
+}
+
+class $$WindModelsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $WindModelsTable,
+          WindModel,
+          $$WindModelsTableFilterComposer,
+          $$WindModelsTableOrderingComposer,
+          $$WindModelsTableAnnotationComposer,
+          $$WindModelsTableCreateCompanionBuilder,
+          $$WindModelsTableUpdateCompanionBuilder,
+          (
+            WindModel,
+            BaseReferences<_$AppDatabase, $WindModelsTable, WindModel>,
+          ),
+          WindModel,
+          PrefetchHooks Function()
+        > {
+  $$WindModelsTableTableManager(_$AppDatabase db, $WindModelsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WindModelsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WindModelsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WindModelsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> name = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<bool> retired = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WindModelsCompanion(
+                name: name,
+                position: position,
+                retired: retired,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String name,
+                required int position,
+                Value<bool> retired = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WindModelsCompanion.insert(
+                name: name,
+                position: position,
+                retired: retired,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$WindModelsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $WindModelsTable,
+      WindModel,
+      $$WindModelsTableFilterComposer,
+      $$WindModelsTableOrderingComposer,
+      $$WindModelsTableAnnotationComposer,
+      $$WindModelsTableCreateCompanionBuilder,
+      $$WindModelsTableUpdateCompanionBuilder,
+      (WindModel, BaseReferences<_$AppDatabase, $WindModelsTable, WindModel>),
+      WindModel,
+      PrefetchHooks Function()
+    >;
+typedef $$AlarmForecastEntriesTableCreateCompanionBuilder =
+    AlarmForecastEntriesCompanion Function({
+      Value<int> alarmId,
+      required WindVerdict verdict,
+      required DateTime checkedAt,
+      required double courtSpeedKmh,
+      required double rawGustKmh,
+      required int courtSpeedLimitKmh,
+      required double rawGustLimitKmh,
+      required DateTime slotAt,
+    });
+typedef $$AlarmForecastEntriesTableUpdateCompanionBuilder =
+    AlarmForecastEntriesCompanion Function({
+      Value<int> alarmId,
+      Value<WindVerdict> verdict,
+      Value<DateTime> checkedAt,
+      Value<double> courtSpeedKmh,
+      Value<double> rawGustKmh,
+      Value<int> courtSpeedLimitKmh,
+      Value<double> rawGustLimitKmh,
+      Value<DateTime> slotAt,
+    });
+
+class $$AlarmForecastEntriesTableFilterComposer
+    extends Composer<_$AppDatabase, $AlarmForecastEntriesTable> {
+  $$AlarmForecastEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get alarmId => $composableBuilder(
+    column: $table.alarmId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<WindVerdict, WindVerdict, String>
+  get verdict => $composableBuilder(
+    column: $table.verdict,
+    builder: (column) => ColumnWithTypeConverterFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<DateTime, DateTime, int> get checkedAt =>
+      $composableBuilder(
+        column: $table.checkedAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
+
+  ColumnFilters<double> get courtSpeedKmh => $composableBuilder(
+    column: $table.courtSpeedKmh,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get rawGustKmh => $composableBuilder(
+    column: $table.rawGustKmh,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get courtSpeedLimitKmh => $composableBuilder(
+    column: $table.courtSpeedLimitKmh,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get rawGustLimitKmh => $composableBuilder(
+    column: $table.rawGustLimitKmh,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnWithTypeConverterFilters<DateTime, DateTime, int> get slotAt =>
+      $composableBuilder(
+        column: $table.slotAt,
+        builder: (column) => ColumnWithTypeConverterFilters(column),
+      );
+}
+
+class $$AlarmForecastEntriesTableOrderingComposer
+    extends Composer<_$AppDatabase, $AlarmForecastEntriesTable> {
+  $$AlarmForecastEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get alarmId => $composableBuilder(
+    column: $table.alarmId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get verdict => $composableBuilder(
+    column: $table.verdict,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get checkedAt => $composableBuilder(
+    column: $table.checkedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get courtSpeedKmh => $composableBuilder(
+    column: $table.courtSpeedKmh,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get rawGustKmh => $composableBuilder(
+    column: $table.rawGustKmh,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get courtSpeedLimitKmh => $composableBuilder(
+    column: $table.courtSpeedLimitKmh,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get rawGustLimitKmh => $composableBuilder(
+    column: $table.rawGustLimitKmh,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get slotAt => $composableBuilder(
+    column: $table.slotAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$AlarmForecastEntriesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AlarmForecastEntriesTable> {
+  $$AlarmForecastEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get alarmId =>
+      $composableBuilder(column: $table.alarmId, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<WindVerdict, String> get verdict =>
+      $composableBuilder(column: $table.verdict, builder: (column) => column);
+
+  GeneratedColumnWithTypeConverter<DateTime, int> get checkedAt =>
+      $composableBuilder(column: $table.checkedAt, builder: (column) => column);
+
+  GeneratedColumn<double> get courtSpeedKmh => $composableBuilder(
+    column: $table.courtSpeedKmh,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get rawGustKmh => $composableBuilder(
+    column: $table.rawGustKmh,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get courtSpeedLimitKmh => $composableBuilder(
+    column: $table.courtSpeedLimitKmh,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get rawGustLimitKmh => $composableBuilder(
+    column: $table.rawGustLimitKmh,
+    builder: (column) => column,
+  );
+
+  GeneratedColumnWithTypeConverter<DateTime, int> get slotAt =>
+      $composableBuilder(column: $table.slotAt, builder: (column) => column);
+}
+
+class $$AlarmForecastEntriesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AlarmForecastEntriesTable,
+          AlarmForecastEntry,
+          $$AlarmForecastEntriesTableFilterComposer,
+          $$AlarmForecastEntriesTableOrderingComposer,
+          $$AlarmForecastEntriesTableAnnotationComposer,
+          $$AlarmForecastEntriesTableCreateCompanionBuilder,
+          $$AlarmForecastEntriesTableUpdateCompanionBuilder,
+          (
+            AlarmForecastEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $AlarmForecastEntriesTable,
+              AlarmForecastEntry
+            >,
+          ),
+          AlarmForecastEntry,
+          PrefetchHooks Function()
+        > {
+  $$AlarmForecastEntriesTableTableManager(
+    _$AppDatabase db,
+    $AlarmForecastEntriesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AlarmForecastEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AlarmForecastEntriesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$AlarmForecastEntriesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> alarmId = const Value.absent(),
+                Value<WindVerdict> verdict = const Value.absent(),
+                Value<DateTime> checkedAt = const Value.absent(),
+                Value<double> courtSpeedKmh = const Value.absent(),
+                Value<double> rawGustKmh = const Value.absent(),
+                Value<int> courtSpeedLimitKmh = const Value.absent(),
+                Value<double> rawGustLimitKmh = const Value.absent(),
+                Value<DateTime> slotAt = const Value.absent(),
+              }) => AlarmForecastEntriesCompanion(
+                alarmId: alarmId,
+                verdict: verdict,
+                checkedAt: checkedAt,
+                courtSpeedKmh: courtSpeedKmh,
+                rawGustKmh: rawGustKmh,
+                courtSpeedLimitKmh: courtSpeedLimitKmh,
+                rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> alarmId = const Value.absent(),
+                required WindVerdict verdict,
+                required DateTime checkedAt,
+                required double courtSpeedKmh,
+                required double rawGustKmh,
+                required int courtSpeedLimitKmh,
+                required double rawGustLimitKmh,
+                required DateTime slotAt,
+              }) => AlarmForecastEntriesCompanion.insert(
+                alarmId: alarmId,
+                verdict: verdict,
+                checkedAt: checkedAt,
+                courtSpeedKmh: courtSpeedKmh,
+                rawGustKmh: rawGustKmh,
+                courtSpeedLimitKmh: courtSpeedLimitKmh,
+                rawGustLimitKmh: rawGustLimitKmh,
+                slotAt: slotAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$AlarmForecastEntriesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AlarmForecastEntriesTable,
+      AlarmForecastEntry,
+      $$AlarmForecastEntriesTableFilterComposer,
+      $$AlarmForecastEntriesTableOrderingComposer,
+      $$AlarmForecastEntriesTableAnnotationComposer,
+      $$AlarmForecastEntriesTableCreateCompanionBuilder,
+      $$AlarmForecastEntriesTableUpdateCompanionBuilder,
+      (
+        AlarmForecastEntry,
+        BaseReferences<
+          _$AppDatabase,
+          $AlarmForecastEntriesTable,
+          AlarmForecastEntry
+        >,
+      ),
+      AlarmForecastEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7788,4 +9502,8 @@ class $AppDatabaseManager {
       $$AlarmKitHandlesTableTableManager(_db, _db.alarmKitHandles);
   $$OutboxEntriesTableTableManager get outboxEntries =>
       $$OutboxEntriesTableTableManager(_db, _db.outboxEntries);
+  $$WindModelsTableTableManager get windModels =>
+      $$WindModelsTableTableManager(_db, _db.windModels);
+  $$AlarmForecastEntriesTableTableManager get alarmForecastEntries =>
+      $$AlarmForecastEntriesTableTableManager(_db, _db.alarmForecastEntries);
 }

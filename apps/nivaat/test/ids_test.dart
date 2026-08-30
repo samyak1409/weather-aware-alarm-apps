@@ -18,9 +18,37 @@ void main() {
       for (final r in NivaatIds.allRings(a)) {
         claim(r, 'ring($a)');
       }
-      claim(NivaatIds.check(a), 'check($a)');
+      for (var r = 0; r < CheckCascade.ladderMinutesBefore.length; r++) {
+        claim(NivaatIds.check(a, r), 'check($a, rung $r)');
+      }
       claim(NivaatIds.card(a), 'card($a)');
     }
+  });
+
+  test('every ladder rung gets its own locker, and allChecks names them all',
+      () {
+    // The chain fix (2026-08-25): rungs are booked independently, so two rungs
+    // of the same alarm sharing a number would silently overwrite one booking
+    // with the next — exactly the failure the split exists to remove.
+    final ids = NivaatIds.allChecks(42);
+    expect(ids, hasLength(CheckCascade.ladderMinutesBefore.length));
+    expect(ids.toSet(), hasLength(ids.length), reason: 'no rung shares an id');
+    for (var r = 0; r < CheckCascade.ladderMinutesBefore.length; r++) {
+      expect(ids[r], NivaatIds.check(42, r));
+    }
+    // Post-T retries reuse the LAST rung's locker — T-0 has fired by then, and
+    // only one retry can ever be outstanding.
+    expect(NivaatIds.retryCheck(42),
+        NivaatIds.check(42, CheckCascade.ladderMinutesBefore.length - 1));
+  });
+
+  test('check ids stay inside int32 at the top of the block range', () {
+    // The blocks moved to 100000+ for the per-rung split; the ceiling is what
+    // the alarm package and AlarmManager request codes can hold.
+    final top = NivaatIds.check(
+        NivaatIds.maxAlarmId, CheckCascade.ladderMinutesBefore.length - 1);
+    expect(top, lessThan(2147483647));
+    expect(top, greaterThan(0));
   });
 
   test('ids are legal for the alarm package (never 0 or -1, within int32)', () {
@@ -92,7 +120,9 @@ void main() {
         expect(NivaatIds.alarmIdOfRing(NivaatIds.ring(a)), a);
         expect(NivaatIds.alarmIdOfRing(NivaatIds.lateRing(a)), a);
         expect(NivaatIds.alarmIdOfRing(NivaatIds.nextRing(a)), a);
-        expect(NivaatIds.alarmIdOfRing(NivaatIds.check(a)), isNull);
+        for (var r = 0; r < CheckCascade.ladderMinutesBefore.length; r++) {
+          expect(NivaatIds.alarmIdOfRing(NivaatIds.check(a, r)), isNull);
+        }
         expect(NivaatIds.alarmIdOfRing(NivaatIds.card(a)), isNull);
       }
       // Alarm ids start at 1, so a bare block number is not a ring — and
@@ -114,7 +144,8 @@ void main() {
           NivaatIds.ringRoleOf(NivaatIds.lateRing(7)), RingLockerRole.lateRing);
       expect(
           NivaatIds.ringRoleOf(NivaatIds.nextRing(7)), RingLockerRole.nextRing);
-      expect(NivaatIds.ringRoleOf(NivaatIds.check(7)), isNull);
+      expect(NivaatIds.ringRoleOf(NivaatIds.check(7, 0)), isNull);
+      expect(NivaatIds.ringRoleOf(NivaatIds.check(7, 8)), isNull);
       expect(NivaatIds.ringRoleOf(NivaatIds.card(7)), isNull);
       expect(NivaatIds.ringRoleOf(NivaatIds.ringBlock), isNull);
     });

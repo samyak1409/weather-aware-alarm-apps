@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'db/app_database.dart';
 import 'db/tables.dart';
 import 'models.dart';
+import 'open_meteo.dart';
 
 /// Arunoday's settings: one writer (the UI isolate), so they stay on
 /// SharedPreferences.
@@ -37,10 +38,12 @@ class CheckState {
     this.ringScheduled = false,
     this.ringCourtSpeedKmh,
     this.ringRawGustKmh,
+    this.ringSlotAt,
     this.ringVolume,
     this.cardShown = false,
     this.skipCourtSpeedKmh,
     this.skipRawGustKmh,
+    this.skipSlotAt,
     this.skipGusty = false,
     this.lastCheckAt,
     this.lastAttemptAt,
@@ -71,7 +74,16 @@ class CheckState {
   /// after the fact still carries real numbers.
   final double? ringCourtSpeedKmh;
   final double? ringRawGustKmh;
+
+  /// The slot behind the ring's reading — `skipSlotAt`'s twin, so a `Rang`
+  /// history row can name the moment its numbers came from.
+  final DateTime? ringSlotAt;
   final double? ringVolume;
+
+  /// The 15-minute slot the stored skip numbers describe — the worst one in
+  /// the play window. Carried so a card re-posted mid-window quotes the slot
+  /// its own numbers came from rather than re-deriving one from the clock.
+  final DateTime? skipSlotAt;
 
   /// True once the morning's card has been posted for this occurrence (at T),
   /// so the minute-by-minute retries don't re-post it — and so the paths that
@@ -103,10 +115,12 @@ class CheckState {
     bool? ringScheduled,
     double? ringCourtSpeedKmh,
     double? ringRawGustKmh,
+    DateTime? ringSlotAt,
     double? ringVolume,
     bool? cardShown,
     double? skipCourtSpeedKmh,
     double? skipRawGustKmh,
+    DateTime? skipSlotAt,
     bool? skipGusty,
     DateTime? lastCheckAt,
     DateTime? lastAttemptAt,
@@ -118,10 +132,12 @@ class CheckState {
         ringScheduled: ringScheduled ?? this.ringScheduled,
         ringCourtSpeedKmh: ringCourtSpeedKmh ?? this.ringCourtSpeedKmh,
         ringRawGustKmh: ringRawGustKmh ?? this.ringRawGustKmh,
+        ringSlotAt: ringSlotAt ?? this.ringSlotAt,
         ringVolume: ringVolume ?? this.ringVolume,
         cardShown: cardShown ?? this.cardShown,
         skipCourtSpeedKmh: skipCourtSpeedKmh ?? this.skipCourtSpeedKmh,
         skipRawGustKmh: skipRawGustKmh ?? this.skipRawGustKmh,
+        skipSlotAt: skipSlotAt ?? this.skipSlotAt,
         skipGusty: skipGusty ?? this.skipGusty,
         lastCheckAt: lastCheckAt ?? this.lastCheckAt,
         lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
@@ -151,6 +167,7 @@ class PendingRing {
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
     this.rawGustLimitKmh,
+    this.slotAt,
     this.lastCheckAt,
     this.rollOnDone = false,
   });
@@ -171,6 +188,10 @@ class PendingRing {
   final double? rawGustKmh;
   final int? courtSpeedLimitKmh;
   final double? rawGustLimitKmh;
+
+  /// The slot those readings describe, carried so a disposition row settled
+  /// from this pending names the same moment its live twin would.
+  final DateTime? slotAt;
   final DateTime? lastCheckAt;
 
   /// True once `_rollOn` has already run for this pending — finalize must not
@@ -193,6 +214,7 @@ class PendingRing {
         rawGustKmh: rawGustKmh,
         courtSpeedLimitKmh: courtSpeedLimitKmh,
         rawGustLimitKmh: rawGustLimitKmh,
+        slotAt: slotAt,
         lastCheckAt: lastCheckAt,
         rollOnDone: rollOnDone ?? this.rollOnDone,
       );
@@ -310,6 +332,8 @@ class NivaatStore {
           courtId: r.courtId,
           courtSpeedLimitKmh: r.courtSpeedLimitKmh,
           retryMinutesAfter: r.retryMinutesAfter,
+          timeUntilPlayMinutes: r.timeUntilPlayMinutes,
+          minPlayMinutes: r.minPlayMinutes,
           weekdays: r.weekdays,
           enabled: r.enabled,
         ),
@@ -344,6 +368,9 @@ class NivaatStore {
                   courtId: Value(alarms[i].courtId),
                   courtSpeedLimitKmh: Value(alarms[i].courtSpeedLimitKmh),
                   retryMinutesAfter: Value(alarms[i].retryMinutesAfter),
+                  timeUntilPlayMinutes:
+                      Value(alarms[i].timeUntilPlayMinutes),
+                  minPlayMinutes: Value(alarms[i].minPlayMinutes),
                   weekdays: Value(alarms[i].weekdays),
                   enabled: Value(alarms[i].enabled),
                   position: Value(i),
@@ -450,10 +477,12 @@ class NivaatStore {
       ringScheduled: row.ringScheduled,
       ringCourtSpeedKmh: row.ringCourtSpeedKmh,
       ringRawGustKmh: row.ringRawGustKmh,
+      ringSlotAt: row.ringSlotAt,
       ringVolume: row.ringVolume,
       cardShown: row.cardShown,
       skipCourtSpeedKmh: row.skipCourtSpeedKmh,
       skipRawGustKmh: row.skipRawGustKmh,
+      skipSlotAt: row.skipSlotAt,
       skipGusty: row.skipGusty,
       lastCheckAt: row.lastCheckAt,
       lastAttemptAt: row.lastAttemptAt,
@@ -468,10 +497,12 @@ class NivaatStore {
             ringScheduled: Value(state.ringScheduled),
             ringCourtSpeedKmh: Value(state.ringCourtSpeedKmh),
             ringRawGustKmh: Value(state.ringRawGustKmh),
+            ringSlotAt: Value(state.ringSlotAt),
             ringVolume: Value(state.ringVolume),
             cardShown: Value(state.cardShown),
             skipCourtSpeedKmh: Value(state.skipCourtSpeedKmh),
             skipRawGustKmh: Value(state.skipRawGustKmh),
+            skipSlotAt: Value(state.skipSlotAt),
             skipGusty: Value(state.skipGusty),
             lastCheckAt: Value(state.lastCheckAt),
             lastAttemptAt: Value(state.lastAttemptAt),
@@ -518,6 +549,7 @@ class NivaatStore {
             rawGustKmh: Value(pending.rawGustKmh),
             courtSpeedLimitKmh: Value(pending.courtSpeedLimitKmh),
             rawGustLimitKmh: Value(pending.rawGustLimitKmh),
+            slotAt: Value(pending.slotAt),
             lastCheckAt: Value(pending.lastCheckAt),
             rollOnDone: Value(pending.rollOnDone),
           ));
@@ -564,6 +596,7 @@ class NivaatStore {
         rawGustKmh: row.rawGustKmh,
         courtSpeedLimitKmh: row.courtSpeedLimitKmh,
         rawGustLimitKmh: row.rawGustLimitKmh,
+        slotAt: row.slotAt,
         lastCheckAt: row.lastCheckAt,
         rollOnDone: row.rollOnDone,
       );
@@ -582,6 +615,13 @@ class NivaatStore {
         rawGustKmh: row.rawGustKmh,
         courtSpeedLimitKmh: row.courtSpeedLimitKmh,
         rawGustLimitKmh: row.rawGustLimitKmh,
+        // Was missing until 2026-08-25, and the column had been written since
+        // the day it was added: every row that went through the database came
+        // back with no slot. The card only ever looked right because it reads
+        // the record still in memory — the history SHEET, which can only read
+        // from disk, silently dropped it. Write and read are one pair; a new
+        // column is not landed until both halves are.
+        slotAt: row.slotAt,
         volume: row.volume,
         ringDisposition: row.ringDisposition,
         hostEventKey: row.hostEventKey,
@@ -602,8 +642,92 @@ class NivaatStore {
         rawGustKmh: Value(r.rawGustKmh),
         courtSpeedLimitKmh: Value(r.courtSpeedLimitKmh),
         rawGustLimitKmh: Value(r.rawGustLimitKmh),
+        slotAt: Value(r.slotAt),
         volume: Value(r.volume),
         ringDisposition: Value(r.ringDisposition),
         hostEventKey: Value(r.hostEventKey),
       );
+  /// The wind models to ask for — every default this build has never offered
+  /// before is inserted, then the ones still standing are returned.
+  ///
+  /// **Insert-what-is-missing rather than seed-if-empty (2026-08-30)** — see
+  /// [WindModels.retired] for why an empty table could not be read as a fresh
+  /// install. Seeding on empty also meant `_windowFor`'s own empty-list guard
+  /// was unreachable: a full sweep put all seven names straight back inside
+  /// the same call.
+  ///
+  /// Doing it on the read rather than in a migration is what makes the
+  /// no-migration policy hold: there is no version to step through, only a
+  /// table that catches up with the constant next time it is asked.
+  Future<List<String>> loadWindModels() async {
+    ordered() => (_db.select(_db.windModels)
+          ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+        .get();
+    var rows = await ordered();
+    final known = {for (final r in rows) r.name};
+    final fresh = [
+      for (final (i, name) in OpenMeteo.defaultWindModels.indexed)
+        if (!known.contains(name)) (i, name),
+    ];
+    if (fresh.isNotEmpty) {
+      await _db.batch((b) {
+        for (final (position, name) in fresh) {
+          b.insert(_db.windModels,
+              WindModelsCompanion.insert(name: name, position: position));
+        }
+      });
+      // Re-read rather than splice: the insert has to interleave by position
+      // with whatever was already there, and the database is the one place
+      // that ordering is stated.
+      rows = await ordered();
+    }
+    return [for (final r in rows) if (!r.retired) r.name];
+  }
+
+  /// Flag a model Open-Meteo no longer recognises, and report whether anything
+  /// actually changed — a caller that retries on `true` would otherwise loop
+  /// forever on a 400 naming something we never asked for, and flagging an
+  /// already-retired name is no change either.
+  Future<bool> pruneWindModel(String name) async {
+    final n = await (_db.update(_db.windModels)
+          ..where((t) => t.name.equals(name) & t.retired.equals(false)))
+        .write(const WindModelsCompanion(retired: Value(true)));
+    return n > 0;
+  }
+
+  /// The dot's verdict for every alarm (N15), by alarm id.
+  Future<Map<int, AlarmForecast>> loadForecasts() async {
+    final rows = await _db.select(_db.alarmForecastEntries).get();
+    return {
+      for (final r in rows)
+        r.alarmId: AlarmForecast(
+          verdict: r.verdict,
+          checkedAt: r.checkedAt,
+          courtSpeedKmh: r.courtSpeedKmh,
+          rawGustKmh: r.rawGustKmh,
+          courtSpeedLimitKmh: r.courtSpeedLimitKmh,
+          rawGustLimitKmh: r.rawGustLimitKmh,
+          slotAt: r.slotAt,
+        ),
+    };
+  }
+
+  Future<void> saveForecast(int alarmId, AlarmForecast f) =>
+      _db.into(_db.alarmForecastEntries).insertOnConflictUpdate(
+            AlarmForecastEntriesCompanion.insert(
+              alarmId: Value(alarmId),
+              verdict: f.verdict,
+              checkedAt: f.checkedAt,
+              courtSpeedKmh: f.courtSpeedKmh,
+              rawGustKmh: f.rawGustKmh,
+              courtSpeedLimitKmh: f.courtSpeedLimitKmh,
+              rawGustLimitKmh: f.rawGustLimitKmh,
+              slotAt: f.slotAt,
+            ),
+          );
+
+  Future<void> clearForecast(int alarmId) =>
+      (_db.delete(_db.alarmForecastEntries)..where((t) => t.alarmId.equals(alarmId)))
+          .go();
+
 }

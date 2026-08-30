@@ -72,7 +72,7 @@ String nivaatHistoryLine(HistoryRecord record) {
           ? 'Rang'
           : 'Rang (vol. ${(volume * 100).round()}%)',
     };
-    final summary = record.windGustSummary;
+    final summary = nivaatHistoryNumbers(record);
     return summary.isEmpty ? head : '$head · $summary';
   }
   // The status word mirrors the card's title, so a row and the card it was
@@ -98,8 +98,37 @@ String nivaatHistoryLine(HistoryRecord record) {
   // that joins it has to go too, or the line ends in a dangling separator.
   final summary = record.outcome == CheckOutcome.skippedNoData
       ? ''
-      : record.windGustSummary;
+      : nivaatHistoryNumbers(record);
   return summary.isEmpty ? head : '$head · $summary';
+}
+
+/// A history row's readings, **with the slot they describe** — `wind 5 (≤4) ·
+/// gusts 10 (≤15) km/h · at 06:45` (Samyak, 2026-08-25).
+///
+/// The card learned to name the slot when the window rule landed; history did
+/// not, and it is the surface that has to explain a morning weeks later. A row
+/// reading `Skipped · wind 6 (≤4)` beside `06:00 · last checked 06:00` invited
+/// exactly the wrong conclusion: that 06:00 was windy, when 06:00 may have
+/// been still and the six came from a slot three quarters of an hour later.
+///
+/// **Trailing, where the card puts it up front.** The card's own words are the
+/// reason — `Too windy at 06:45` reads as a condition of a moment. History's
+/// head is `Skipped`, and `Skipped at 06:45` would read as the time the skip
+/// was decided, which is a different fact and one the sub already carries.
+/// Hung on the numbers instead, it can only mean what it says: gusts of 10 at
+/// 06:45.
+///
+/// Empty in, empty out — a row that lost its readings has no slot worth
+/// naming, and a no-data row is refused its numbers by the caller before it
+/// ever reaches here.
+String nivaatHistoryNumbers(HistoryRecord record) {
+  final summary = record.windGustSummary;
+  final slot = record.slotAt;
+  if (summary.isEmpty || slot == null) return summary;
+  // Its own ` · ` clause (Samyak, 2026-08-25). Run on as `km/h at 06:45` it
+  // read as part of the gust reading; every other fact on this line is a
+  // dot-separated clause, and the slot is a fact about all of them.
+  return '$summary · at ${fmtCheckTime(slot, record.at)}';
 }
 
 /// The trailing note on a history row's sub, or null when it has none
@@ -256,23 +285,22 @@ HistoryRecord? nivaatSoonestOpenWatch(
 String _watchKey(int alarmId, DateTime at) =>
     '$alarmId@${at.millisecondsSinceEpoch}';
 
-/// Home alarm-list sub (MESSAGES.md N15). Non-default retry windows surface
-/// as `· +1m` / `· +60m` so a short test window is visible without opening
-/// the editor; the default 30 stays silent (the common case).
+/// Home alarm-list sub (MESSAGES.md N15) — days, court, wind limit.
+///
+/// **No Keep-checking suffix** (Samyak, 2026-08-25). A non-default retry
+/// window used to surface as `· +60m`, which made sense while it was the
+/// alarm's only tunable minutes; there are three of them now, and singling
+/// one out says less than showing none. Three would not fit the row, so the
+/// whole question moves to the editor's timeline until there is a design that
+/// carries all three.
 ///
 /// [court] is **non-null** (Samyak, 2026-08-15): deleting a court deletes its
 /// alarms in the same synchronous step (N20), and only the UI isolate ever
 /// writes the alarm list, so no background check can leave an alarm behind its
 /// court. The old `court removed` fallback was a word no state could produce.
-String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation court) {
-  final base =
-      '${fmtWeekdays(alarm.weekdays)} · ${court.name} '
-      '· ≤${alarm.courtSpeedLimitKmh} km/h';
-  if (alarm.retryMinutesAfter == CheckCascade.retryCapMinutesAfter) {
-    return base;
-  }
-  return '$base · +${alarm.retryMinutesAfter}m';
-}
+String nivaatAlarmListSub(NivaatAlarm alarm, SavedLocation court) =>
+    '${fmtWeekdays(alarm.weekdays)} · ${court.name} '
+    '· ≤${alarm.courtSpeedLimitKmh} km/h';
 
 /// "in 1h 00m" until [t], minute-truncated (MESSAGES.md N15). Past a day it
 /// switches to "in 5d 04h" — [fmtDuration] alone would say "in 120h 00m", and
@@ -296,6 +324,58 @@ String nivaatInLabel(DateTime? t, {DateTime? now}) {
   if (mins < day) return 'in ${fmtDuration(mins.toDouble())}';
   return 'in ${mins ~/ day}d '
       '${((mins % day) ~/ 60).toString().padLeft(2, '0')}h';
+}
+
+/// N15's live verdict line for a home row — the dot's words.
+///
+/// **The check time is always named, and that is the whole design** (Samyak,
+/// 2026-08-25). A bare coloured dot is a promise with no expiry: green at 10pm
+/// about a 6am alarm reads as settled fact, when it is a forecast that has not
+/// been revised yet. Saying "as per 16:00 check" makes staleness legible
+/// without a tap, which is why there is no ⓘ button and nothing hidden behind
+/// one.
+///
+/// `Going` / `Not going`, not `Will` / `Won't`: the tentative phrasing is the
+/// honest one for a forecast, and the extra word earns its place.
+///
+/// The date rides along only when the check was not today, so an alarm whose
+/// last successful check was yesterday evening cannot read as this afternoon.
+String nivaatForecastLine(AlarmForecast? forecast, {DateTime? now}) {
+  // Nothing checked yet — a brand-new alarm, for the seconds before its first
+  // fetch lands. The row keeps this line's height either way, so the result
+  // arriving cannot make the list jump.
+  if (forecast == null) return 'Checking…';
+  final t = now ?? DateTime.now();
+  return '${forecast.willRing ? 'Going' : 'Not going'} to ring · as per '
+      '${fmtCheckTime(forecast.checkedAt, t)} check';
+}
+
+/// The detail behind the home row's verdict — what the ⓘ on that line shows
+/// (Samyak, 2026-08-25).
+///
+/// `Too windy at 06:45 · wind 6 (≤4) · gusts 9 (≤13) km/h` — **the card's own
+/// sentence**, from [nivaatWindWord], not a second vocabulary for the same
+/// fact. The first cut said `Worst at 06:45`, which was accurate and belonged
+/// to no other screen in the app.
+///
+/// The slot named is the one that DECIDED the window: [decide] ranks slots by
+/// verdict severity first and only then by speed, so on a skip it is the slot
+/// that failed hardest.
+///
+/// **A ring gets the numbers and nothing else** (Samyak, 2026-08-25). There is
+/// no slot to name: a skip is caused by one slot, but a ring is the whole
+/// window clearing, so any `at 06:45` on one would point at a moment that was
+/// never special.
+///
+/// It is a separate string from the row's line rather than more of it: the
+/// row has space for a verdict and a freshness stamp, and the numbers belong
+/// to a slot that is neither the alarm time nor the check time — three times
+/// on one 14px line is how a row stops being readable.
+String nivaatForecastDetail(AlarmForecast forecast) {
+  final word = nivaatWindWord(forecast.verdict);
+  if (word == null) return forecast.windGustSummary;
+  return '$word at ${fmtCheckTime(forecast.slotAt, forecast.checkedAt)} · '
+      '${forecast.windGustSummary}';
 }
 
 /// How early a wake may arrive and still count as "the alarm time has come".
@@ -554,8 +634,84 @@ class NivaatEngine {
     return false;
   }
 
-  /// Within this window of the alarm we trust live wind over forecast.
-  static const Duration liveWindWindow = Duration(minutes: 15);
+
+
+  /// One wind window, retrying past a model name Open-Meteo has retired.
+  ///
+  /// A name it does not recognise fails the WHOLE request and names itself in
+  /// the refusal ([OpenMeteoUnknownModel]), so we prune it, persist that, and
+  /// ask again; the next launch starts from the shorter list.
+  ///
+  /// (A name it DOES recognise but which has no data for the location is
+  /// dropped by the API silently and never reaches this path — the mean simply
+  /// has fewer members, which is what "average what came back" means.)
+  ///
+  /// Bounded by the length we STARTED with, not the one we are shrinking
+  /// (2026-08-30). `i <= models.length` re-read the live list, so the counter
+  /// climbed while the list fell and the two met in the middle: seven names
+  /// allowed only four prunes before this gave up, on a list that was
+  /// settling perfectly well. It only showed if several names were retired at
+  /// once — one at a time, the realistic case, has always worked — and it
+  /// healed across runs. Every turn either returns, rethrows, or removes one,
+  /// so `tries + 1` turns is enough to drain the list and reach the empty
+  /// guard below.
+  Future<List<WindSample>> _windowFor(
+    SavedLocation court,
+    DateTime from,
+    DateTime to,
+  ) async {
+    var models = await store.loadWindModels();
+    final tries = models.length;
+    for (var i = 0; i <= tries; i++) {
+      if (models.isEmpty) {
+        throw OpenMeteoException('every wind model has been pruned');
+      }
+      try {
+        return await api.windWindow(court.lat, court.lon, from, to,
+            models: models);
+      } on OpenMeteoUnknownModel catch (e) {
+        if (!await store.pruneWindModel(e.model)) rethrow;
+        debugPrint('nivaat dropped retired wind model ${e.model}');
+        models = await store.loadWindModels();
+      }
+    }
+    // Unreachable: draining the list hits the empty guard above on the last
+    // turn. Dart still needs the function to end in a value, and an
+    // `OpenMeteoException` is the one the caller already treats as no-data,
+    // so a future edit that breaks the counting fails safe rather than loudly.
+    throw OpenMeteoException('wind model list did not settle');
+  }
+
+
+  /// Every wakeup an occurrence at [alarmAt] still needs, as **rung index ->
+  /// when**, for [CheckScheduler.scheduleChecks].
+  ///
+  /// Pre-T rungs are returned ALL AT ONCE — they are all knowable the instant
+  /// the occurrence is, and booking them independently is what stops one dead
+  /// link deleting the rest of the ladder. Past the last rung there is nothing
+  /// to book ahead: the next retry is not knowable until this one has decided,
+  /// so retries stay chained on the final rung's locker.
+  Map<int, DateTime> _rungsAhead(
+    NivaatAlarm alarm,
+    DateTime alarmAt,
+    DateTime t,
+  ) {
+    final ladder = CheckCascade.ladderMinutesBefore;
+    final out = <int, DateTime>{};
+    for (var i = 0; i < ladder.length; i++) {
+      final at = alarmAt.subtract(Duration(minutes: ladder[i]));
+      if (at.isAfter(t)) out[i] = at;
+    }
+    if (out.isNotEmpty) return out;
+    final retry = CheckCascade.nextCheckTime(
+      t,
+      alarmAt,
+      retryCapMinutes: alarm.retryMinutesAfter,
+    );
+    // The last rung's locker, by its name — see [NivaatIds.retryRung].
+    if (retry != null) out[NivaatIds.retryRung] = retry;
+    return out;
+  }
 
   Future<void> evaluateAll({DateTime? now}) async {
     final t = now ?? DateTime.now();
@@ -688,6 +844,8 @@ class NivaatEngine {
           a.courtId != alarm.courtId ||
           a.courtSpeedLimitKmh != alarm.courtSpeedLimitKmh ||
           a.retryMinutesAfter != alarm.retryMinutesAfter ||
+          a.timeUntilPlayMinutes != alarm.timeUntilPlayMinutes ||
+          a.minPlayMinutes != alarm.minPlayMinutes ||
           a.weekdays.length != alarm.weekdays.length ||
           !a.weekdays.containsAll(alarm.weekdays)) {
         return false;
@@ -888,7 +1046,7 @@ class NivaatEngine {
         // here to notice it by.
         if (!keepCard) await _cancelCard(alarm.id);
         await _cancelAllRings(alarm.id);
-        await checks.cancelCheck(alarm.id);
+        await checks.cancelChecks(alarm.id);
         await store.clearCheckState(alarm.id);
         await store.clearPendingRing(alarm.id);
       });
@@ -983,7 +1141,7 @@ class NivaatEngine {
         court == null ? null : (n, r) => n.showSkipped(r, court.name),
       );
     }
-    await checks.cancelCheck(alarm.id);
+    await checks.cancelChecks(alarm.id);
     await store.clearCheckState(alarm.id);
   }
 
@@ -1024,7 +1182,7 @@ class NivaatEngine {
     final next = _resolveOccurrence(alarm, stored, t);
     if (next == null || court == null) {
       await _cancelAllRings(alarm.id);
-      await checks.cancelCheck(alarm.id);
+      await checks.cancelChecks(alarm.id);
       // This alarm has gone quiet — switched off, deleted, or its court
       // removed. Only the last two take the card down: those leave a card for
       // something that no longer exists, which no rewrite can make true. A
@@ -1064,10 +1222,16 @@ class NivaatEngine {
 
     // Rule 1: a ring physically sounding IS the decision, made real — never
     // cancel it or relabel it on a resync/check. (Disabled alarms fall through
-    // above so an explicit delete/toggle-off can still stop a ring.) The pre-T
-    // ladder — not a split-second T-0 cancel — is what keeps a windy morning
-    // from ringing; once it's audible, it stays. This is what makes "open the
-    // app during a ring" safe on both platforms.
+    // above so an explicit delete/toggle-off can still stop a ring.) Once it is
+    // audible, it stays — which is what makes "open the app during a ring" safe
+    // on both platforms.
+    //
+    // **The line is audible, not armed** (reworded 2026-08-30). This used to
+    // read "the pre-T ladder — not a split-second T-0 cancel — is what keeps a
+    // windy morning from ringing", which says T-0 never cancels. It does: a
+    // pre-arm that is not yet sounding is re-decided at T like any other, and
+    // dropped if the play window has turned windy. What this rule protects is
+    // the narrower and more important thing — a ring you can already hear.
     if (alarm.enabled && await _isRingingAny(alarm.id)) {
       // Audible = final. Prefer a held [PendingRing] (post-T schedule success
       // no longer writes Rang immediately); fall back to CheckState that still
@@ -1098,20 +1262,16 @@ class NivaatEngine {
       // checks only ever reschedule themselves.
       final upcoming = alarm.nextOccurrence(t);
       if (upcoming != null) {
-        final firstRung = CheckCascade.nextCheckTime(
-          t,
-          upcoming,
-          retryCapMinutes: alarm.retryMinutesAfter,
-        );
-        if (firstRung != null &&
-            !await checks.scheduleCheck(alarm.id, firstRung)) {
+        final rungs = _rungsAhead(alarm, upcoming, t);
+        if (rungs.isNotEmpty &&
+            !await checks.scheduleChecks(alarm.id, rungs)) {
           // Same rule as the bottom of this method (REVIEW #22): on Android
           // nothing else re-books the cascade, so a refusal here means the
           // NEXT occurrence has no wakeup — and this is the one path that
           // reaches it while a ring is audible, i.e. during a mid-ring resync.
-          debugPrint('nivaat could not book the first rung for alarm '
-              '${alarm.id} at $firstRung — its next occurrence waits for an '
-              'app open');
+          debugPrint('nivaat could not book every ladder rung for alarm '
+              '${alarm.id} at $upcoming — its next occurrence may wait for '
+              'an app open');
         }
       }
       return;
@@ -1205,13 +1365,22 @@ class NivaatEngine {
     // "last tried"); a successful one also updates lastCheckAt below.
     state = state.copyWith(lastAttemptAt: t);
 
+    // **The ring time this pass would produce, decided BEFORE the fetch** —
+    // because the play window hangs off it. A pre-T rung would ring at `next`;
+    // a post-T retry rings a few seconds from now, which puts you on court that
+    // much later, so each retry judges its OWN window rather than re-judging
+    // the one T would have had. The arming block below reuses this exact value,
+    // so what was decided and what gets armed cannot drift apart.
+    final ringAt =
+        next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
+    final (playFrom, playTo) = alarm.playWindow(ringAt);
+
     WindDecision? decision;
     try {
-      final untilAlarm = next.difference(t);
-      final sample = untilAlarm <= liveWindWindow
-          ? await api.currentWind(court.lat, court.lon)
-          : await api.forecastWindAt(court.lat, court.lon, next);
-      decision = decide(sample, alarm.thresholds);
+      decision = decide(
+        await _windowFor(court, playFrom, playTo),
+        alarm.thresholds,
+      );
     } on Exception {
       decision = null; // fail-silent per locked spec; cascade keeps retrying
     }
@@ -1221,6 +1390,28 @@ class NivaatEngine {
     // because an evaluation already past an entry check would schedule anyway
     // — see [_stillLive].
     if (!await _stillLive(alarm)) return;
+
+    // The home row's dot (N15). Written only when a reading actually arrived:
+    // a failed fetch must leave the previous verdict standing, because the row
+    // shows the CHECK time beside it and an unchanged answer under an older
+    // timestamp is exactly the honest signal ("as per 14:00 check", at 16:00).
+    if (decision != null) {
+      await store.saveForecast(
+        alarm.id,
+        AlarmForecast(
+          verdict: decision.verdict,
+          checkedAt: t,
+          // The numbers come off the DECIDING slot, and the limits off the
+          // alarm as it stands right now — both frozen here, so changing the
+          // wind limit tomorrow cannot re-label a verdict it never judged.
+          courtSpeedKmh: decision.sample.courtSpeedKmh,
+          rawGustKmh: decision.sample.rawGustKmh,
+          courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
+          rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+          slotAt: decision.sample.slotAt,
+        ),
+      );
+    }
 
     // Re-drain before destructive cancel / schedule (live events may have
     // landed while we were fetching wind). Never re-enter apply while a host
@@ -1283,8 +1474,9 @@ class NivaatEngine {
         // second alarm of the morning. It pre-arms `nextRing` for `t + 10s`
         // instead, which sounds on time and stays visible to Rule 1.)
         final isLate = !rolledOn && !next.isAfter(t);
-        final ringAt =
-            next.isAfter(t) ? next : t.add(const Duration(seconds: 10));
+        // `ringAt` is the one computed before the fetch — the play window was
+        // judged against it, so re-deriving it here could only introduce a
+        // disagreement.
         final pluginId = isLate ? NivaatIds.lateRing(alarm.id) : preArmId;
         final role = isLate
             ? RingLockerRole.lateRing
@@ -1336,6 +1528,7 @@ class NivaatEngine {
             ringScheduled: true,
             ringCourtSpeedKmh: decision.sample.courtSpeedKmh,
             ringRawGustKmh: decision.sample.rawGustKmh,
+            ringSlotAt: decision.sample.slotAt,
             ringVolume: decision.volume,
             lastCheckAt: t,
           );
@@ -1371,6 +1564,7 @@ class NivaatEngine {
               rawGustKmh: decision.sample.rawGustKmh,
               courtSpeedLimitKmh: decision.thresholds.courtSpeedLimitKmh,
               rawGustLimitKmh: decision.thresholds.rawGustLimit,
+              slotAt: decision.sample.slotAt,
               lastCheckAt: t,
               rollOnDone: false,
             ));
@@ -1416,6 +1610,7 @@ class NivaatEngine {
           ringScheduled: false,
           skipCourtSpeedKmh: decision.sample.courtSpeedKmh,
           skipRawGustKmh: decision.sample.rawGustKmh,
+          skipSlotAt: decision.sample.slotAt,
           skipGusty: decision.verdict == WindVerdict.tooGusty,
           lastCheckAt: t,
         );
@@ -1482,6 +1677,7 @@ class NivaatEngine {
         rawGustKmh: ringDecision.sample.rawGustKmh,
         courtSpeedLimitKmh: ringDecision.thresholds.courtSpeedLimitKmh,
         rawGustLimitKmh: ringDecision.thresholds.rawGustLimit,
+        slotAt: ringDecision.sample.slotAt,
         lastCheckAt: t,
         rollOnDone: false,
       );
@@ -1522,7 +1718,7 @@ class NivaatEngine {
     }
 
     // At/after T but NOT ringing (windy/gusty/no-data): the skip is provisional.
-    // Keep re-checking every minute until the alarm's retry cap, ringing late
+    // Keep re-checking every 15 minutes until the alarm's retry cap, ringing late
     // if the wind drops. Only at the cap do we finalise the skip and rewrite
     // the card — using the last KNOWN reason (state), so a network blip exactly
     // at the cap still reports "windy" rather than "couldn't check".
@@ -1568,12 +1764,13 @@ class NivaatEngine {
     }
     if (_hostClosedOccurrence(alarm.id, next)) return;
     await store.saveCheckState(state);
-    if (nextCheck != null) {
-      // On Android nothing else re-books this alarm — checks only reschedule
-      // themselves — so a booking that failed means the cascade stops here
-      // (REVIEW #22). `scheduleCheck` has already tried its coarse fallback
-      // and logged; this is the layer that knows what was lost, so it says so.
-      if (!await checks.scheduleCheck(alarm.id, nextCheck)) {
+    final rungs = _rungsAhead(alarm, next, t);
+    if (rungs.isNotEmpty) {
+      // On Android nothing else re-books this alarm, so a booking that failed
+      // means part of the ladder is missing (REVIEW #22). `scheduleChecks`
+      // guards each rung on its own and has already logged which; this is the
+      // layer that knows what was lost, so it says so.
+      if (!await checks.scheduleChecks(alarm.id, rungs)) {
         final lost = nivaatOccurrenceInFlight(alarm, state, t)
             ? 'this morning stays open until the app is next opened'
             : 'the next occurrence waits for an app open';
@@ -1607,6 +1804,7 @@ class NivaatEngine {
         rawGustKmh: state.ringRawGustKmh,
         courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
         rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+        slotAt: state.ringSlotAt,
         volume: state.ringVolume,
         ringDisposition: disposition,
         hostEventKey: hostEventKey,
@@ -1643,6 +1841,7 @@ class NivaatEngine {
         rawGustKmh: pending.rawGustKmh,
         courtSpeedLimitKmh: pending.courtSpeedLimitKmh,
         rawGustLimitKmh: pending.rawGustLimitKmh,
+        slotAt: pending.slotAt,
         volume: pending.volume,
         ringDisposition: disposition,
         hostEventKey: hostEventKey,
@@ -1686,6 +1885,7 @@ class NivaatEngine {
       rawGustKmh: state.ringRawGustKmh,
       courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
       rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+      slotAt: state.ringSlotAt,
       lastCheckAt: state.lastCheckAt,
       rollOnDone: false,
     );
@@ -2079,6 +2279,11 @@ class NivaatEngine {
       rawGustKmh: target.rawGustKmh,
       courtSpeedLimitKmh: target.courtSpeedLimitKmh,
       rawGustLimitKmh: target.rawGustLimitKmh,
+      // Carried, not dropped: this rewrites one FIELD of an existing row, and
+      // every other reading is copied for the same reason — a row that lost
+      // its slot on the way to being re-labelled would quietly stop naming
+      // the moment its own numbers came from.
+      slotAt: target.slotAt,
       volume: target.volume,
       ringDisposition: disposition,
       hostEventKey: hostEventKey ?? target.hostEventKey,
@@ -2337,6 +2542,7 @@ class NivaatEngine {
       rawGustKmh: state.ringRawGustKmh,
       courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
       rawGustLimitKmh: alarm.thresholds.rawGustLimit,
+      slotAt: state.ringSlotAt,
       lastCheckAt: state.lastCheckAt,
       rollOnDone: false,
     );
@@ -2528,6 +2734,7 @@ class NivaatEngine {
           : CheckOutcome.skippedWindy,
       courtSpeedKmh: state.skipCourtSpeedKmh,
       rawGustKmh: state.skipRawGustKmh,
+      slotAt: state.skipSlotAt,
       courtSpeedLimitKmh: alarm.courtSpeedLimitKmh,
       rawGustLimitKmh: alarm.thresholds.rawGustLimit,
     );

@@ -38,6 +38,9 @@ void main() {
         rawGustKmh: gust,
         courtSpeedLimitKmh: wind == null ? null : 4,
         rawGustLimitKmh: gust == null ? null : 15,
+        // The slot those numbers describe — the default play window opens 30
+        // minutes after the alarm, and the reason names it (2026-08-25).
+        slotAt: wind == null ? null : at.add(const Duration(minutes: 30)),
       );
 
   const statuses = [
@@ -127,7 +130,7 @@ void main() {
       expect(
         nivaatStillCheckingBody(
             record(CheckOutcome.skippedWindy, wind: 6, gust: 18), until),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
         'watching until 06:30',
       );
     });
@@ -137,7 +140,7 @@ void main() {
         nivaatStillCheckingBody(
             record(CheckOutcome.skippedWindy, wind: 6, gust: 18),
             at.add(const Duration(minutes: 1))),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
         'watching until 06:01',
       );
     });
@@ -154,6 +157,7 @@ void main() {
         rawGustKmh: 18,
         courtSpeedLimitKmh: 4,
         rawGustLimitKmh: 15,
+        slotAt: late.add(const Duration(minutes: 30)),
       );
       expect(nivaatStillCheckingBody(r, late.add(const Duration(minutes: 30))),
           endsWith('watching until 23 Jul 00:19'),
@@ -164,7 +168,7 @@ void main() {
       expect(
         nivaatStillCheckingBody(
             record(CheckOutcome.skippedGusty, wind: 3, gust: 16), until),
-        'Too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · last checked 06:00 · '
+        'Too gusty at 06:30 · wind 3 (≤4) · gusts 16 (≤15) km/h · last checked 06:00 · '
         'watching until 06:30',
       );
     });
@@ -190,7 +194,7 @@ void main() {
       expect(
         nivaatSkippedBody(record(CheckOutcome.skippedWindy,
             wind: 6, gust: 18, checkedAt: checked)),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29',
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29',
       );
     });
 
@@ -198,7 +202,7 @@ void main() {
       expect(
         nivaatSkippedBody(record(CheckOutcome.skippedGusty,
             wind: 3, gust: 16, checkedAt: checked)),
-        'Too gusty · wind 3 (≤4) · gusts 16 (≤15) km/h · last checked 06:29',
+        'Too gusty at 06:30 · wind 3 (≤4) · gusts 16 (≤15) km/h · last checked 06:29',
       );
     });
 
@@ -213,7 +217,7 @@ void main() {
       expect(
         nivaatSkippedBody(record(CheckOutcome.skippedWindy,
             wind: 6, gust: 18, checkedAt: checked, endedAt: until)),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29 · '
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29 · '
         'watched until 06:30',
       );
     });
@@ -222,7 +226,7 @@ void main() {
       expect(
         nivaatSkippedBody(record(CheckOutcome.skippedWindy,
             wind: 6, gust: 18, checkedAt: checked, endedAt: checked)),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29',
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:29',
       );
     });
 
@@ -236,7 +240,7 @@ void main() {
       expect(
         nivaatCancelledBody(record(CheckOutcome.skippedWindy,
             wind: 6, gust: 18, endedAt: at.add(const Duration(minutes: 5)))),
-        'Too windy · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
+        'Too windy at 06:30 · wind 6 (≤4) · gusts 18 (≤15) km/h · last checked 06:00 · '
         'stopped 06:05',
       );
     });

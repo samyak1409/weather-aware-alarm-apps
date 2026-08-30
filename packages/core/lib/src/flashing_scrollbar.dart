@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 /// A scrollbar that flashes visible for ~1s when its page opens — but only
@@ -21,6 +23,17 @@ class _FlashingScrollbarState extends State<FlashingScrollbar> {
   final _controller = ScrollController();
   bool _flash = false;
 
+  /// The flash's own timer, **held so `dispose` can cancel it** (2026-08-25).
+  ///
+  /// It was a bare `Future.delayed`, which cannot be cancelled: the `mounted`
+  /// guard stopped the `setState` but the callback stayed pending for its full
+  /// 1.1s after the widget was gone. Harmless in the app; in a widget test it
+  /// trips `A Timer is still pending even after the widget tree was disposed`,
+  /// so every test that unmounts a scrolling page had to know to wait the
+  /// flash out first. One `cancel` here instead of that knowledge spread
+  /// across four test files.
+  Timer? _off;
+
   @override
   void initState() {
     super.initState();
@@ -34,13 +47,14 @@ class _FlashingScrollbarState extends State<FlashingScrollbar> {
       return;
     }
     setState(() => _flash = true);
-    Future<void>.delayed(const Duration(milliseconds: 1100), () {
+    _off = Timer(const Duration(milliseconds: 1100), () {
       if (mounted) setState(() => _flash = false);
     });
   }
 
   @override
   void dispose() {
+    _off?.cancel();
     _controller.dispose();
     super.dispose();
   }

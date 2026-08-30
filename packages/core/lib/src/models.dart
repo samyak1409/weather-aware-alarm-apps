@@ -87,7 +87,10 @@ class SavedLocation {
 ///
 /// **A SEARCHED place with no region says nothing, and that is the right
 /// answer** rather than a fallback standing in for one. Two spellings, one
-/// meaning: `''` when Open-Meteo answered with neither `admin1` nor `country`,
+/// meaning: `''` when Open-Meteo answered with neither part of the sub-line
+/// (`{admin2}, {admin1}` — district then state — since 2026-08-25; it was
+/// `{admin1}, {country}` before, and places saved under the old shape keep the
+/// string they were saved with, since the fact is stored and not the sentence),
 /// and null for a place built without one — which is every fixture that omits
 /// it, so this is the branch that actually runs. The ⓘ then shows an empty
 /// pill, and that is the accepted residual.
@@ -259,9 +262,20 @@ class NivaatAlarm {
     required this.courtId,
     this.courtSpeedLimitKmh = WindThresholds.defaultLimit,
     this.retryMinutesAfter = CheckCascade.retryCapMinutesAfter,
+    this.timeUntilPlayMinutes = defaultTimeUntilPlayMinutes,
+    this.minPlayMinutes = defaultMinPlayMinutes,
     this.weekdays = const {1, 2, 3, 4, 5, 6, 7},
     this.enabled = true,
   });
+
+  /// Both default to 30 (Samyak, 2026-08-25). Measured over a year at Tonk,
+  /// 30/30 costs **4.9 points** of ring rate against the old single-instant
+  /// check (84.4% -> 79.5%) where 30/60 costs 8.0 — so the stricter window is
+  /// the opt-in, not the default. Method and the full table are in SPEC.md.
+  static const int defaultTimeUntilPlayMinutes = 30;
+  static const int defaultMinPlayMinutes = 30;
+  static const List<int> timeUntilPlayOptions = [30, 60];
+  static const List<int> minPlayOptions = [30, 60];
 
   /// Small positive int; also used to derive scheduler ids.
   final int id;
@@ -270,10 +284,22 @@ class NivaatAlarm {
   final String courtId;
   final int courtSpeedLimitKmh;
 
-  /// How long after T to keep re-checking a skip (30 / 60, or a dev-gated 1).
+  /// How long after T to keep re-checking a skip (30 / 60, or a dev-gated 15).
   /// Stored per alarm; drives `watchedUntil`, the heads-up deadline, and the
   /// cascade cap.
   final int retryMinutesAfter;
+
+  /// Getting ready, travelling and warming up — how long after the alarm you
+  /// are actually on court (N17, "Time until you play").
+  ///
+  /// **The wind is checked for when you PLAY, not for when the alarm rings.**
+  /// Checking T itself was the app's original flaw: it promised a playable
+  /// instant while the reader took it as a playable session.
+  final int timeUntilPlayMinutes;
+
+  /// How long the wind must STAY low, from the moment you are on court
+  /// (N17, "Minimum play time"). Every 15-minute slot across it has to clear.
+  final int minPlayMinutes;
 
   /// DateTime.weekday values (1 = Mon .. 7 = Sun).
   final Set<int> weekdays;
@@ -285,6 +311,21 @@ class NivaatAlarm {
   /// Cap instant for an occurrence at [alarmAt] (T + [retryMinutesAfter]).
   DateTime retryCapAt(DateTime alarmAt) =>
       alarmAt.add(Duration(minutes: retryMinutesAfter));
+
+  /// When you are on court, for a ring at [ringAt] — the span the wind has to
+  /// clear across.
+  ///
+  /// **Takes the RING time, not the occurrence time**, and that is the whole
+  /// point: a late ring at T+15 puts you on court at T+15+ready, so every retry
+  /// judges its own window rather than re-judging the one T would have had.
+  ///
+  /// Elapsed minutes, deliberately — "half an hour to get there" is a duration,
+  /// not a clock time, so it does not go through `calendar.dart` (same rule as
+  /// `alarmAt + retryMinutesAfter`).
+  (DateTime, DateTime) playWindow(DateTime ringAt) {
+    final from = ringAt.add(Duration(minutes: timeUntilPlayMinutes));
+    return (from, from.add(Duration(minutes: minPlayMinutes)));
+  }
 
   /// Next occurrence strictly after [now].
   ///
@@ -309,6 +350,8 @@ class NivaatAlarm {
     String? courtId,
     int? courtSpeedLimitKmh,
     int? retryMinutesAfter,
+    int? timeUntilPlayMinutes,
+    int? minPlayMinutes,
     Set<int>? weekdays,
     bool? enabled,
   }) =>
@@ -319,6 +362,9 @@ class NivaatAlarm {
         courtId: courtId ?? this.courtId,
         courtSpeedLimitKmh: courtSpeedLimitKmh ?? this.courtSpeedLimitKmh,
         retryMinutesAfter: retryMinutesAfter ?? this.retryMinutesAfter,
+        timeUntilPlayMinutes:
+            timeUntilPlayMinutes ?? this.timeUntilPlayMinutes,
+        minPlayMinutes: minPlayMinutes ?? this.minPlayMinutes,
         weekdays: weekdays ?? this.weekdays,
         enabled: enabled ?? this.enabled,
       );
@@ -392,6 +438,7 @@ class HistoryRecord {
     this.rawGustKmh,
     this.courtSpeedLimitKmh,
     this.rawGustLimitKmh,
+    this.slotAt,
     this.volume,
     this.ringDisposition,
     this.hostEventKey,
@@ -425,6 +472,13 @@ class HistoryRecord {
   /// not a display value — see the class doc.
   final int pushSeq;
 
+  /// The 15-minute slot the wind numbers on this row DESCRIBE — the worst one
+  /// in the play window, i.e. the slot that decided the morning.
+  ///
+  /// Null on rows written before there was a window to have a worst slot, and
+  /// on no-data rows, which carry no numbers at all.
+  final DateTime? slotAt;
+
   /// When the wind check that drove this outcome actually ran — the freshness
   /// of the reading behind the ring/skip. May be well *before* [at] (e.g. an
   /// alarm set at 22:00 whose only check was then, ringing at 06:00 on that
@@ -433,7 +487,7 @@ class HistoryRecord {
   final DateTime? checkedAt;
 
   /// The deadline this row promised — that alarm's retry cap (30/60 min, or a
-  /// dev-gated 1) as it stood at this push. [HistoryKind.stillChecking] rows
+  /// dev-gated 15) as it stood at this push. [HistoryKind.stillChecking] rows
   /// only, and frozen: a later Keep-checking edit writes a NEW row with the new
   /// cap rather than touching this one.
   final DateTime? watchedUntil;
@@ -487,4 +541,68 @@ class HistoryRecord {
     return fmtWindGust(court, courtLimit, gust, gustLimit);
   }
 
+}
+
+/// The latest wind verdict for one alarm, for the home row's dot (N15).
+///
+/// **The ROW is deliberately just the answer and its timestamp** — `Going to
+/// ring · as per 16:00 check`, with no numbers on it, because they belong to a
+/// slot the line has no room to name and three times on one 14px line is how a
+/// row stops being readable. The record itself carries the full reading, for
+/// the ⓘ behind that line (N15a) and so a stored verdict can never re-label
+/// itself against a limit it was never judged against.
+///
+/// [checkedAt] is when the CHECK ran, not the slot it read, and the row names
+/// that one on purpose: it is saying how stale the answer is. See [slotAt] for
+/// why both are stored.
+class AlarmForecast {
+  const AlarmForecast({
+    required this.verdict,
+    required this.checkedAt,
+    required this.courtSpeedKmh,
+    required this.rawGustKmh,
+    required this.courtSpeedLimitKmh,
+    required this.rawGustLimitKmh,
+    required this.slotAt,
+  });
+
+  /// **The verdict itself, not a bool** (2026-08-25). It was `willRing`, which
+  /// answered the row's question and nothing else — and the ⓘ behind the row
+  /// then wanted the same words the notification uses, which need to know
+  /// WHICH way a skip failed. A stored bool beside a stored reason would have
+  /// been two fields that can disagree; [willRing] is derived from this one.
+  final WindVerdict verdict;
+
+  /// Whether the alarm would ring on this reading — the row's dot and wording.
+  bool get willRing => verdict == WindVerdict.ring;
+
+  final DateTime checkedAt;
+
+  /// The reading behind the verdict, and the limits it was judged against.
+  ///
+  /// **Not read off the alarm at render time** (2026-08-25), for the reason
+  /// [HistoryRecord] keeps its own copies: change the wind limit and every
+  /// stored verdict would silently re-label itself against a threshold it was
+  /// never compared to.
+  ///
+  /// All required — a forecast is only ever written from a real
+  /// [WindDecision], so there is no state where the answer exists and its
+  /// numbers do not.
+  final double courtSpeedKmh;
+  final double rawGustKmh;
+  final int courtSpeedLimitKmh;
+  final double rawGustLimitKmh;
+
+  /// The slot those numbers describe — the one that DECIDED the window, which
+  /// on a ring is its windiest minute and on a skip is the worst offender.
+  ///
+  /// Distinct from [checkedAt] by up to the whole lead time, which is exactly
+  /// why both are kept: one says how stale the answer is, the other says what
+  /// moment it is about.
+  final DateTime slotAt;
+
+  /// `wind 4 (≤6) · gusts 9 (≤13) km/h` — the same phrasing a history row
+  /// uses, from the same formatter, so the two can never drift.
+  String get windGustSummary => fmtWindGust(
+      courtSpeedKmh, courtSpeedLimitKmh, rawGustKmh, rawGustLimitKmh);
 }

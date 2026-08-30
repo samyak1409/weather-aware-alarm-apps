@@ -4,8 +4,31 @@ import 'package:flutter/material.dart';
 
 import 'theme.dart';
 
-/// How long a toast stays up before it fades out.
-const Duration _kToastDuration = Duration(seconds: 2);
+/// How long a toast stays up before it fades out — **as long as its message
+/// takes to read** (Samyak, 2026-08-25).
+///
+/// A flat two seconds was set when every toast was one short line. It is
+/// generous for `Saved using GPS` and not enough for the wind detail behind a
+/// home row, which is three clauses of numbers — so the hold is the message's
+/// own length: one second per ten characters, Samyak's rule, unclamped.
+///
+/// Ten characters a second is deliberately slow for a *reading* rate (adult
+/// prose runs nearer 25) because these are not prose: they are labels and
+/// numbers with parenthesised limits, read by glancing rather than scanning,
+/// and the pill is dismissible only by waiting.
+///
+/// **No floor and no ceiling** (Samyak — I proposed both and he took them
+/// out). Nothing in either app calls this with an empty string or with prose,
+/// so the ends the clamps guarded are not states this code has; and every
+/// toast here is a *report* — nothing is lost by missing one, and the same tap
+/// produces it again.
+///
+/// Measured from the moment the pill is inserted, so the 160ms fade-in is
+/// inside it rather than added to it. Immaterial at the lengths either app
+/// actually uses — the shortest real message is `Saved using GPS`, ten times
+/// the fade.
+Duration toastHold(String message) =>
+    Duration(milliseconds: message.length * 100);
 
 /// Gap between the pill and the bottom safe area, used only when no [centerY]
 /// is given. Flutter's own floating-snackbar offset, measured.
@@ -99,7 +122,7 @@ class _ToastPillState extends State<_ToastPill>
   void initState() {
     super.initState();
     _fade.forward();
-    _hold = Timer(_kToastDuration, _leave);
+    _hold = Timer(toastHold(widget.message), _leave);
   }
 
   Future<void> _leave() async {

@@ -9,7 +9,6 @@ import 'background_banner.dart';
 import 'controller.dart';
 import 'courts.dart';
 import 'engine.dart';
-import 'history_sheet.dart';
 import 'screenshot_harness.dart';
 import 'settings_sheet.dart';
 
@@ -68,22 +67,45 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   NivaatController get c => widget.controller;
-
-  /// Fires when an active still-checking retry window ends so the home cue
-  /// clears without waiting for the next resync.
-  Timer? _watchExpiry;
 
   /// Ages the per-alarm "in Xh Ym" on every wall-clock :00.
   Timer? _minuteTicker;
+
+  /// The breath under every live dot in the list (Samyak, 2026-08-25) — a
+  /// slow fade in and out, so the row reads as *watching* rather than as a
+  /// printed label.
+  ///
+  /// **One controller for the whole list, not one per row.** Rows sharing a
+  /// clock breathe together, which is the difference between a screen that is
+  /// alive and a screen that is flickering; separate controllers start
+  /// whenever their row scrolls into view and drift apart within seconds.
+  /// It also costs one ticker no matter how many alarms there are.
+  ///
+  /// **A two-second cycle on the wall clock** (Samyak, 2026-08-25) — so the
+  /// duration is divided by [kMotionSlowdown] rather than set to the number
+  /// you want to see. Every ticker in both apps runs through that knob; a
+  /// literal 1000 here would breathe for three seconds, not two.
+  late final AnimationController _breath = AnimationController(
+    vsync: this,
+    duration: Duration(milliseconds: (1000 / kMotionSlowdown).round()),
+  );
+
+  /// **All the way out and all the way back** (Samyak, 2026-08-25). I argued
+  /// for a floor — a dot that reaches zero reads as one that has *gone* — and
+  /// he took the full fade: the words never leave, so nothing is actually
+  /// lost at the bottom of the breath, and the full swing is what makes it
+  /// read as alive from across the room.
+  late final Animation<double> _dotOpacity = Tween<double>(begin: 0, end: 1)
+      .animate(CurvedAnimation(parent: _breath, curve: Curves.easeInOut));
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_onChanged);
-    _armWatchExpiry();
     _armMinuteTicker();
     if (kScreenshotHarness) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -92,10 +114,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Starts (or stops) the breath, honouring the platform's reduce-motion
+  /// setting.
+  ///
+  /// **Not decoration — a correctness gate.** "Remove animations" is a real
+  /// accessibility switch for people whom looping motion makes ill, and a dot
+  /// that pulses forever is exactly what it is meant to stop. Held still it
+  /// sits at full opacity, so the same information is on screen either way.
+  ///
+  /// It is also what keeps `pumpAndSettle` usable: an endless animation
+  /// schedules frames forever, so every widget test that settles the home
+  /// screen would spin until it timed out. Tests turn the switch on rather
+  /// than the widget knowing it is under test.
+  ///
+  /// Here rather than `initState` because it reads `MediaQuery`, and re-run on
+  /// every dependency change so flipping the setting takes effect without a
+  /// restart.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _breath.stop();
+      _breath.value = 1;
+    } else if (!_breath.isAnimating) {
+      _breath.repeat(reverse: true);
+    }
+  }
+
   @override
   void dispose() {
-    _watchExpiry?.cancel();
     _minuteTicker?.cancel();
+    _breath.dispose();
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_onChanged);
     super.dispose();
@@ -114,30 +163,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _onChanged() {
-    _armWatchExpiry();
-    setState(() {});
-  }
-
-  void _armWatchExpiry() {
-    _watchExpiry?.cancel();
-    _watchExpiry = null;
-    // Same pick as the cue text — clears with late ring / alarm gone too.
-    final open = nivaatSoonestOpenWatch(
-      c.history,
-      alarms: c.alarms,
-      checkStates: c.checkStates.values,
-    );
-    final until = open?.watchedUntil;
-    if (until == null) return;
-    final delay = until.difference(DateTime.now());
-    _watchExpiry = Timer(delay.isNegative ? Duration.zero : delay, () {
-      if (!mounted) return;
-      // Re-arm: another alarm may still be inside its retry window.
-      _armWatchExpiry();
-      setState(() {});
-    });
-  }
+  void _onChanged() => setState(() {});
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -172,12 +198,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     if (!c.loaded) return const Scaffold(body: SizedBox.shrink());
-    final watchingLine = nivaatHomeWatchingLine(
-      c.history,
-      alarms: c.alarms,
-      checkStates: c.checkStates.values,
-    );
-
     return Scaffold(
       floatingActionButton: FloatingActionButton(
         onPressed: _addAlarm,
@@ -229,7 +249,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
             ],
-            if (watchingLine != null) _watchingCue(text, watchingLine),
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
@@ -263,43 +282,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Quieter than body secondary — a standing caveat, not a headline
           // (2026-07-22, Samyak: was competing with the alarm list).
           color: AppPalette.textSecondary.withValues(alpha: 0.5),
-        ),
-      ),
-    );
-  }
-
-  /// Live "still checking" cue only (MESSAGES N11). Tap → full history.
-  ///
-  /// Leading wind-accent ● in the text run (not a separate widget) — "live +
-  /// tappable" without a word prefix. Full-width [InkWell] so a short line
-  /// still highlights edge-to-edge. Outer bottom 8 + ink bottom 8 keeps the
-  /// same 16px gap to the list.
-  Widget _watchingCue(TextTheme text, String line) {
-    final body = text.bodyMedium!;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => showHistorySheet(context, c),
-          child: SizedBox(
-            width: double.infinity,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(28, 8, 28, 8),
-              child: Text.rich(
-                TextSpan(
-                  style: body,
-                  children: [
-                    TextSpan(
-                      text: '● ',
-                      style: body.copyWith(color: AppPalette.wind),
-                    ),
-                    TextSpan(text: line),
-                  ],
-                ),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -349,6 +331,134 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const Spacer(flex: 2),
         ],
+      ),
+    );
+  }
+
+  /// N15's live line: **the morning's own state when one is open, otherwise
+  /// the forecast verdict.**
+  ///
+  /// This is where the old top-of-screen "still checking" cue went (N11, 2026-
+  /// 08-25). That banner spoke for every alarm at once, which is why it had to
+  /// pick the SOONEST open window and why tapping it went to history to find
+  /// out whose it was. On the row there is nothing to disambiguate — the line
+  /// is already inside the alarm it describes — so the picking, the tap target
+  /// and the trip to history all go with it.
+  ///
+  /// A retry window outranks the forecast because it is the newer fact: the
+  /// alarm did not ring at T and the morning is still live, which no
+  /// "going / not going to ring" phrasing can say.
+  Widget _liveLine(TextTheme text, NivaatAlarm a) {
+    final state = c.checkStates[a.id];
+    final forecast = c.forecasts[a.id];
+    final watching = nivaatHomeWatchingLine(
+      c.history,
+      alarms: [a],
+      checkStates: [?state],
+    );
+    // The ⓘ rides on both wordings: an open retry window is still an alarm
+    // whose last check produced numbers, and those numbers are the reason it
+    // is still watching. Only "Checking…" — nothing read yet — has nothing to
+    // show, and it is the one state with no forecast to ask.
+    if (watching != null) {
+      return _line(text, watching, live: true, forecast: forecast);
+    }
+    return _line(text, nivaatForecastLine(forecast),
+        live: forecast?.willRing ?? false, forecast: forecast);
+  }
+
+  /// The dot + words. The accent means "something is live here" — either the
+  /// wind says it would ring, or the morning is still being checked.
+  ///
+  /// **Not green/red** (2026-08-25): both apps are built on one accent over
+  /// true black, so a third and fourth colour would be the first break in that
+  /// system — and roughly one man in twelve cannot separate red from green,
+  /// which here would be the entire message. The accent carries "yes" and the
+  /// quiet grey carries "no", exactly as the live cue this replaced did, and
+  /// **the words say it too** so the colour is never load-bearing on its own.
+  Widget _line(
+    TextTheme text,
+    String line, {
+    required bool live,
+    required AlarmForecast? forecast,
+  }) {
+    final body = text.bodyMedium!;
+    final colour = live
+        ? AppPalette.wind
+        : AppPalette.textSecondary.withValues(alpha: 0.7);
+    // A drawn circle, not the `●` glyph it used to be (Samyak, 2026-08-25).
+    // At bodyMedium the bullet renders about 8px of ink with the font's own
+    // side bearings around it — too heavy beside 14px text, and its gap was
+    // whatever the glyph decided. Six logical pixels and a stated 8px gap are
+    // the same on every device and every font fallback.
+    //
+    // It grows with the text scale: a fixed 6 next to doubled type reads as a
+    // speck, and this dot is half the sentence.
+    final size = MediaQuery.textScalerOf(context).scale(6);
+    final row = Row(
+      children: [
+        FadeTransition(
+          opacity: _dotOpacity,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(color: colour, shape: BoxShape.circle),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Expanded, so the ellipsis lands inside the row rather than the row
+        // running past the switch.
+        Expanded(
+          child: Text(
+            line,
+            style: body.copyWith(color: colour),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (forecast != null) ...[
+          const SizedBox(width: 6),
+          // Set in the LINE's type, not `IconButton`'s: a 20px icon in a 48px
+          // box is the settings pattern, and on a 14px line inside a row it
+          // would add half a row's height for one glyph. At `bodyMedium`'s own
+          // size it is another character on the sentence, and the whole line
+          // is the target instead.
+          Icon(Icons.info_outline, size: body.fontSize, color: colour),
+        ],
+      ],
+    );
+    if (forecast == null) return row;
+    // **A `Builder`, and it is load-bearing** (2026-08-25). `_line` is a
+    // method on the State, so a bare `context` inside the callback below is
+    // the State's own — the whole Scaffold. `findRenderObject` on that
+    // returned the screen, and the pill landed dead centre over the list
+    // instead of on the row that was tapped. This gives the callback a context
+    // BELOW the gesture, so the box it measures is this line's.
+    return Builder(
+      builder: (lineContext) => GestureDetector(
+        // Opaque, so the tap stops here. The card behind this line opens the
+        // EDITOR, and a detail glance must not be one twitch away from a
+        // screen with a Delete button on it.
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          // Read at TAP time, not build time: the list may have scrolled
+          // since, and a stale y parks the pill over someone else's alarm.
+          // Same read `PlaceInfoButton` does.
+          final box = lineContext.findRenderObject()! as RenderBox;
+          showAppToast(
+            lineContext,
+            nivaatForecastDetail(forecast),
+            accent: AppPalette.wind,
+            centerY: box.localToGlobal(box.size.center(Offset.zero)).dy,
+          );
+        },
+        // The dot's line is only ~20px tall, so the vertical padding is what
+        // makes this a real target rather than a hairline of one. It is inside
+        // the gesture and outside the visible row, so nothing moves.
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: row,
+        ),
       ),
     );
   }
@@ -460,6 +570,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           nivaatAlarmListSub(a, court),
                           style: text.bodyMedium,
                         ),
+                        // The live verdict (N15). **Height is reserved even
+                        // when it draws nothing**, so the first check landing
+                        // cannot make the whole list jump under your thumb —
+                        // the same rule the editor's countdown slot follows.
+                        // A switched-off alarm is the one case that really
+                        // collapses, and that is deliberate: it cannot ring, so
+                        // "Going to ring" would be a lie, and the row getting
+                        // shorter is a change YOU made by tapping the switch
+                        // rather than one data arrival sprang on you.
+                        if (a.enabled) ...[
+                          // **A rule, not just a gap** (Samyak, 2026-08-25).
+                          // The clock and the court/limit line are one block —
+                          // what the alarm IS — and this line is a different
+                          // kind of sentence: what it is doing right now. Space
+                          // alone said "further down the same paragraph"; a
+                          // hairline says "something else".
+                          //
+                          // It stops before the switch because it lives inside
+                          // the row's text column, which is what keeps it from
+                          // reading as a second copy of the full-bleed
+                          // `Divider` between alarms. Same hairline colour on
+                          // purpose: on true black a fainter grey is simply
+                          // invisible, so the INSET is what tells them apart,
+                          // not the tone.
+                          const SizedBox(height: 12),
+                          Container(height: 1, color: AppPalette.hairline),
+                          // 6, not 12: the live line carries another 6 of its
+                          // own as tap padding, so the gap you SEE is the same
+                          // as the one above the rule.
+                          const SizedBox(height: 6),
+                          _liveLine(text, a),
+                        ],
                       ],
                     ),
                   ),

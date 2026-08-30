@@ -7,8 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine_fakes.dart';
 
-/// Every way a morning can end, as the user actually sees it — the card in the
-/// shade and the rows in the log, asserted as whole strings.
+/// Every way one alarm's occurrence can end, as the user actually sees it —
+/// the card in the shade and the rows in the log, asserted as whole strings.
+///
+/// **An occurrence, not "a morning"** (Samyak, 2026-08-25). The codebase used
+/// the two as synonyms throughout, which was harmless until it reached the
+/// screen — the editor's timeline shipped a `YOUR MORNING` heading above an
+/// alarm nothing stops you setting for 15:00. This file's name went with it;
+/// the fixtures below are still 06:00 mornings, and the prose still calls them
+/// that where that is what they are.
 ///
 /// This file is the catalogue Samyak signed off on (2026-07-26). Counting
 /// pushes or rows is not enough: every wording decision in this change lives
@@ -25,8 +32,37 @@ void main() {
   final cap = alarmAt.add(const Duration(minutes: 30));
 
   // wind(9,10) → court 5.4 (>4, windy). wind(5,5) → court 3.0 (calm).
-  const windyBody = 'Too windy · wind 5 (≤4) · gusts 10 (≤15) km/h';
-  const windyLine = 'wind 5 (≤4) · gusts 10 (≤15) km/h';
+  // **The reason names the slot the numbers came from, not the check time.**
+  // A morning is decided across the whole play window, so `Too windy · … ·
+  // last checked 06:00` was contradictory: 06:00 may have been calm, and the
+  // five came from a slot half an hour later.
+  const windyBody = 'Too windy at 06:30 · wind 5 (≤4) · gusts 10 (≤15) km/h';
+  // A check at the 06:30 cap would ring ~now, putting you on court at 07:00 —
+  // so its window, and its slot, are an hour past the alarm's. Each retry
+  // judges its OWN window.
+  const windyBodyAtCap =
+      'Too windy at 07:00 · wind 5 (≤4) · gusts 10 (≤15) km/h';
+  // Case 5/6: the last reading that SUCCEEDED came from the 06:29 check, whose
+  // own window opened at 06:59 — and slots sit on the quarter hour, so the one
+  // covering your arrival is 06:45. The row quotes the slot behind its
+  // numbers, so it stays 06:45 even though checking ran on to the cap.
+  const windyBodyFrom0629 =
+      'Too windy at 06:45 · wind 5 (≤4) · gusts 10 (≤15) km/h';
+  // **History quotes the slot too, now** (2026-08-25). It always carried one —
+  // the card had been naming it since the window rule landed — but the column
+  // was written and never read back, so every row that went through the
+  // database lost it. The card looked right because it reads the record still
+  // in memory; the sheet, which can only read from disk, did not.
+  //
+  // Trailing here, leading on the card: `Too windy at 06:45` reads as a
+  // condition of a moment, while `Skipped at 06:45` would read as when the
+  // skip was decided — a different fact, and one the sub already carries.
+  //
+  // Three variants for the same three reasons the card has three: each check
+  // judges its OWN window, so a retry's slot is later than T's.
+  const windyLine = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 06:30';
+  const windyLineAtCap = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 07:00';
+  const windyLineFrom0629 = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 06:45';
 
   late FakeRing ring;
   late FakeChecks checks;
@@ -117,12 +153,15 @@ void main() {
       }
 
       expect(notifier.card!.status, kNivaatSkipped);
-      expect(notifier.card!.body, '$windyBody · last checked 06:30');
+      expect(notifier.card!.body, '$windyBodyAtCap · last checked 06:30');
       expect(await story(), [
         'Still checking · $windyLine\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00 '
             '· watching until 06:30',
-        'Skipped · $windyLine\n'
+        // The CAP check judged this one, and a ring at 06:30 puts you on
+        // court at 07:00 — its own window, its own slot. Same reason the card
+        // above says `windyBodyAtCap`.
+        'Skipped · $windyLineAtCap\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:30',
       ]);
     });
@@ -135,7 +174,7 @@ void main() {
       }
       await runAt(cap.add(const Duration(seconds: 40)));
 
-      expect(notifier.card!.body, '$windyBody · last checked 06:30',
+      expect(notifier.card!.body, '$windyBodyAtCap · last checked 06:30',
           reason: 'it read the wind at 06:30:40, which displays as 06:30');
       expect((await rows()).last.kind, HistoryKind.outcome);
       expect(nivaatHistoryNote((await rows()).last), isNull,
@@ -150,12 +189,15 @@ void main() {
       }
       await runAt(cap.add(const Duration(minutes: 1, seconds: 10)));
 
-      expect(notifier.card!.body, '$windyBody · last checked 06:29');
+      expect(notifier.card!.body, '$windyBodyFrom0629 · last checked 06:29');
       expect(await story(), [
         'Still checking · $windyLine\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00 '
             '· watching until 06:30',
-        'Skipped · $windyLine\n'
+        // The last reading that SUCCEEDED came from 06:29, whose window
+        // opened at 06:59 — and slots sit on the quarter hour, so 06:45 is
+        // the one covering your arrival.
+        'Skipped · $windyLineFrom0629\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:29',
       ]);
     });
@@ -169,13 +211,15 @@ void main() {
       await runAt(cap);
 
       expect(notifier.card!.body,
-          '$windyBody · last checked 06:29 · watched until 06:30',
+          '$windyBodyFrom0629 · last checked 06:29 · watched until 06:30',
           reason: 'the 06:30 attempt is the only thing separating 6 from 5');
       expect(await story(), [
         'Still checking · $windyLine\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00 '
             '· watching until 06:30',
-        'Skipped · $windyLine\n'
+        // Same 06:29 reading as case 5 — the 06:30 attempt reached nothing,
+        // so it moved the watched-until and not the numbers.
+        'Skipped · $windyLineFrom0629\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:29 '
             '· watched until 06:30',
       ]);
@@ -250,7 +294,7 @@ void main() {
         'Still checking · $windyLine\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00 '
             '· watching until 06:30',
-        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h\n'
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h · at 06:30\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:07',
       ]);
     });
@@ -269,7 +313,7 @@ void main() {
 
       expect(notifier.pushes, isEmpty, reason: 'nothing to explain');
       expect(await story(), [
-        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h\n'
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h · at 06:30\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00',
       ]);
     });

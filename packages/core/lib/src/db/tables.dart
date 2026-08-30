@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../models.dart';
 import '../repos.dart';
+import '../wind.dart';
 
 /// Every table that carries **contended** state — anything two isolates can
 /// write at the same time.
@@ -92,6 +93,8 @@ class NivaatAlarms extends Table {
   TextColumn get courtId => text()();
   IntColumn get courtSpeedLimitKmh => integer()();
   IntColumn get retryMinutesAfter => integer()();
+  IntColumn get timeUntilPlayMinutes => integer()();
+  IntColumn get minPlayMinutes => integer()();
   TextColumn get weekdays => text().map(weekdaySet)();
   BoolColumn get enabled => boolean()();
   IntColumn get position => integer()();
@@ -137,6 +140,14 @@ class HistoryEntries extends Table {
   RealColumn get rawGustKmh => real().nullable()();
   IntColumn get courtSpeedLimitKmh => integer().nullable()();
   RealColumn get rawGustLimitKmh => real().nullable()();
+
+  /// The 15-minute slot the numbers above DESCRIBE — the worst one in the play
+  /// window, which is the one that decided the morning.
+  ///
+  /// Distinct from [checkedAt], which is when the check ran. They differ by the
+  /// whole lead time, so a row saying `last checked 06:00` about wind measured
+  /// for 06:45 needs to name the 06:45 or it reads as a contradiction.
+  IntColumn get slotAt => integer().nullable().map(nullableDateTimeMicros)();
   RealColumn get volume => real().nullable()();
   TextColumn get ringDisposition => textEnum<RingDisposition>().nullable()();
   TextColumn get hostEventKey => text().nullable()();
@@ -155,10 +166,17 @@ class CheckStates extends Table {
   BoolColumn get ringScheduled => boolean()();
   RealColumn get ringCourtSpeedKmh => real().nullable()();
   RealColumn get ringRawGustKmh => real().nullable()();
+
+  /// The slot behind the ring's reading, so a `Rang` history row can name the
+  /// moment its numbers came from exactly as a skipped row does. Its twin is
+  /// `skipSlotAt` above.
+  IntColumn get ringSlotAt => integer().nullable().map(nullableDateTimeMicros)();
   RealColumn get ringVolume => real().nullable()();
   BoolColumn get cardShown => boolean()();
   RealColumn get skipCourtSpeedKmh => real().nullable()();
   RealColumn get skipRawGustKmh => real().nullable()();
+  IntColumn get skipSlotAt =>
+      integer().nullable().map(nullableDateTimeMicros)();
   BoolColumn get skipGusty => boolean()();
   IntColumn get lastCheckAt =>
       integer().nullable().map(nullableDateTimeMicros)();
@@ -185,6 +203,10 @@ class PendingRings extends Table {
   RealColumn get rawGustKmh => real().nullable()();
   IntColumn get courtSpeedLimitKmh => integer().nullable()();
   RealColumn get rawGustLimitKmh => real().nullable()();
+
+  /// The slot behind those readings — carried so a disposition row settled
+  /// from a pending ring names the same moment its live twin would.
+  IntColumn get slotAt => integer().nullable().map(nullableDateTimeMicros)();
   IntColumn get lastCheckAt =>
       integer().nullable().map(nullableDateTimeMicros)();
   BoolColumn get rollOnDone => boolean()();
@@ -295,4 +317,74 @@ class OutboxEntries extends Table {
   IntColumn get createdAt => integer().map(dateTimeMicros)();
   IntColumn get updatedAt => integer().map(dateTimeMicros)();
   TextColumn get lastError => text().nullable()();
+}
+
+/// The wind models this build asks Open-Meteo for, seeded from
+/// `OpenMeteo.defaultWindModels` and **pruned when the service rejects one**.
+///
+/// It has to be a table rather than a constant because a retired name is a hard
+/// 400 the app can only learn about by being refused ([OpenMeteoUnknownModel]).
+/// The engine flags the named row and retries; the next launch reads the
+/// shorter list rather than walking into the same wall.
+///
+/// **Additions ARE covered since 2026-08-30**, and they arrive for free: the
+/// read inserts every default this table has never held, so an app update that
+/// renames or adds a model picks it up on the next check. That was a deliberate
+/// gap while pruning DELETED rows — there was no way to tell a name we had
+/// never offered from one we had thrown away — and closing it is the same
+/// change that makes a fully-pruned list stay pruned.
+class WindModels extends Table {
+  TextColumn get name => text()();
+  IntColumn get position => integer()();
+
+  /// **A rejected model is flagged, never deleted (2026-08-30).**
+  ///
+  /// Deleting it made an empty table mean two different things — "nobody has
+  /// seeded this yet" and "every name we had was rejected" — and the seeding
+  /// read cannot tell them apart, so a full sweep re-seeded the very names it
+  /// had just thrown away. Keeping the row makes the two states distinct: a
+  /// seeded table is never empty, so seeding is unambiguous, and a pruned name
+  /// stays pruned.
+  ///
+  /// It also buys the way back. A name absent from this table ENTIRELY is one
+  /// the app has never offered, so an app update that renames or adds a model
+  /// gets it inserted on the next read — which is the only recovery a build
+  /// with all seven names retired could have had anyway.
+  BoolColumn get retired => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column<Object>> get primaryKey => {name};
+}
+
+/// The latest wind verdict per alarm, for the home row's dot (N15).
+///
+/// Separate from [CheckStates] because that is per-OCCURRENCE and is cleared
+/// the moment a morning finalises — the dot has to keep saying something for
+/// tomorrow's alarm all day today. Written by whichever isolate ran the check,
+/// including the background ones, so the foreground reads it back rather than
+/// holding its own copy.
+class AlarmForecastEntries extends Table {
+  IntColumn get alarmId => integer()();
+
+  /// The verdict, not a "will it ring" flag: the row's ⓘ names the reason a
+  /// skip failed, and a bool cannot tell windy from gusty. See [AlarmForecast].
+  TextColumn get verdict => textEnum<WindVerdict>()();
+
+  /// When the CHECK ran — the app-clock moment the row is "as per", which is
+  /// not the slot the reading describes. The row says "as per 16:00 check".
+  IntColumn get checkedAt => integer().map(dateTimeMicros)();
+
+  /// The reading behind the verdict, the limits it was judged against, and the
+  /// slot it describes. Stored rather than derived at render time for the
+  /// reason `HistoryEntries` keeps its own copies — see [AlarmForecast].
+  ///
+  /// Non-nullable: a row is only ever written from a real decision.
+  RealColumn get courtSpeedKmh => real()();
+  RealColumn get rawGustKmh => real()();
+  IntColumn get courtSpeedLimitKmh => integer()();
+  RealColumn get rawGustLimitKmh => real()();
+  IntColumn get slotAt => integer().map(dateTimeMicros)();
+
+  @override
+  Set<Column<Object>> get primaryKey => {alarmId};
 }

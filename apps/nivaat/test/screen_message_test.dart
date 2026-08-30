@@ -7,10 +7,12 @@ import 'package:nivaat/src/alarm_sheet.dart';
 import 'package:nivaat/src/background_banner.dart';
 import 'package:nivaat/src/controller.dart';
 import 'package:nivaat/src/courts.dart';
+import 'package:nivaat/src/engine.dart';
 import 'package:nivaat/src/history_sheet.dart';
 import 'package:nivaat/src/home_screen.dart';
 import 'package:nivaat/src/ids.dart';
 import 'package:nivaat/src/settings_sheet.dart';
+import 'package:nivaat/src/skip_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'silent_fakes.dart';
@@ -26,6 +28,23 @@ import 'silent_fakes.dart';
 void main() {
   const court =
       SavedLocation(id: 'c1', name: 'Society Court', lat: 26.17, lon: 75.79);
+
+  // **Reduce motion is on for this whole file.**
+  //
+  // The home row's live dot breathes forever (`_HomeScreenState._breath`), and
+  // an endless animation schedules frames forever, so `pumpAndSettle` never
+  // settles — it spins until it times out, which is exactly how this arrived.
+  // Flipping the platform switch is the honest fix rather than teaching the
+  // widget it is under test: it is the same setting someone sensitive to
+  // looping motion turns on, the widget already obeys it, and obeying it is
+  // itself worth testing. The one test that has to watch the dot move turns
+  // the switch back off for itself.
+  setUp(() {
+    final binding = TestWidgetsFlutterBinding.ensureInitialized();
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(binding.platformDispatcher.clearAccessibilityFeaturesTestValue);
+  });
 
   Future<NivaatController> controller({
     List<SavedLocation> courts = const [],
@@ -107,7 +126,12 @@ void main() {
     for (final scale in [1.0, 1.3, 2.0]) {
       await tester.pumpWidget(MaterialApp(
         home: MediaQuery(
-          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          // A fresh `MediaQueryData` drops the ambient reduce-motion flag
+          // the file's `setUp` turned on, so say it again here.
+          data: MediaQueryData(
+            textScaler: TextScaler.linear(scale),
+            disableAnimations: true,
+          ),
           child: HomeScreen(controller: c),
         ),
       ));
@@ -152,7 +176,12 @@ void main() {
     for (final scale in [1.0, 1.3]) {
       await tester.pumpWidget(MaterialApp(
         home: MediaQuery(
-          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          // A fresh `MediaQueryData` drops the ambient reduce-motion flag
+          // the file's `setUp` turned on, so say it again here.
+          data: MediaQueryData(
+            textScaler: TextScaler.linear(scale),
+            disableAnimations: true,
+          ),
           child: HomeScreen(controller: c),
         ),
       ));
@@ -405,46 +434,185 @@ void main() {
     // worked example's limit 4, asserted in the edit test below.
     expect(find.text('Gust guard auto: ≤22 km/h'), findsOneWidget);
     expect(find.text('Keep checking'), findsOneWidget);
-    expect(find.text('Rings late if the wind drops in time.'), findsOneWidget,
-        reason: 'the hint states the payoff — why 60m over 30m');
+    // States the CONDITION as well as the payoff. "Rings late if the wind
+    // drops in time." said what it does but never what triggers it, and
+    // "rings late" read as a defect rather than a rescue (Samyak, 2026-08-25).
+    expect(
+        find.text("If it's too windy, keep watching this long and ring when "
+            'the wind drops.'),
+        findsOneWidget);
+
+    // The play window (2026-08-25). The hint leads with the ANCHOR: it used
+    // to open with the activities and name what they were measured from only
+    // in its second sentence, so `in 23h 45m` two rows above won and 30m read
+    // as half an hour from NOW.
+    expect(find.text('Time until you play'), findsOneWidget);
+    expect(
+        find.text('Starts when the alarm rings — getting ready, travel, '
+            'warm-up.'),
+        findsOneWidget);
+    expect(find.text('Minimum play time'), findsOneWidget);
+    expect(
+        find.text(
+            'The alarm only rings if the wind stays low for this whole time.'),
+        findsOneWidget);
+
+    // Three rows offer the same two segments now, so the count IS the
+    // assertion — one per row, and no stray fourth control.
     for (final segment in ['30m', '60m']) {
-      expect(find.text(segment), findsOneWidget);
+      expect(find.text(segment), findsNWidgets(3), reason: 'segment $segment');
     }
-    expect(find.text('1m'), findsNothing,
-        reason: 'a one-minute window is a testing tool — it appears only '
+    expect(find.text('15m'), findsNothing,
+        reason: 'a 15-minute window is a testing tool — it appears only '
             'behind core DevMode\'s seven-tap gate (2026-08-06)');
+    expect(find.text('1m'), findsNothing,
+        reason: 'the dev window became 15m on 2026-08-25 — retries land every '
+            '15 minutes, so a one-minute window holds no retry at all');
     expect(find.text('Save'), findsOneWidget);
     expect(find.text('Delete'), findsNothing,
         reason: 'a new alarm has nothing to delete');
   });
 
-  group('N17 — the dev-gated one-minute window', () {
+  group('N17 — IF YOU SAVE THIS, the timeline above Save (2026-08-25)', () {
+    // Everything hangs off the alarm going off at its SET time. The first
+    // draft did not, and read `04:00 – 04:30 keeps checking` above `04:30
+    // you're on court` — which says the alarm may ring at 04:30 and that you
+    // are on court at 04:30, with a half hour of lead time between them.
+    // Caught by Samyak; this group is what stops it coming back.
+    const alarm = NivaatAlarm(
+      id: 1,
+      hour: 4,
+      minute: 0,
+      courtId: 'c1',
+      courtSpeedLimitKmh: 6,
+    );
+
+    test('three steps, anchored on the alarm ringing at its set time', () {
+      final timeline = nivaatAlarmTimeline(alarm);
+      expect(timeline.steps, [
+        ('04:00', 'alarm'),
+        ('04:30', "you're on court"),
+        ('04:30 – 05:00', 'wind must stay ≤6 km/h'),
+      ]);
+      // ≤, not "under": `decideSlot` skips on `> limit`, so exactly 6 rings.
+      expect(timeline.steps.last.$2, contains('≤'));
+    });
+
+    test('the retry note is a footnote on the ring, not a fourth step', () {
+      expect(nivaatAlarmTimeline(alarm).note,
+          "if it's too windy, it keeps checking until 04:30 — "
+          'the times below move with it');
+    });
+
+    test('"the times below move with it" is literally true', () {
+      // The note is a promise about the engine, so check it against the
+      // engine: `playWindow` is measured from the moment the alarm REALLY
+      // rings, so a morning rescued a quarter hour late moves the whole
+      // window a quarter hour later — not a simplification.
+      final onTime = alarm.playWindow(DateTime(2026, 8, 25, 4, 0));
+      final rescued = alarm.playWindow(DateTime(2026, 8, 25, 4, 15));
+      expect(rescued.$1.difference(onTime.$1), const Duration(minutes: 15));
+      expect(rescued.$2.difference(onTime.$2), const Duration(minutes: 15));
+    });
+
+    test('every step moves when the setting behind it moves', () {
+      // One assertion per row, so a row wired to the wrong field is caught
+      // rather than a whole timeline that happens to look plausible.
+      expect(
+          nivaatAlarmTimeline(alarm.copyWith(timeUntilPlayMinutes: 60)).steps,
+          [
+            ('04:00', 'alarm'),
+            ('05:00', "you're on court"),
+            ('05:00 – 05:30', 'wind must stay ≤6 km/h'),
+          ]);
+      expect(nivaatAlarmTimeline(alarm.copyWith(minPlayMinutes: 60)).steps.last,
+          ('04:30 – 05:30', 'wind must stay ≤6 km/h'));
+      expect(nivaatAlarmTimeline(alarm.copyWith(retryMinutesAfter: 60)).note,
+          contains('until 05:00'));
+      expect(
+          nivaatAlarmTimeline(alarm.copyWith(courtSpeedLimitKmh: 4))
+              .steps
+              .last
+              .$2,
+          'wind must stay ≤4 km/h');
+    });
+
+    test('a late-evening alarm reads 00:15, never 24:15', () {
+      // Going through `DateTime` rather than adding minutes to an hour is the
+      // whole reason — the same wrap `nivaatSeedAlarmTime` needs.
+      expect(nivaatAlarmTimeline(alarm.copyWith(hour: 23, minute: 30)).steps,
+          [
+            ('23:30', 'alarm'),
+            ('00:00', "you're on court"),
+            ('00:00 – 00:30', 'wind must stay ≤6 km/h'),
+          ]);
+    });
+
+    testWidgets('it renders above Save, in the editor\'s own numbers',
+        (tester) async {
+      final c = await controller(courts: [court]);
+      await openVia(
+          tester,
+          (ctx) => showAlarmSheet(ctx, c,
+              alarm: const NivaatAlarm(
+                  id: 1,
+                  hour: 4,
+                  minute: 0,
+                  courtId: 'c1',
+                  courtSpeedLimitKmh: 6)));
+
+      // Not "YOUR MORNING": the codebase calls an occurrence a morning
+      // everywhere, and that leaked onto a screen where it is simply wrong —
+      // nothing stops you setting this alarm for 15:00 (Samyak, 2026-08-25).
+      // And not the "WHAT HAPPENS" that first replaced it: this block
+      // describes the DRAFT on screen, not an alarm as saved.
+      expect(find.text('IF YOU SAVE THIS'), findsOneWidget);
+      expect(find.textContaining('MORNING'), findsNothing);
+      final timeline = nivaatAlarmTimeline(alarm);
+      for (final step in timeline.steps) {
+        expect(find.text(step.$2), findsOneWidget, reason: step.$2);
+      }
+      expect(find.text(timeline.note), findsOneWidget);
+      expect(find.text('04:30 – 05:00'), findsOneWidget,
+          reason: 'the play window reads as one range, not two times');
+    });
+  });
+
+  group('N17 — the dev-gated short window', () {
     // A static notifier outlives the test that flipped it; a leaked `true`
     // would make the assertion above pass or fail depending on test order.
     tearDown(() => DevMode.enabled.value = false);
 
-    testWidgets('the gate open puts 1m back in the control', (tester) async {
+    testWidgets('the gate open puts 15m back in the control', (tester) async {
+      // 15, not 1, since 2026-08-25: retries land every 15 minutes, so a
+      // one-minute window would hold no retry at all and test nothing.
       DevMode.enabled.value = true;
       final c = await controller(courts: [court]);
       await openVia(tester, (ctx) => showAlarmSheet(ctx, c, alarm: null));
 
-      for (final segment in ['1m', '30m', '60m']) {
-        expect(find.text(segment), findsOneWidget, reason: 'segment $segment');
+      // **All three minutes rows gain it** (Samyak, 2026-08-25). It was Keep
+      // checking's alone, which made a test morning only half-fast: the retry
+      // window shrank to a quarter hour while the play window it was retrying
+      // stayed half an hour out and half an hour long.
+      for (final segment in ['15m', '30m', '60m']) {
+        expect(find.text(segment), findsNWidgets(3), reason: 'segment $segment');
       }
     });
 
-    testWidgets('an alarm already on 1m still shows it with the gate shut',
+    testWidgets('an alarm already on 15m still shows it with the gate shut',
         (tester) async {
       // Otherwise the control would draw with no segment selected and
-      // misrepresent the alarm — the 1m is real until you change it, and the
+      // misrepresent the alarm — the 15m is real until you change it, and the
       // cascade goes on honouring it whatever the editor offers.
       final c = await controller(courts: [court]);
       const short = NivaatAlarm(
-          id: 1, hour: 6, minute: 0, courtId: 'c1', retryMinutesAfter: 1);
+          id: 1, hour: 6, minute: 0, courtId: 'c1', retryMinutesAfter: 15);
       await openVia(tester, (ctx) => showAlarmSheet(ctx, c, alarm: short));
 
       expect(DevMode.enabled.value, isFalse, reason: 'the gate is shut');
-      expect(find.text('1m'), findsOneWidget);
+      // Exactly one: the alarm holding 15m, not the other two rows — the gate
+      // decides what is OFFERED, and it is shut.
+      expect(find.text('15m'), findsOneWidget);
     });
   });
 
@@ -542,7 +710,18 @@ void main() {
       Future<void> open() => openVia(tester,
           (ctx) => showAlarmSheet(ctx, c, alarm: c.alarms.first));
 
+      // The sheet scrolls, and the play-window rows (2026-08-25) pushed the
+      // buttons past the fold on this surface — scroll to them rather than
+      // widening the test viewport, since a real phone scrolls too.
+      Future<void> reachButtons() async {
+        await tester.scrollUntilVisible(
+            find.widgetWithText(TextButton, 'Delete').first, 200,
+            scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+      }
+
       await open();
+      await reachButtons();
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
       expect(find.text('DELETE ALARM'), findsOneWidget);
@@ -555,6 +734,7 @@ void main() {
 
       // The control: without it the assertion above would pass just as well
       // against a Delete button that had been disabled outright.
+      await reachButtons();
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Delete').last);
@@ -619,12 +799,315 @@ void main() {
       final c = await armed();
       // Same alarm, different blocks: reading one of these as a ring would
       // put another alarm's court on the screen.
-      expect(c.courtNameForRing(NivaatIds.check(1)), isNull);
+      expect(c.courtNameForRing(NivaatIds.retryCheck(1)), isNull);
       expect(c.courtNameForRing(NivaatIds.card(1)), isNull);
       // Deleted mid-ring, or a ring left over from a build ago: the label is
       // the one thing on this screen that may be missing, so it goes quiet
       // rather than guessing.
       expect(c.courtNameForRing(NivaatIds.ring(2)), isNull);
+    });
+  });
+
+  group('N15 — the live verdict on a home row (2026-08-25)', () {
+    final checkedAt = DateTime(2026, 8, 25, 16, 0);
+
+    /// A forecast with real numbers behind it. Every field is required on the
+    /// model on purpose — a forecast is only ever written from a decision, so
+    /// there is no state where the answer exists and its readings do not — and
+    /// this keeps the tests that only care about the WORDS readable.
+    AlarmForecast forecast({
+      WindVerdict verdict = WindVerdict.ring,
+      DateTime? at,
+      double courtSpeed = 4,
+      double gust = 9,
+      int limit = 6,
+      double gustLimit = 13,
+      DateTime? slotAt,
+    }) =>
+        AlarmForecast(
+          verdict: verdict,
+          checkedAt: at ?? checkedAt,
+          courtSpeedKmh: courtSpeed,
+          rawGustKmh: gust,
+          courtSpeedLimitKmh: limit,
+          rawGustLimitKmh: gustLimit,
+          slotAt: slotAt ?? DateTime(2026, 8, 25, 16, 45),
+        );
+
+    test('the words name the verdict AND the check time', () {
+      // The time is never optional. A bare coloured dot is a promise with no
+      // expiry — accent at 10pm about a 6am alarm reads as settled fact when it
+      // is a forecast nobody has revised yet.
+      expect(
+        nivaatForecastLine(forecast(), now: checkedAt),
+        'Going to ring · as per 16:00 check',
+      );
+    });
+
+    test('nothing checked yet reads as Checking…, never as a verdict', () {
+      expect(nivaatForecastLine(null), 'Checking…');
+    });
+
+    test('a check from another day carries its date', () {
+      // Otherwise last night's answer reads as this afternoon's.
+      expect(
+        nivaatForecastLine(forecast(verdict: WindVerdict.tooWindy),
+            now: DateTime(2026, 8, 26, 9, 0)),
+        'Not going to ring · as per 25 Aug 16:00 check',
+      );
+    });
+
+    test('the detail is the CARD\'s sentence, not a second vocabulary', () {
+      // It said `Worst at 16:45` — accurate, and a phrasing belonging to no
+      // other screen in the app. The card has named this exact fact since the
+      // window rule landed, so both now read it from `nivaatWindWord`
+      // (Samyak, 2026-08-25).
+      expect(nivaatForecastDetail(forecast(verdict: WindVerdict.tooWindy)),
+          'Too windy at 16:45 · wind 4 (≤6) · gusts 9 (≤13) km/h');
+      expect(nivaatForecastDetail(forecast(verdict: WindVerdict.tooGusty)),
+          'Too gusty at 16:45 · wind 4 (≤6) · gusts 9 (≤13) km/h');
+    });
+
+    test('the same words the card uses, from the same builder', () {
+      // The point of sharing is that these cannot drift, so check them
+      // against the card rather than against another literal.
+      final record = HistoryRecord(
+        alarmId: 1,
+        courtId: 'c1',
+        at: checkedAt,
+        outcome: CheckOutcome.skippedWindy,
+        courtSpeedKmh: 4,
+        rawGustKmh: 9,
+        courtSpeedLimitKmh: 6,
+        rawGustLimitKmh: 13,
+        slotAt: DateTime(2026, 8, 25, 16, 45),
+        checkedAt: checkedAt,
+      );
+      expect(
+        nivaatSkippedBody(record).split(' · ').first,
+        nivaatForecastDetail(forecast(verdict: WindVerdict.tooWindy))
+            .split(' · ')
+            .first,
+      );
+    });
+
+    test('a ring names no slot at all — just the numbers', () {
+      // It said `Calm at 16:45` for a day, and that was wrong twice over
+      // (Samyak, 2026-08-25): a skip is caused by ONE slot and can be pinned
+      // to it, but a ring is the whole window clearing — so the time pointed
+      // at a moment that was never special and implied the rest of the window
+      // was not calm. `Calm from 16:30 to 17:00` would have been true and
+      // would have said nothing the numbers beside it do not.
+      expect(nivaatForecastDetail(forecast()),
+          'wind 4 (≤6) · gusts 9 (≤13) km/h');
+      expect(nivaatForecastDetail(forecast()), isNot(contains(' at ')));
+    });
+
+    test('a slot from another day carries its date', () {
+      // Last night's reading behind a 06:00 alarm: a bare `22:00` would read
+      // as this morning, sixteen hours after the check it came from.
+      expect(
+        nivaatForecastDetail(forecast(
+            verdict: WindVerdict.tooWindy,
+            at: DateTime(2026, 8, 26, 6),
+            slotAt: DateTime(2026, 8, 25, 22, 0))),
+        'Too windy at 25 Aug 22:00 · wind 4 (≤6) · gusts 9 (≤13) km/h',
+      );
+    });
+
+    testWidgets('tapping the live line shows the detail, and only that',
+        (tester) async {
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pumpAndSettle();
+      final detail = nivaatForecastDetail(c.forecasts[1]!);
+      expect(find.text(detail), findsNothing, reason: 'not until you ask');
+
+      await tester.tap(find.textContaining('to ring · as per'));
+      await tester.pumpAndSettle();
+      expect(find.text(detail), findsOneWidget);
+      // **And the editor did NOT open.** The card behind this line opens a
+      // screen with a Delete button on it; a detail glance must not be one
+      // twitch away from that.
+      expect(find.text('EDIT ALARM'), findsNothing);
+
+      // **On the row you tapped, not mid-screen.** `_line` is a method on the
+      // State, so the bare `context` inside its tap handler was the State's —
+      // the whole Scaffold — and `findRenderObject` on that measured the
+      // screen, parking the pill dead centre over the list. A `Builder` gives
+      // the handler a context below the gesture.
+      final line = tester.getRect(find.textContaining('to ring · as per'));
+      final pill = tester.getRect(
+          find.ancestor(of: find.text(detail), matching: find.byType(Material))
+              .first);
+      expect(pill.center.dy, closeTo(line.center.dy, 12),
+          reason: 'the pill answers for THIS row');
+      // The control: it must not merely be somewhere sensible — the screen's
+      // own middle is what it used to be, and on this fixture that is far
+      // from the first row.
+      final screen = tester.getRect(find.byType(Scaffold));
+      expect((pill.center.dy - screen.center.dy).abs(), greaterThan(40),
+          reason: 'centred on the screen is the bug this replaced');
+
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the row still opens the editor everywhere else',
+        (tester) async {
+      // The control for the test above: `HitTestBehavior.opaque` on one line
+      // must not swallow the card's own tap.
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('06:00'));
+      await tester.pumpAndSettle();
+      expect(find.text('EDIT ALARM'), findsOneWidget);
+    });
+
+    testWidgets('an enabled row renders it; a switched-off row does not',
+        (tester) async {
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+      // `silentEngine` answers every fetch, so init has already recorded a
+      // verdict — which is the realistic state. Either wording is fine; what
+      // the row must always carry is the CHECK TIME beside it.
+      expect(find.textContaining('to ring · as per'), findsOneWidget);
+
+      await c.toggleAlarm(1, false);
+      await tester.pump();
+      expect(find.textContaining('to ring · as per'), findsNothing,
+          reason: 'a switched-off alarm cannot ring, so it claims nothing');
+    });
+
+    testWidgets('an OPEN retry window outranks the forecast on the row',
+        (tester) async {
+      // This is where N11 went. The banner used to speak for every alarm at
+      // once — which is why it had to pick the soonest window and why tapping
+      // it opened history to find out whose it was. On the row there is
+      // nothing to disambiguate.
+      final at = DateTime.now().subtract(const Duration(minutes: 5));
+      final until = at.add(const Duration(minutes: 30));
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await c.store.upsertHistory(HistoryRecord(
+        alarmId: 1,
+        courtId: 'c1',
+        at: at,
+        outcome: CheckOutcome.skippedWindy,
+        kind: HistoryKind.stillChecking,
+        pushSeq: 1,
+        checkedAt: at,
+        watchedUntil: until,
+      ));
+      await c.store.saveCheckState(
+          CheckState(alarmId: 1, alarmAt: at, cardShown: true));
+      c.history = await c.store.loadHistory();
+      c.checkStates = {1: (await c.store.loadCheckState(1))!};
+
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+
+      expect(find.textContaining('Still checking wind · until'), findsOneWidget,
+          reason: 'the morning being live outranks any forecast verdict');
+      expect(find.textContaining('to ring · as per'), findsNothing);
+    });
+
+    testWidgets('the dot breathes, and every row breathes together',
+        (tester) async {
+      // "Something is alive here" is the dot's whole job, and a printed dot
+      // says it no better than the words beside it do (Samyak, 2026-08-25).
+      //
+      // The file's `setUp` holds the platform's reduce-motion switch ON so
+      // `pumpAndSettle` can settle anywhere else; this is the one test about
+      // the motion, so it turns the switch back off for itself.
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures();
+      final c = await controller(
+        courts: [court],
+        alarms: const [
+          NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'),
+          NivaatAlarm(id: 2, hour: 7, minute: 0, courtId: 'c1'),
+        ],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+
+      final dots = find.descendant(
+          of: find.byType(HomeScreen), matching: find.byType(FadeTransition));
+      expect(dots, findsNWidgets(2), reason: 'one live dot per enabled row');
+
+      // **One clock, not one per row.** Separate controllers start whenever
+      // their row scrolls into view and drift apart within seconds, which
+      // reads as flickering rather than as alive — and this is the cheapest
+      // possible proof they share: the same object, not merely equal values
+      // at the instant we looked.
+      expect(tester.widget<FadeTransition>(dots.at(0)).opacity,
+          same(tester.widget<FadeTransition>(dots.at(1)).opacity));
+
+      final before = tester.widget<FadeTransition>(dots.first).opacity.value;
+      await tester.pump(const Duration(milliseconds: 400));
+      final after = tester.widget<FadeTransition>(dots.first).opacity.value;
+      expect(after, isNot(before), reason: 'a still dot is a printed dot');
+      // The full swing, 0 to 1 (Samyak, 2026-08-25). I argued for a floor —
+      // a dot that reaches 0 reads as one that has GONE — and he took the
+      // whole fade: the words never leave, so nothing is lost at the bottom.
+      for (final v in [before, after]) {
+        expect(v, inInclusiveRange(0, 1));
+      }
+
+      // Leave nothing running: an active ticker at the end of a test is an
+      // error on its own, so the tree has to come down — and the scrollbar's
+      // opening flash is a `Future.delayed` that unmounting will NOT cancel,
+      // so it has to be seen off first. Same two steps as the ring-gate test.
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('reduce motion holds the dot still, at full strength',
+        (tester) async {
+      // "Remove animations" is a real accessibility switch — for people whom
+      // looping motion makes ill, a dot that pulses forever is exactly what it
+      // is there to stop. Held still it sits at FULL opacity, so the row says
+      // the same thing either way rather than fading to a whisper.
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pumpAndSettle();
+
+      final dot = find.descendant(
+          of: find.byType(HomeScreen), matching: find.byType(FadeTransition));
+      expect(tester.widget<FadeTransition>(dot).opacity.value, 1.0);
+      // The control: with the switch off this settle would never return, and
+      // the test above is what proves that.
+    });
+
+    testWidgets('the old top-of-screen watching cue is gone (N11 retired)',
+        (tester) async {
+      // It moved onto the row it was always about. Nothing at the top of home
+      // speaks for every alarm at once any more.
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+      expect(find.textContaining('Still checking wind'), findsNothing);
     });
   });
 }

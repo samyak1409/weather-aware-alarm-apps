@@ -224,6 +224,128 @@ void main() {
       expect((await store.loadAllPendingRings()).single.pluginId, 10007);
     });
 
+    test('a history row keeps EVERY field across the database', () async {
+      // **A column written and never read** is how `slotAt` shipped: the
+      // companion set it from the day it was added, the row-reader never
+      // asked for it, and every history row came back with no slot. Nothing
+      // caught it because the card reads the record still in memory — only
+      // the sheet, which can only read from disk, was wrong.
+      //
+      // So this asserts the WHOLE record rather than the one field, because
+      // the bug was never about slots: it is about a pair of mappings that
+      // have to be kept in step, and the next field to be added is the one
+      // this test is really for.
+      final store = NivaatStore();
+      final record = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 8, 25, 6),
+        outcome: CheckOutcome.skippedGusty,
+        pushSeq: 3,
+        checkedAt: DateTime(2026, 8, 25, 5, 55),
+        checkingEndedAt: DateTime(2026, 8, 25, 6, 30),
+        courtSpeedKmh: 3.3,
+        rawGustKmh: 16.5,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+        slotAt: DateTime(2026, 8, 25, 6, 45),
+        volume: 0.85,
+        ringDisposition: RingDisposition.rang,
+        hostEventKey: 'k1',
+      );
+      await store.upsertHistory(record);
+      final back = (await store.loadHistory()).single;
+
+      expect(back.alarmId, record.alarmId);
+      expect(back.courtId, record.courtId);
+      expect(back.at, record.at);
+      expect(back.outcome, record.outcome);
+      expect(back.kind, record.kind);
+      expect(back.pushSeq, record.pushSeq);
+      expect(back.checkedAt, record.checkedAt);
+      expect(back.checkingEndedAt, record.checkingEndedAt);
+      expect(back.courtSpeedKmh, record.courtSpeedKmh);
+      expect(back.rawGustKmh, record.rawGustKmh);
+      expect(back.courtSpeedLimitKmh, record.courtSpeedLimitKmh);
+      expect(back.rawGustLimitKmh, closeTo(record.rawGustLimitKmh!, 0.001));
+      expect(back.slotAt, record.slotAt);
+      expect(back.volume, closeTo(record.volume!, 0.001));
+      expect(back.ringDisposition, record.ringDisposition);
+      expect(back.hostEventKey, record.hostEventKey);
+      // A still-checking row's own field, which the record above cannot carry
+      // (its assert forbids a deadline on an outcome row).
+      final watching = HistoryRecord(
+        alarmId: 7,
+        courtId: 'c1',
+        at: DateTime(2026, 8, 26, 6),
+        outcome: CheckOutcome.skippedWindy,
+        kind: HistoryKind.stillChecking,
+        watchedUntil: DateTime(2026, 8, 26, 6, 30),
+      );
+      await store.upsertHistory(watching);
+      expect(
+          (await store.loadHistory())
+              .firstWhere((h) => h.at == watching.at)
+              .watchedUntil,
+          watching.watchedUntil);
+    });
+
+    test('a check state and a pending ring keep their slot too', () async {
+      // The twins of the field above, on the two states a ring's numbers
+      // travel through before they reach history.
+      final store = NivaatStore();
+      final slot = DateTime(2026, 8, 25, 6, 45);
+      await store.saveCheckState(CheckState(
+        alarmId: 7,
+        alarmAt: DateTime(2026, 8, 25, 6),
+        ringSlotAt: slot,
+        skipSlotAt: slot.add(const Duration(minutes: 15)),
+      ));
+      final state = (await store.loadCheckState(7))!;
+      expect(state.ringSlotAt, slot);
+      expect(state.skipSlotAt, slot.add(const Duration(minutes: 15)));
+
+      await store.savePendingRing(PendingRing(
+        alarmId: 7,
+        pluginId: 10007,
+        role: RingLockerRole.ring,
+        occurrenceAt: DateTime(2026, 8, 25, 6),
+        scheduledFor: DateTime(2026, 8, 25, 6),
+        courtId: 'c1',
+        slotAt: slot,
+      ));
+      expect((await store.loadPendingRing(7))!.slotAt, slot);
+    });
+
+    test('a forecast keeps the numbers behind its verdict', () async {
+      // The home row's info tap reads these, and they are stored rather than
+      // derived from the alarm so raising the wind limit tomorrow cannot
+      // re-label a verdict it never judged.
+      final store = NivaatStore();
+      final forecast = AlarmForecast(
+        verdict: WindVerdict.tooGusty,
+        checkedAt: DateTime(2026, 8, 25, 5, 55),
+        courtSpeedKmh: 7.2,
+        rawGustKmh: 16.5,
+        courtSpeedLimitKmh: 4,
+        rawGustLimitKmh: 14.667,
+        slotAt: DateTime(2026, 8, 25, 6, 45),
+      );
+      await store.saveForecast(7, forecast);
+      final back = (await store.loadForecasts())[7]!;
+      // The verdict is stored, not a "will it ring" bool: the row's ⓘ names
+      // the reason a skip failed, and a bool cannot tell windy from gusty.
+      expect(back.verdict, WindVerdict.tooGusty);
+      expect(back.willRing, isFalse, reason: 'derived, never stored twice');
+      expect(back.checkedAt, forecast.checkedAt);
+      expect(back.courtSpeedKmh, closeTo(7.2, 0.001));
+      expect(back.rawGustKmh, closeTo(16.5, 0.001));
+      expect(back.courtSpeedLimitKmh, 4);
+      expect(back.rawGustLimitKmh, closeTo(14.667, 0.001));
+      expect(back.slotAt, forecast.slotAt);
+      expect(back.windGustSummary, 'wind 7 (≤4) · gusts 17 (≤15) km/h');
+    });
+
     test('upsertHistory: one row per push; a racing double-write converges',
         () async {
       final at = DateTime(2026, 7, 13, 6, 0);
@@ -400,6 +522,92 @@ void main() {
 
         final ids = (await store.loadHistory()).map((r) => r.alarmId).toList();
         expect(ids, [2, 1], reason: 'the correction did not reorder the log');
+      });
+    });
+
+    group('the wind model list', () {
+      // The list has to live in the database rather than in the constant
+      // because a name Open-Meteo retires is a hard 400 that fails the WHOLE
+      // request, and there is no endpoint that lists models — the rejection is
+      // the only notice we get.
+      test('an empty table seeds itself from the constant', () async {
+        final store = NivaatStore();
+        expect(await store.loadWindModels(), OpenMeteo.defaultWindModels);
+        // And the seed is durable, not computed fresh each read — otherwise a
+        // prune would be undone by the very next caller.
+        expect(await store.pruneWindModel('ecmwf_ifs'), isTrue);
+        expect(await store.loadWindModels(),
+            isNot(contains('ecmwf_ifs')));
+      });
+
+      test('a prune drops one name and leaves the order alone', () async {
+        final store = NivaatStore();
+        await store.loadWindModels();
+        await store.pruneWindModel('dwd_icon_global');
+        expect(
+          await store.loadWindModels(),
+          [
+            for (final m in OpenMeteo.defaultWindModels)
+              if (m != 'dwd_icon_global') m,
+          ],
+        );
+      });
+
+      test('pruning a name we never asked for reports false', () async {
+        // The caller retries on `true`, so a rejection naming something
+        // outside our list has to be distinguishable — otherwise it loops.
+        final store = NivaatStore();
+        await store.loadWindModels();
+        expect(await store.pruneWindModel('not_in_our_list'), isFalse);
+        expect(await store.loadWindModels(),
+            hasLength(OpenMeteo.defaultWindModels.length));
+      });
+
+    test('pruning every name STAYS pruned — it does not re-seed', () async {
+        // This asserted the opposite until 2026-08-30, and the opposite was a
+        // bug wearing a rationale. Deleting rows made an empty table mean both
+        // "never seeded" and "all rejected", so a full sweep put every name
+        // straight back — and `_windowFor`'s own empty-list guard could never
+        // be reached, because the list was never empty when it looked. Rows
+        // are flagged instead of deleted now, so the two states are distinct.
+        final store = NivaatStore();
+        for (final m in await store.loadWindModels()) {
+          await store.pruneWindModel(m);
+        }
+        expect(await store.loadWindModels(), isEmpty);
+        // And it stays empty across reads — the caller sees no-data rather
+        // than a fresh burst of requests against names it just retired.
+        expect(await store.loadWindModels(), isEmpty);
+      });
+
+      test('an app update that adds a model gets it, without resurrecting a '
+          'pruned one', () async {
+        // The recovery path, and the reason rows are flagged rather than kept
+        // in a marker: a name with NO row at all is one this build has never
+        // offered, so a renamed or added model arrives on the next read while
+        // a name already retired keeps its row and stays gone. It is the only
+        // way back a build with every name retired could have.
+        final store = NivaatStore();
+        await store.loadWindModels();
+        await store.pruneWindModel('ecmwf_ifs');
+
+        // Stand in for the update by clearing one name's row entirely — the
+        // state a model this build has never offered would be in. Reaching the
+        // table directly is what `useInMemoryAppDatabase` returns it for; there
+        // is no production call that produces this state, which is the point.
+        await (appDb.delete(appDb.windModels)
+              ..where((t) => t.name.equals('cma_grapes_global')))
+            .go();
+
+        final back = await store.loadWindModels();
+        expect(back, contains('cma_grapes_global'),
+            reason: 'a name with no row is one we have never offered');
+        expect(back, isNot(contains('ecmwf_ifs')),
+            reason: 'a pruned name keeps its row, so it is not resurrected');
+        expect(back, [
+          for (final m in OpenMeteo.defaultWindModels)
+            if (m != 'ecmwf_ifs') m,
+        ], reason: 'and the constant order is restored, not appended to');
       });
     });
 

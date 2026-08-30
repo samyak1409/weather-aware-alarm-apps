@@ -5,11 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// (2026-08-06, Samyak): seven taps on the maker's mark at the foot of either
 /// home screen turn them on and say so, the next seven turn them off again.
 ///
-/// **What it gates today is one option** — Nivaat's 1-minute *Keep checking*
-/// window, which exists so a whole morning can be played out in a minute while
-/// testing, and which is not a choice a real user has any reason to make (a
-/// minute is barely room for the wind to drop). It is written as a switch
-/// rather than as that one option because more will hang off it.
+/// **What it gates today is one value on three rows** — Nivaat's 15-minute
+/// segment, offered on *Keep checking*, *Time until you play* and *Minimum
+/// play time* alike (`kDevMinutesOption`, which carries why 15 and why one
+/// value), so a whole occurrence can be played out inside an hour while
+/// testing. It is not a choice a real user has reason to make: fifteen minutes
+/// is one retry and one play slot. It is written as a switch rather than as
+/// that one option because more will hang off it.
 ///
 /// **Both apps share the gesture even though Arunoday has nothing behind it
 /// yet** — the way in should be the same in both, and a gate that only exists
@@ -35,7 +37,7 @@ class DevMode {
   static const Duration tapGap = Duration(seconds: 1);
 
   /// Live, so anything behind the gate rebuilds the moment it flips
-  /// (Nivaat's editor listens; see `CheckCascade.retryOptionsFor`).
+  /// (Nivaat's editor listens; see `minuteOptionsFor`).
   static final ValueNotifier<bool> enabled = ValueNotifier(false);
 
   /// Call once from `main()` before `runApp`, beside `Appearance.load()`.

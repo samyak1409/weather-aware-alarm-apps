@@ -72,26 +72,31 @@ class SilentChecks implements CheckScheduler {
   Future<void> initialize() async {}
 
   @override
-  Future<bool> scheduleCheck(int alarmId, DateTime at) async => true;
+  Future<bool> scheduleChecks(int alarmId, Map<int, DateTime> rungs) async =>
+      true;
 
   @override
-  Future<void> cancelCheck(int alarmId) async {}
+  Future<void> cancelChecks(int alarmId) async {}
 }
+
+DateTime _floorToQuarter(DateTime t) =>
+    DateTime(t.year, t.month, t.day, t.hour, t.minute ~/ 15 * 15);
 
 class SilentApi extends OpenMeteo {
   @override
-  Future<WindSample> forecastWindAt(
-          double lat, double lon, DateTime target) async =>
-      WindSample(
-        rawSpeedKmh: 5,
-        rawGustKmh: 5,
-        observedAt: DateTime(2026, 7, 11),
-        isForecast: true,
-      );
-
-  @override
-  Future<WindSample> currentWind(double lat, double lon) async =>
-      forecastWindAt(lat, lon, DateTime.now());
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) async =>
+      [
+        for (var at = _floorToQuarter(from);
+            !at.isAfter(to);
+            at = at.add(const Duration(minutes: 15)))
+          WindSample(rawSpeedKmh: 5, rawGustKmh: 5, slotAt: at),
+      ];
 }
 
 /// Convenience for the common "quiet engine over an empty store" setup.

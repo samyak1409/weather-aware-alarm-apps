@@ -6,11 +6,14 @@
 /// Layout — 10000-wide blocks, decodable by division
 /// (`id ~/ 10000` = which kind, `id % 10000` = which alarm):
 ///
-///     10000 + alarmId   ring armed for the occurrence's own time
-///     20000 + alarmId   LATE ring, armed after T inside the per-alarm retry window
-///     30000 + alarmId   wind check (Android AlarmManager request code)
-///     40000 + alarmId   the morning's card
-///     50000 + alarmId   pre-arm for the NEXT occurrence, written at roll-on
+///      10000 + alarmId   ring armed for the occurrence's own time
+///      20000 + alarmId   LATE ring, armed after T inside the retry window
+///      30000 + alarmId   the morning's card
+///      40000 + alarmId   pre-arm for the NEXT occurrence, written at roll-on
+///     100000 + alarmId   wind check, rung 0 (T-24h)
+///     110000 + alarmId   wind check, rung 1 (T-12h)
+///        ... one block per rung ...
+///     180000 + alarmId   wind check, rung 8 (T-0), reused by post-T retries
 ///
 /// One card per morning (2026-07-26): it posts at T as "Still checking" and
 /// is rewritten in place to "Skipped" / "Cancelled" as the morning resolves,
@@ -47,9 +50,17 @@ class NivaatIds {
 
   static const int ringBlock = 10000;
   static const int lateRingBlock = 20000;
-  static const int checkBlock = 30000;
-  static const int cardBlock = 40000;
-  static const int nextRingBlock = 50000;
+  static const int cardBlock = 30000;
+  static const int nextRingBlock = 40000;
+
+  /// Where the per-rung check blocks start. Renumbered 2026-08-25 when the
+  /// single chained check became one booking per rung — the old 30000 check
+  /// block was freed and the card and next-ring blocks moved down into the
+  /// gap, so the layout stays contiguous rather than carrying a hole.
+  ///
+  /// Safe to renumber precisely because these ids are **ephemeral**: they are
+  /// recomputed from scratch on every resync and never persisted as user data.
+  static const int firstCheckBlock = 100000;
 
   /// The ring armed for an occurrence's own scheduled time — the pre-arm the
   /// ladder commits at T-1h, T-30m, … Re-deciding the same occurrence rewrites
@@ -129,7 +140,47 @@ class NivaatIds {
     return null;
   }
 
-  static int check(int alarmId) => checkBlock + alarmId;
+  /// The wakeup id for one LADDER RUNG.
+  ///
+  /// **Every pre-T rung is booked up front, each in its own locker** (Samyak,
+  /// 2026-08-25). It used to be a chain: one id per alarm, and each check that
+  /// fired booked the next into that same number. Nine rungs made that nine
+  /// links, and breaking any one of them silently deleted every rung after it
+  /// — kill the app mid-fetch at T-6h and T-3h, T-2h, T-1h, T-30m, T-15m and
+  /// T-0 were simply never created. The only recoveries were opening the app or
+  /// ANOTHER alarm's check firing, so a lone alarm had no backstop at all.
+  ///
+  /// Independent bookings cost nine cancels per edit and buy the property that
+  /// no rung can take its successors down with it. **It does not defeat Doze** —
+  /// that throttles firing, not booking — but every gap in the ladder is >=15
+  /// minutes, comfortably past Doze's ~9-minute quota, so throttling was never
+  /// what was eating them.
+  static int check(int alarmId, int rung) =>
+      firstCheckBlock + rung * 10000 + alarmId;
+
+  /// The rung post-T retries reuse — the LAST one (T-0).
+  ///
+  /// Retries are still chained, and correctly so: only one can ever be
+  /// outstanding, each is booked by the one before it, and by the time they run
+  /// T-0 has long since fired and freed its number. Chaining is only dangerous
+  /// where a break loses bookings that were already knowable; here the next
+  /// retry is not knowable until this one has decided.
+  ///
+  /// **Named here rather than spelled out at the one place that books it**
+  /// (2026-08-30): `_rungsAhead` wrote `ladder.length - 1` inline, which said
+  /// the same thing in a second voice — and left [retryCheck] with no caller
+  /// outside the tests, which is how a rule quietly ends up with two homes.
+  static int get retryRung => CheckCascade.ladderMinutesBefore.length - 1;
+
+  /// [retryRung]'s locker id, for a caller that wants the number rather than
+  /// the index.
+  static int retryCheck(int alarmId) => check(alarmId, retryRung);
+
+  /// Every check locker for [alarmId] — cancel all of these on edit or delete.
+  static List<int> allChecks(int alarmId) => [
+        for (var r = 0; r < CheckCascade.ladderMinutesBefore.length; r++)
+          check(alarmId, r),
+      ];
 
   /// The morning's one notification. Posted at T and rewritten in place —
   /// same number throughout, which is what lets a later push replace the
