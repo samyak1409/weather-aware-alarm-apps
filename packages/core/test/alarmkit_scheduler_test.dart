@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// the plugin assigns the UUIDs, so an entry lost is an alarm that can never be
 /// cancelled, asked about, or swept again. These lock the ways it used to be
 /// thrown away (REVIEW #4, #6) and the order that stops a failed re-arm from
-/// leaving a morning silent (REVIEW #5).
+/// leaving an alarm silent (REVIEW #5).
 ///
 /// `AlarmKitScheduler` is listed as a plugin wrapper elsewhere, but the map
 /// logic is ours and the plugin talks over a plain MethodChannel — so the
@@ -158,7 +158,7 @@ void main() {
         reason: 'nothing new was armed, so nothing may be reported as armed');
 
     expect(alarms, hasLength(1),
-        reason: 'the morning survives: the old alarm was never cancelled');
+        reason: 'the ring survives: the old alarm was never cancelled');
     expect((await savedMap())['1'], original,
         reason: 'and it is still reachable, so the next rung can retry');
     expect(alarms.single['id'], original!.single);
@@ -186,9 +186,10 @@ void main() {
   test('a replacement whose cancel is refused keeps BOTH handles', () async {
     // The trade REVIEW #5 accepts, made explicit. With the create first, a
     // refused cancel leaves two live alarms for one id — a duplicate alert,
-    // which is a nuisance you can stop, rather than a silent morning. What it
-    // must NOT do is lose the older one: one UUID per id overwrote it, and
-    // then nothing could ever reach the alarm that was still going to sound.
+    // which is a nuisance you can stop, rather than an alarm that never sounds.
+    // What it must NOT do is lose the older one: one UUID per id overwrote it,
+    // and then nothing could ever reach the alarm that was still going to
+    // sound.
     final s = scheduler();
     await arm(s, 1);
     final first = (await savedMap())['1']!.single;
@@ -290,8 +291,8 @@ void main() {
     // did mention — just not in this answer — so a prune that deletes
     // "everything AlarmKit did not mention" would remove it. The row is then
     // the only handle on an armed alarm, and `cancel`, `isRinging` and the
-    // orphan sweep all work off it: the alarm rings on a morning the wind says
-    // to skip, and nothing can reach it.
+    // orphan sweep all work off it: the alarm rings when the wind says to
+    // skip, and nothing can reach it.
     final s = scheduler();
     await arm(s, 1);
     final existing = (await savedMap())['1']!.single;

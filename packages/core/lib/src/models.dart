@@ -379,7 +379,7 @@ enum CheckOutcome { rang, skippedWindy, skippedGusty, skippedNoData }
 /// `skippedNoData` is "we couldn't read the wind", which is a decision the app
 /// made and can explain; a platform drop is the opposite — the app decided to
 /// ring and the host overruled it. Reusing one for the other would put a wind
-/// reason on a morning the wind had nothing to do with.
+/// reason on an occurrence the wind had nothing to do with.
 ///
 /// A premature post-T `Rang` is superseded in place by [missed] (a known
 /// `AlarmDropped`) or [unknown] (ambiguous: the owed ring vanished with no
@@ -397,11 +397,11 @@ enum RingDisposition {
 
 /// What a row *is*, as opposed to what the wind was doing.
 ///
-/// A morning's heads-up row and its outcome row share a reason (both "windy")
-/// but read differently — `Still checking · …` vs `Skipped · …` — so the two
-/// axes can't share one enum (2026-07-26). [cancelled] carries no reason of
-/// its own; it keeps whatever was last known so the row stays faithful, and
-/// simply doesn't render it.
+/// An occurrence's heads-up row and its outcome row share a reason (both
+/// "windy") but read differently — `Still checking · …` vs `Skipped · …` — so
+/// the two axes can't share one enum (2026-07-26). [cancelled] carries no
+/// reason of its own; it keeps whatever was last known so the row stays
+/// faithful, and simply doesn't render it.
 enum HistoryKind { stillChecking, outcome, cancelled }
 
 /// One line of Nivaat history: what happened and why. The trust mechanism —
@@ -414,7 +414,7 @@ enum HistoryKind { stillChecking, outcome, cancelled }
 /// [RingDisposition.missed] / [RingDisposition.unknown] correction. Rewriting
 /// rather than appending is the point: the sheet renders every row, so an
 /// appended correction would stack visible `Rang` above `Missed` for one
-/// morning. Ordinary Keep-checking edits still append; that is why there is
+/// occurrence. Ordinary Keep-checking edits still append; that is why there is
 /// still no general `copyWith` — reach for `upsertHistory` with a fresh
 /// record instead.
 ///
@@ -465,7 +465,7 @@ class HistoryRecord {
   /// known when you stopped it — kept so the data stays true, not rendered.
   final CheckOutcome outcome;
 
-  /// Which of the morning's rows this is. See [HistoryKind].
+  /// Which of the occurrence's rows this is. See [HistoryKind].
   final HistoryKind kind;
 
   /// Which card push wrote this row, counted per occurrence. The dedup key,
@@ -473,7 +473,7 @@ class HistoryRecord {
   final int pushSeq;
 
   /// The 15-minute slot the wind numbers on this row DESCRIBE — the worst one
-  /// in the play window, i.e. the slot that decided the morning.
+  /// in the play window, i.e. the slot that decided the occurrence.
   ///
   /// Null on rows written before there was a window to have a worst slot, and
   /// on no-data rows, which carry no numbers at all.

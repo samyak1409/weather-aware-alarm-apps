@@ -100,19 +100,19 @@ void main() {
   group('decideSlot — whole-km/h decision (threshold 4)', () {
     const t = WindThresholds(courtSpeedLimitKmh: 4); // raw gust limit 14.667
 
-    test('calm morning: court 3, gusts 5 raw -> ring at 85%', () {
+    test('calm slot: court 3, gusts 5 raw -> ring at 85%', () {
       final d = decideSlot(sample(5.0, 5.0), t); // court 3.0 = 3L/4 exactly
       expect(d.verdict, WindVerdict.ring);
       expect(d.volume, 0.85);
     });
 
-    test('sneaky morning: court 3 but gusts 16 raw -> skip (gusty)', () {
+    test('sneaky slot: court 3 but gusts 16 raw -> skip (gusty)', () {
       final d = decideSlot(sample(5.0, 16.0), t); // gust 16 > round(14.667)=15
       expect(d.verdict, WindVerdict.tooGusty);
       expect(d.shouldRing, isFalse);
     });
 
-    test('windy morning: court 5 -> skip regardless of gusts', () {
+    test('windy slot: court 5 -> skip regardless of gusts', () {
       final d = decideSlot(sample(8.4, 7.0), t); // court = 5.04 -> rounds to 5
       expect(d.verdict, WindVerdict.tooWindy);
     });
@@ -283,10 +283,10 @@ void main() {
 
       test('every minutes row in the editor offers the same dev extra', () {
         // It was Keep checking's alone until 2026-08-25, which made a test
-        // morning half-fast: the retry window shrank to a quarter hour while
+        // occurrence half-fast: the retry window shrank to a quarter hour while
         // the play window it was retrying stayed half an hour out and half an
-        // hour long. `minuteOptionsFor` is now the only place the gate is
-        // read, so the three rows cannot drift apart.
+        // hour long. `minuteOptionsFor` is now the only place the gate is read,
+        // so the three rows cannot drift apart.
         for (final base in [
           CheckCascade.retryMinutesOptions,
           NivaatAlarm.timeUntilPlayOptions,
@@ -355,7 +355,7 @@ void main() {
       expect(d.verdict, WindVerdict.ring);
     });
 
-    test('ONE bad slot in the middle skips the whole morning', () {
+    test('ONE bad slot in the middle skips the whole occurrence', () {
       // The flaw this rule fixes: the old check looked at a single instant, so
       // a calm arrival followed by a windy game read as playable.
       final d = decide([

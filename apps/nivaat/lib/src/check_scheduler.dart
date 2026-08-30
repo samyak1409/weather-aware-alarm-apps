@@ -27,9 +27,9 @@ abstract class CheckScheduler {
   ///
   /// **A caller that goes on as though a wakeup exists must check this.** On
   /// Android nothing else re-books the ladder, so a swallowed failure ends the
-  /// morning outright: no check at T, no retries, no card, and no ring unless
-  /// an earlier rung had already found calm air (REVIEW #22). iOS is softer:
-  /// the periodic refresh re-drives everything within
+  /// occurrence outright: no check at T, no retries, no card, and no ring
+  /// unless an earlier rung had already found calm air (REVIEW #22). iOS is
+  /// softer: the periodic refresh re-drives everything within
   /// [IosCheckScheduler.refreshFrequency] whatever this returns.
   Future<bool> scheduleChecks(int alarmId, Map<int, DateTime> rungs);
 
@@ -227,7 +227,7 @@ class IosCheckScheduler implements CheckScheduler {
     // One BGProcessing task serves the whole app, so "book every rung" cannot
     // mean nine submissions here — it means aiming the single task at the
     // SOONEST one. The rest are covered by the periodic refresh and by the
-    // pre-arm, which is what actually saves an iOS morning.
+    // pre-arm, which is what actually saves an iOS ring.
     if (rungs.isEmpty) return true;
     final at = rungs.values.reduce((a, b) => a.isBefore(b) ? a : b);
     // iOS can't wake at an exact time, but a BGProcessingTask's earliestBeginDate
@@ -258,7 +258,7 @@ class IosCheckScheduler implements CheckScheduler {
       _logCheckError('scheduleChecks', e, alarmId: alarmId);
       // Softer here than on Android: the periodic BGAppRefresh re-drives the
       // whole cascade on its own cadence ([refreshFrequency]) regardless, so a
-      // refused BGProcessing submit costs precision, not the morning. (That
+      // refused BGProcessing submit costs precision, not the occurrence. (That
       // cadence is what we ASK for, never a guarantee — see the constant.)
       return false;
     }

@@ -85,9 +85,9 @@ class CheckState {
   /// its own numbers came from rather than re-deriving one from the clock.
   final DateTime? skipSlotAt;
 
-  /// True once the morning's card has been posted for this occurrence (at T),
-  /// so the minute-by-minute retries don't re-post it — and so the paths that
-  /// END the morning know whether there is anything to explain: a cancellation
+  /// True once this occurrence's card has been posted (at T), so the
+  /// post-T retries don't re-post it — and so the paths that END the
+  /// occurrence know whether there is anything to explain: a cancellation
   /// writes its row only where a card was shown, and a late ring only pulls a
   /// card down if one is up.
   ///

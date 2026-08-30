@@ -5,7 +5,7 @@ import 'package:nivaat/src/engine.dart';
 import 'package:nivaat/src/home_screen.dart';
 import 'package:nivaat/src/skip_notifier.dart';
 
-/// MESSAGES.md N1/N2 — the ring, and every state of the morning's one card,
+/// MESSAGES.md N1/N2 — the ring, and every state of the occurrence's one card,
 /// locked as strings.
 ///
 /// These are the only place the user ever reads *why* an alarm did or didn't
@@ -13,7 +13,7 @@ import 'package:nivaat/src/skip_notifier.dart';
 /// `engine_test` accept a title and drop it). Worked examples match
 /// MESSAGES.md exactly: Society Court, limit 4 (gust cap ≤15), alarm 06:00.
 ///
-/// `morning_story_test` covers the same strings end to end, from a real
+/// `occurrence_story_test` covers the same strings end to end, from a real
 /// cascade. These cover the shapes that cascade can't reach on demand —
 /// gusty, no-data, a deadline across midnight — and pin the builders directly.
 void main() {
@@ -74,7 +74,7 @@ void main() {
   });
 
   group('title — {court} · {HH:MM} · {status}', () {
-    test('the ring, and the three states of the morning card', () {
+    test('the ring, and the three states of the occurrence card', () {
       expect(nivaatNotificationTitle('Society Court', at, kNivaatRing),
           'Society Court · 06:00 · Play! 🏸');
       expect(nivaatNotificationTitle('Society Court', at, kNivaatStillChecking),
@@ -110,7 +110,7 @@ void main() {
           ' · last checked 05:59');
     });
 
-    test('across midnight: dated, so it can\'t read as this morning', () {
+    test('across midnight: dated, so it can\'t read as the alarm day', () {
       expect(nivaatCheckedNote(DateTime(2026, 7, 17, 22, 0), at),
           ' · last checked 17 Jul 22:00');
     });

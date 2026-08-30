@@ -20,7 +20,7 @@ import 'silent_fakes.dart';
 /// **Nivaat's on-screen strings (MESSAGES.md N12–N22), locked by rendering.**
 ///
 /// The notification and history *text* has been asserted since 2026-07-22
-/// (`notification_message_test`, `morning_story_test`); the screens had not
+/// (`notification_message_test`, `occurrence_story_test`); the screens had not
 /// been, so a label could drift from its doc entry unnoticed — the same gap
 /// that let `nivaatDeleteCourtWarning` ship an ungrammatical singular. Every
 /// composed string still belongs in a builder; these are the flat labels, and
@@ -97,7 +97,7 @@ void main() {
     expect(find.text('The windless alarm.'), findsOneWidget);
     expect(
       find.text('Rings only when the wind at your court is low enough to '
-          'play. The calmer the morning, the louder it rings.'),
+          'play. The calmer the wind, the louder it rings.'),
       findsOneWidget,
     );
 
@@ -204,8 +204,8 @@ void main() {
     expect(
       kNivaatBackgroundThrottledAndroid,
       "Battery optimisation can delay or skip Nivaat's background wind "
-      'checks — it could miss a wind change and ring on a windy morning, or '
-      'stay silent on a calm one.',
+      "checks — it could miss a wind change and ring when it's windy, or stay "
+      "silent when it's calm.",
     );
     expect(
       kNivaatBackgroundThrottledIos,
@@ -507,7 +507,7 @@ void main() {
     test('"the times below move with it" is literally true', () {
       // The note is a promise about the engine, so check it against the
       // engine: `playWindow` is measured from the moment the alarm REALLY
-      // rings, so a morning rescued a quarter hour late moves the whole
+      // rings, so a ring rescued a quarter hour late moves the whole
       // window a quarter hour later — not a simplification.
       final onTime = alarm.playWindow(DateTime(2026, 8, 25, 4, 0));
       final rescued = alarm.playWindow(DateTime(2026, 8, 25, 4, 15));
@@ -561,9 +561,10 @@ void main() {
                   courtId: 'c1',
                   courtSpeedLimitKmh: 6)));
 
-      // Not "YOUR MORNING": the codebase calls an occurrence a morning
+      // Not "YOUR MORNING": the codebase called an occurrence a morning
       // everywhere, and that leaked onto a screen where it is simply wrong —
-      // nothing stops you setting this alarm for 15:00 (Samyak, 2026-08-25).
+      // nothing stops you setting this alarm for 15:00 (Samyak, 2026-08-25;
+      // the prose behind it was swept on 2026-08-30).
       // And not the "WHAT HAPPENS" that first replaced it: this block
       // describes the DRAFT on screen, not an alarm as saved.
       expect(find.text('IF YOU SAVE THIS'), findsOneWidget);
@@ -591,9 +592,9 @@ void main() {
       await openVia(tester, (ctx) => showAlarmSheet(ctx, c, alarm: null));
 
       // **All three minutes rows gain it** (Samyak, 2026-08-25). It was Keep
-      // checking's alone, which made a test morning only half-fast: the retry
-      // window shrank to a quarter hour while the play window it was retrying
-      // stayed half an hour out and half an hour long.
+      // checking's alone, which made a test occurrence only half-fast: the
+      // retry window shrank to a quarter hour while the play window it was
+      // retrying stayed half an hour out and half an hour long.
       for (final segment in ['15m', '30m', '60m']) {
         expect(find.text(segment), findsNWidgets(3), reason: 'segment $segment');
       }
@@ -672,9 +673,9 @@ void main() {
     });
 
     test('the count is the ALARM\'s own rows, not its court\'s', () async {
-      // Two alarms on one court, and the dialog must not tell you the other
-      // alarm's mornings are about to be mentioned. Alarm ids are never
-      // reissued (REVIEW #9), so this survives every edit to time and court.
+      // Two alarms on one court, and the dialog must not count the other
+      // alarm's rows in what it quotes. Alarm ids are never reissued (REVIEW
+      // #9), so this survives every edit to time and court.
       final c = await controller(courts: [court]);
       await c.upsertAlarm(
           const NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'));
@@ -905,7 +906,7 @@ void main() {
 
     test('a slot from another day carries its date', () {
       // Last night's reading behind a 06:00 alarm: a bare `22:00` would read
-      // as this morning, sixteen hours after the check it came from.
+      // as the alarm's own day, sixteen hours after the check it came from.
       expect(
         nivaatForecastDetail(forecast(
             verdict: WindVerdict.tooWindy,
@@ -1022,7 +1023,7 @@ void main() {
       await tester.pump();
 
       expect(find.textContaining('Still checking wind · until'), findsOneWidget,
-          reason: 'the morning being live outranks any forecast verdict');
+          reason: 'the occurrence being live outranks any forecast verdict');
       expect(find.textContaining('to ring · as per'), findsNothing);
     });
 

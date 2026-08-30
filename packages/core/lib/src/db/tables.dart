@@ -142,7 +142,7 @@ class HistoryEntries extends Table {
   RealColumn get rawGustLimitKmh => real().nullable()();
 
   /// The 15-minute slot the numbers above DESCRIBE — the worst one in the play
-  /// window, which is the one that decided the morning.
+  /// window, which is the one that decided the occurrence.
   ///
   /// Distinct from [checkedAt], which is when the check ran. They differ by the
   /// whole lead time, so a row saying `last checked 06:00` about wind measured
@@ -189,7 +189,7 @@ class CheckStates extends Table {
 }
 
 /// A ring that was scheduled but not yet settled. One row per alarm — the slot
-/// that decides whether a morning reads `Rang` or `Couldn't confirm`.
+/// that decides whether an occurrence reads `Rang` or `Couldn't confirm`.
 @DataClassName('PendingRingRow')
 class PendingRings extends Table {
   IntColumn get alarmId => integer()();
@@ -303,7 +303,7 @@ enum OutboxState { pending, processing, done, dead }
 /// marks the row done.
 ///
 /// [dedupKey] is what makes a retry safe to run twice: it is derived from the
-/// occurrence, so a second settle of the same morning finds the row already
+/// occurrence, so a second settle of the same one finds the row already
 /// [OutboxState.done] instead of rolling on again.
 class OutboxEntries extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -359,10 +359,10 @@ class WindModels extends Table {
 /// The latest wind verdict per alarm, for the home row's dot (N15).
 ///
 /// Separate from [CheckStates] because that is per-OCCURRENCE and is cleared
-/// the moment a morning finalises — the dot has to keep saying something for
-/// tomorrow's alarm all day today. Written by whichever isolate ran the check,
-/// including the background ones, so the foreground reads it back rather than
-/// holding its own copy.
+/// the moment an occurrence finalises — the dot has to keep saying something
+/// for tomorrow's alarm all day today. Written by whichever isolate ran the
+/// check, including the background ones, so the foreground reads it back
+/// rather than holding its own copy.
 class AlarmForecastEntries extends Table {
   IntColumn get alarmId => integer()();
 

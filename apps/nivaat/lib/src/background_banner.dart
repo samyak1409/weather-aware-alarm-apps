@@ -11,8 +11,8 @@ import 'battery_optimization.dart';
 /// and the other is precisely the string that rots unread (MESSAGES.md N16).
 const String kNivaatBackgroundThrottledAndroid =
     "Battery optimisation can delay or skip Nivaat's background wind checks "
-    '— it could miss a wind change and ring on a windy morning, or stay '
-    'silent on a calm one.';
+    "— it could miss a wind change and ring when it's windy, or stay silent "
+    "when it's calm.";
 
 /// See [kNivaatBackgroundThrottledAndroid].
 const String kNivaatBackgroundThrottledIos =

@@ -104,7 +104,7 @@ class HostAlarmEventClaims {
   AppDatabase get _db => appDb;
 
   /// Rows older than this are swept on [prune]. A host event is only
-  /// actionable for the morning it belongs to — the plugin's own markers are
+  /// actionable for the occurrence it belongs to — the plugin's own markers are
   /// capped the same way — and without a ceiling these accumulate for the life
   /// of the install.
   static const Duration keyTtl = Duration(days: 7);
@@ -244,7 +244,7 @@ class HostAlarmEventClaims {
   /// Swept on `recordedAt` — the event's own instant, which is also what the
   /// key encodes — so a row that has sat [HostEventClaimState.pending] for a
   /// week goes too. That is deliberate: an event nothing managed to apply in
-  /// seven days is about a morning long past.
+  /// seven days is about an occurrence long past.
   Future<void> prune({DateTime? now}) async {
     final cutoff = (now ?? DateTime.now())
         .subtract(keyTtl)

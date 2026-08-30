@@ -48,11 +48,11 @@ String nivaatSoundForVolume(double volume) {
 /// This one now does too: `volume` is written on every "rang" row the engine
 /// produces, but the field is optional, and force-unwrapping it meant one row
 /// without it would take the whole sheet down — permanently, since history is
-/// persisted. That is the worst screen to lose: it is the one that explains a
-/// morning the alarm didn't ring (2026-07-26).
+/// persisted. That is the worst screen to lose: it is the one that explains
+/// why an alarm didn't ring (2026-07-26).
 ///
 /// A cancelled row is the exception to all of it: it carries no reason of its
-/// own — you ended the morning, the wind didn't — so it reads bare, and its
+/// own — you ended the occurrence, the wind didn't — so it reads bare, and its
 /// numbers live on the still-checking row directly beside it.
 String nivaatHistoryLine(HistoryRecord record) {
   if (record.kind == HistoryKind.cancelled) return kNivaatCancelled;
@@ -61,8 +61,8 @@ String nivaatHistoryLine(HistoryRecord record) {
   // set it is the more specific answer: `outcome` says what the app decided
   // about the wind, `ringDisposition` says what became of the ring it decided
   // on. A dropped ring still carries `CheckOutcome.rang` — the wind really did
-  // say ring — so reading the wind axis first would print `Rang` for a morning
-  // that never made a sound.
+  // say ring — so reading the wind axis first would print `Rang` for an
+  // occurrence that never made a sound.
   final disposition = record.ringDisposition;
   if (disposition != null) {
     final head = switch (disposition) {
@@ -106,10 +106,11 @@ String nivaatHistoryLine(HistoryRecord record) {
 /// gusts 10 (≤15) km/h · at 06:45` (Samyak, 2026-08-25).
 ///
 /// The card learned to name the slot when the window rule landed; history did
-/// not, and it is the surface that has to explain a morning weeks later. A row
-/// reading `Skipped · wind 6 (≤4)` beside `06:00 · last checked 06:00` invited
-/// exactly the wrong conclusion: that 06:00 was windy, when 06:00 may have
-/// been still and the six came from a slot three quarters of an hour later.
+/// not, and it is the surface that has to explain an occurrence weeks later. A
+/// row reading `Skipped · wind 6 (≤4)` beside `06:00 · last checked 06:00`
+/// invited exactly the wrong conclusion: that 06:00 was windy, when 06:00 may
+/// have been still and the six came from a slot three quarters of an hour
+/// later.
 ///
 /// **Trailing, where the card puts it up front.** The card's own words are the
 /// reason — `Too windy at 06:45` reads as a condition of a moment. History's
@@ -138,8 +139,8 @@ String nivaatHistoryNumbers(HistoryRecord record) {
 /// recorded — nothing here depends on "now", and nothing ages:
 ///
 /// * **still-checking** → ` · watching until 06:30`. Present tense forever,
-///   because that is what the card said at that moment. How far the morning
-///   actually got is the next row's business.
+///   because that is what the card said at that moment. How far the
+///   occurrence actually got is the next row's business.
 /// * **outcome** → ` · watched until 06:30`, but only when checking reached
 ///   past the last reading. Almost always they are the same instant and this
 ///   is empty; when they differ, the final attempt failed to reach the
@@ -222,8 +223,8 @@ bool nivaatEditAbandonsInFlight(
 
 /// The newest row of each occurrence, keyed `alarmId@at`.
 ///
-/// Rows are immutable and a morning writes several, so "what is this morning
-/// doing now?" is always a question about its LAST row — the highest
+/// Rows are immutable and an occurrence writes several, so "what is this
+/// occurrence doing now?" is always a question about its LAST row — the highest
 /// [HistoryRecord.pushSeq] (2026-07-26).
 ///
 /// A tie keeps the row seen FIRST, and callers pass history newest-first (the
@@ -234,8 +235,8 @@ bool nivaatEditAbandonsInFlight(
 /// case with a story behind it. (It used to have one: rows predating push
 /// numbers all carried 0. Those can no longer be read at all — `fromJson`
 /// requires `pushSeq` — so the rule outlived its reason and is kept for the
-/// obvious one.) Resolving a tie the other way reads a finished morning as an
-/// open window, and home promises checking that already stopped.
+/// obvious one.) Resolving a tie the other way reads a finished occurrence as
+/// an open window, and home promises checking that already stopped.
 Map<String, HistoryRecord> nivaatLatestRowPerOccurrence(
   Iterable<HistoryRecord> history,
 ) {
@@ -252,7 +253,7 @@ Map<String, HistoryRecord> nivaatLatestRowPerOccurrence(
 /// dismiss timer (MESSAGES.md N11). Null when nothing is being checked.
 ///
 /// A window is open when the occurrence's **newest** row is still-checking
-/// (an outcome or cancelled row means the morning is done), its cap is still
+/// (an outcome or cancelled row means the occurrence is done), its cap is still
 /// ahead, the alarm is present and enabled, and live [CheckState] still
 /// targets that occurrence. That last clause is what stops a toggle-off then
 /// toggle-on from reviving today's dead retries — toggling on re-arms
@@ -402,7 +403,7 @@ const Duration kNivaatWakeGrace = Duration.zero;
 ///
 /// This matters because the cap check is the window's LAST check. Before this,
 /// five seconds of slack meant a wake landing 10s late was treated as a new
-/// morning: the engine closed the books using the previous reading and never
+/// occurrence: the engine closed the books using the previous reading and never
 /// checked again, so a 06:00 alarm with a 30-minute window recorded
 /// `last checked 06:29`, and a 1-minute window recorded `06:00` (device, 2026-07-26).
 DateTime nivaatOccurrenceEndsAfter(NivaatAlarm alarm, DateTime alarmAt) {
@@ -415,8 +416,8 @@ DateTime nivaatOccurrenceEndsAfter(NivaatAlarm alarm, DateTime alarmAt) {
 ///
 /// One rule, two readers — the engine picks the occurrence to evaluate with it,
 /// and the UI decides what to count down to ([nivaatNextRingAt]) — so a screen
-/// can never disagree with the engine about which morning is live. The weekday
-/// test drops a state whose day is no longer selected.
+/// can never disagree with the engine about which occurrence is live. The
+/// weekday test drops a state whose day is no longer selected.
 bool nivaatOccurrenceInFlight(
   NivaatAlarm alarm,
   CheckState state,
@@ -536,9 +537,9 @@ class NivaatEngine {
   /// The intent to open the occurrence after [closed] for [alarmId].
   ///
   /// **Keyed by occurrence, never by clock time.** That is what makes a repeat
-  /// settle of one morning — which host events make routine, since they arrive
-  /// at least once and two isolates can both be told — find the roll already
-  /// recorded instead of booking a second one.
+  /// settle of one occurrence — which host events make routine, since they
+  /// arrive at least once and two isolates can both be told — find the roll
+  /// already recorded instead of booking a second one.
   static OutboxIntent _rollOnIntent(int alarmId, DateTime closed) => OutboxIntent(
         kind: rollOnKind,
         dedupKey: '$rollOnKind:$alarmId:${closed.microsecondsSinceEpoch}',
@@ -561,7 +562,7 @@ class NivaatEngine {
 
   /// Take this alarm's card down. Only for a card that can never be corrected
   /// into truth: the alarm (or its court) is gone, or a late ring has taken
-  /// over as the morning's card.
+  /// over as the occurrence's card.
   Future<void> _cancelCard(int alarmId) async {
     try {
       await notifier?.cancelForAlarm(alarmId);
@@ -570,7 +571,7 @@ class NivaatEngine {
     }
   }
 
-  /// Append one state's history row **and then** push the morning's card,
+  /// Append one state's history row **and then** push the occurrence's card,
   /// both stamped with the same push number. **That order is the safety
   /// rule** — see below; don't reverse it to read more naturally.
   ///
@@ -579,7 +580,7 @@ class NivaatEngine {
   /// the row cannot drift from what the card said — it is built from the same
   /// [HistoryRecord].
   ///
-  /// The row is appended, never edited: a morning that changes its mind
+  /// The row is appended, never edited: an occurrence that changes its mind
   /// (Keep checking widened, then narrowed) leaves one row per push and the
   /// reader follows the sequence. [CheckState.pushSeq] is what keeps that
   /// safe against a foreground/background double-write — see [HistoryRecord].
@@ -720,8 +721,8 @@ class NivaatEngine {
     // **The barrier where an abandoned intent is picked up.** A process that
     // died between closing an occurrence and arming the next one left its
     // roll-on row leased; the lease has expired by now, so this is where the
-    // next morning finally gets booked. Unscoped on purpose — this is the one
-    // place with no alarm's lane to break, and each job takes its own.
+    // next occurrence finally gets booked. Unscoped on purpose — this is the
+    // one place with no alarm's lane to break, and each job takes its own.
     //
     // Never throws (the dispatcher logs and retries), so a stuck intent cannot
     // stop the pass that would otherwise still evaluate every alarm. The pass
@@ -982,11 +983,11 @@ class NivaatEngine {
   /// Finalises a fired-but-unlogged ring first (that ring really woke you, and
   /// clearing state without recording it was how an edited alarm's ring
   /// vanished from history for good — 2026-07-19 device testing), then rewrites
-  /// the morning's card to `Cancelled` and appends the matching row. Pass the
-  /// PRE-edit alarm when an edit abandoned: the fired ring, and the reason
+  /// the occurrence's card to `Cancelled` and appends the matching row. Pass
+  /// the PRE-edit alarm when an edit abandoned: the fired ring, and the reason
   /// behind the card, belong to its old court and thresholds.
   ///
-  /// Nothing is written when the morning never posted a card — cancelling
+  /// Nothing is written when the occurrence never posted a card — cancelling
   /// before T ends a window that never started, and leaves no trace to explain.
   Future<void> abandonOccurrence(
     NivaatAlarm alarm, {
@@ -1042,7 +1043,7 @@ class NivaatEngine {
           );
         }
         // Unconditional, and not just for the branch above: a delete must also
-        // clear a card left over from an EARLIER morning, which has no state
+        // clear a card left over from an EARLIER occurrence, which has no state
         // here to notice it by.
         if (!keepCard) await _cancelCard(alarm.id);
         await _cancelAllRings(alarm.id);
@@ -1056,12 +1057,12 @@ class NivaatEngine {
   ///
   /// Limit-only returns early — state stays put and the follow-up
   /// [evaluateAlarm] re-decides under the new thresholds, which is what makes
-  /// "raise the limit at 06:05 and it still rings this morning" work. A new
+  /// "raise the limit at 06:05 and it still rings today" work. A new
   /// retry cap re-posts the card with the new deadline and appends a row for
   /// it; the wind numbers come from the STORED reading, never rebuilt from the
   /// edited alarm — that mixed two moments into "Too windy · wind 5 (≤20)".
   ///
-  /// **Either window being over ends the morning HERE**, on Save, with a
+  /// **Either window being over ends the occurrence HERE**, on Save, with a
   /// `Skipped` card and no further promise — see the guard below for both
   /// cases and why the boundary is the cap's minute. The follow-up
   /// [evaluateAlarm] then has nothing left to close and only rolls tomorrow
@@ -1077,7 +1078,7 @@ class NivaatEngine {
         if (state == null) return;
         if (previous.retryMinutesAfter == next.retryMinutesAfter) return;
         final court = await _courtFor(next);
-        // Two ways the morning is already over, and both end it here rather
+        // Two ways the occurrence is already over, and both end it here rather
         // than pushing another promise:
         //
         // * the OLD window had already run out — widening after death must
@@ -1085,7 +1086,7 @@ class NivaatEngine {
         // * the NEW window is already behind us — shrinking 30→1 at T+2 used
         //   to post an alerting card reading `watching until 06:01` at 06:02,
         //   and append the matching row, which is immutable and therefore
-        //   stayed in the log for good. A promise the morning has already
+        //   stayed in the log for good. A promise the occurrence has already
         //   broken is the exact failure the one-card model exists to prevent
         //   (device review, 2026-07-31).
         //
@@ -1449,7 +1450,7 @@ class NivaatEngine {
     // The reading behind a ring this pass REALLY put on the platform, or
     // null. Distinct from `decision.shouldRing`, which is only what the wind
     // said — scheduling can still refuse, and everything downstream that
-    // treats the morning as settled has to follow the ring, not the verdict.
+    // treats the occurrence as settled has to follow the ring, not the verdict.
     WindDecision? armedWith;
     int? armedPluginId;
     RingLockerRole? armedRole;
@@ -1471,7 +1472,7 @@ class NivaatEngine {
         // branch would cancel `NivaatIds.ring`, the one thing it must not
         // touch. (Reachable only if an occurrence lands exactly on `t` while a
         // different one has just closed: the app waking on the dot of the
-        // second alarm of the morning. It pre-arms `nextRing` for `t + 10s`
+        // second alarm of the day. It pre-arms `nextRing` for `t + 10s`
         // instead, which sounds on time and stays visible to Rule 1.)
         final isLate = !rolledOn && !next.isAfter(t);
         // `ringAt` is the one computed before the fetch — the play window was
@@ -1516,8 +1517,8 @@ class NivaatEngine {
         // Only a ring that is REALLY armed may be recorded as one. A silent
         // failure here used to flow straight into `ringScheduled: true`, and
         // the next pass then read "committed, and its time has passed" as
-        // proof it had sounded — history said `Rang` for a morning nothing was
-        // ever scheduled for (REVIEW #2). Not armed leaves the occurrence
+        // proof it had sounded — history said `Rang` for an occurrence nothing
+        // was ever scheduled for (REVIEW #2). Not armed leaves the occurrence
         // undecided instead, so the remaining ladder rungs try again.
         if (armed) {
           armedWith = decision;
@@ -1548,7 +1549,7 @@ class NivaatEngine {
           // its CheckState must reach disk NOW rather than at the end of the
           // pass. A drop landing in that gap found no pending and no saved
           // `ringScheduled` either (the copyWith above is still only in
-          // memory), so it matched nothing, and the morning that never rang
+          // memory), so it matched nothing, and the occurrence that never rang
           // was recorded as merely unconfirmed instead of missed.
           if (!atOrPastAlarm) await store.saveCheckState(state);
           if (atOrPastAlarm && !rolledOn) {
@@ -1576,8 +1577,8 @@ class NivaatEngine {
           // scheduling, AlarmKit cancels then schedules, and the late branch
           // above cancelled the pre-arm outright. Carrying an earlier rung's
           // `true` forward is REVIEW #2 exactly: the next pass reads
-          // "committed, and its time has passed" and writes `Rang` for a
-          // morning with nothing armed on the device.
+          // "committed, and its time has passed" and writes `Rang` for an
+          // occurrence with nothing armed on the device.
           //
           // Clearing is also the safe direction in the rarer case where the
           // failure came BEFORE anything was destroyed (a settings validation
@@ -1624,8 +1625,8 @@ class NivaatEngine {
     );
     // At/after T and a ring really armed → hold pending until audible / drop /
     // ambiguous settle. **Do NOT write Rang on schedule success** — accepting
-    // the schedule only means the ring is owed. The morning's card comes DOWN:
-    // the ring is that morning's notification now, and a "still checking" card
+    // the schedule only means the ring is owed. The occurrence's card comes
+    // DOWN: the ring is its notification now, and a "still checking" card
     // beside a sounding alarm is just noise.
     if (atOrPastAlarm &&
         armedWith != null &&
@@ -1641,7 +1642,7 @@ class NivaatEngine {
       // The card comes down on this exit too. The line that does it for the
       // straight-through path sits below, placed there so a mid-await settle
       // could not return past it — and this exit, added later, returned past
-      // it anyway, leaving `Still checking` up for a morning recorded as
+      // it anyway, leaving `Still checking` up for an occurrence recorded as
       // missed. No pending is saved on this branch (the settle owns the
       // record), so there is no durable-write-first ordering to respect.
       if (_hostClosedOccurrence(alarm.id, next)) {
@@ -1682,10 +1683,10 @@ class NivaatEngine {
         rollOnDone: false,
       );
       await _savePendingKeepingHostMove(pendingRing);
-      // The morning's card comes down on EVERY exit from this branch, not just
-      // the straight-through one: a drop settling mid-await used to return past
-      // this line and leave `Still checking` in the shade for a ring that was
-      // already recorded as missed. **Both host-closed exits do it** — the
+      // The occurrence's card comes down on EVERY exit from this branch, not
+      // just the straight-through one: a drop settling mid-await used to return
+      // past this line and leave `Still checking` in the shade for a ring that
+      // was already recorded as missed. **Both host-closed exits do it** — the
       // early one has its own copy, because it returns before reaching here.
       if (ringing.cardShown) await _cancelCard(alarm.id);
       // The writes above are awaits, so a drop can settle this occurrence
@@ -1740,10 +1741,11 @@ class NivaatEngine {
     }
 
     // Before T (ladder), or a provisional post-T skip → keep the cascade going.
-    // On the first at/after-T skip, post the morning's card AND its permanent
-    // history row: the at-T moment is in the app from the moment it happens
-    // (user decision 2026-07-19), as its own entry — the outcome will be a
-    // separate later row, so dismissing the card never hides what happened.
+    // On the first at/after-T skip, post the occurrence's card AND its
+    // permanent history row: the at-T moment is in the app from the moment it
+    // happens (user decision 2026-07-19), as its own entry — the outcome will
+    // be a separate later row, so dismissing the card never hides what
+    // happened.
     if (atOrPastAlarm && !state.cardShown) {
       final until = alarm.retryCapAt(next);
       final opening = state;
@@ -1772,7 +1774,7 @@ class NivaatEngine {
       // layer that knows what was lost, so it says so.
       if (!await checks.scheduleChecks(alarm.id, rungs)) {
         final lost = nivaatOccurrenceInFlight(alarm, state, t)
-            ? 'this morning stays open until the app is next opened'
+            ? 'this occurrence stays open until the app is next opened'
             : 'the next occurrence waits for an app open';
         debugPrint('nivaat cascade for alarm ${alarm.id} has no wakeup booked '
             'after $t — $lost');
@@ -1796,8 +1798,8 @@ class NivaatEngine {
         at: state.alarmAt,
         pushSeq: pushSeq,
         checkedAt: state.lastCheckAt,
-        // A ring ends the morning's checking, and it ended on the reading that
-        // approved it — so these agree and the row prints no reach note.
+        // A ring ends the occurrence's checking, and it ended on the reading
+        // that approved it — so these agree and the row prints no reach note.
         checkingEndedAt: state.lastCheckAt,
         outcome: CheckOutcome.rang,
         courtSpeedKmh: state.ringCourtSpeedKmh,
@@ -1929,13 +1931,13 @@ class NivaatEngine {
   /// What a vanished ring means on THIS platform.
   ///
   /// The owed ring is gone from the plugin and is not sounding. Android can
-  /// say why — a drop arrives on `Alarm.events` and the morning is recorded
+  /// say why — a drop arrives on `Alarm.events` and the occurrence is recorded
   /// as `Missed` — so silence there is a genuine anomaly and the honest answer
   /// is [RingDisposition.unknown], `Couldn't confirm`.
   ///
   /// **iOS cannot, and that changes the answer entirely.** AlarmKit reports
   /// nothing it does on its own, and an alarm leaves it the moment it fires
-  /// and is dismissed — which is what a perfectly ordinary morning looks like.
+  /// and is dismissed — which is what a perfectly ordinary ring looks like.
   /// It also never opens the app, so Nivaat is essentially never running while
   /// the alert sounds and almost never gets to see the ring as audible. Read
   /// there, "gone with nothing said" would relabel EVERY iOS ring as
@@ -1998,7 +2000,7 @@ class NivaatEngine {
         null,
       );
       await store.clearCheckState(alarm.id);
-      // The morning is closed either way — the ring was audible. A roll that
+      // The occurrence is closed either way — the ring was audible. A roll that
       // failed is owed in the outbox and retried at the next barrier; nothing
       // here holds a pending slot whose loss would be the debt's only record,
       // which is what makes this site different from Rule 2's and the post-T
@@ -2036,7 +2038,7 @@ class NivaatEngine {
   /// permanently vaguer than the evidence. Every other pair is a downgrade or a
   /// duplicate and is refused: nothing replaces `missed`, and nothing replaces
   /// `rang` — a late drop after the user already stopped an audible alarm must
-  /// not rewrite the morning they actually woke up to.
+  /// not rewrite the occurrence they actually woke up to.
   ///
   /// A premature `Rang` from the pre-hold era carries no disposition at all,
   /// so [_supersedeRangWithDisposition] can still find and overwrite it.
@@ -2095,7 +2097,7 @@ class NivaatEngine {
   /// rolling on. The accepted cost is the mirror image: a crash between the
   /// roll-on and the clear makes the next pass roll on again, which re-arms the
   /// same ring for the same instant and re-saves the same state. A duplicate
-  /// roll is a no-op; a missing one is a morning that never comes.
+  /// roll is a no-op; a missing one is an occurrence that never comes.
   Future<void> _settlePending(
     PendingRing pending, {
     required RingDisposition disposition,
@@ -2122,7 +2124,7 @@ class NivaatEngine {
     // **One transaction: the row that records the verdict, the CheckState that
     // said the occurrence was open, and the intent to open the next one.**
     //
-    // Those three are one fact — this morning is finished and tomorrow is
+    // Those three are one fact — this occurrence is finished and tomorrow is
     // owed — and splitting them is what left the state that has to be recovered
     // from. It stops short of the roll itself, which is a platform call and
     // cannot be inside a transaction (an alarm armed in one stays armed through
@@ -2199,16 +2201,17 @@ class NivaatEngine {
         // trade `rollOnDone` refuses to make: the outer pass reads the mark,
         // skips its own roll, and the occurrence closes with nothing following
         // it. `_rollOn` is keyed on the occurrence, so a second attempt is a
-        // no-op rather than a second morning — the mark is an optimisation, and
-        // it must not outrank the truth.
+        // no-op rather than a second occurrence — the mark is an optimisation,
+        // and it must not outrank the truth.
         if (rolled) {
           _hostRolledOccurrences
               .add(_occurrenceKey(pending.alarmId, pending.occurrenceAt));
         }
       }
       // A deleted alarm has nothing to roll on to — but its slot must still go,
-      // or every later pass re-settles a morning nobody is waiting for. That is
-      // `rolled` staying true: nothing is owed, so nothing is being abandoned.
+      // or every later pass re-settles an occurrence nobody is waiting for.
+      // That is `rolled` staying true: nothing is owed, so nothing is being
+      // abandoned.
     }
 
     // **Only this occurrence's own slot may be cleared, matched on the
@@ -2256,8 +2259,8 @@ class NivaatEngine {
       if (r.outcome != CheckOutcome.rang) continue;
       final existing = r.ringDisposition;
       // A settled verdict is replaced only by a better-informed one — see
-      // [_canReplaceVerdict]. In particular a `rang` row is a morning the user
-      // woke up to, and a late drop must never rewrite it.
+      // [_canReplaceVerdict]. In particular a `rang` row is an occurrence the
+      // user woke up to, and a late drop must never rewrite it.
       if (existing != null && !_canReplaceVerdict(existing, disposition)) {
         continue;
       }
@@ -2294,10 +2297,10 @@ class NivaatEngine {
   /// Settle any pending ring the plugin no longer holds and is not sounding.
   ///
   /// **This runs on every platform** — it is the only thing that closes a
-  /// morning whose ring was held pending and then simply happened while the app
-  /// was not watching, which on iOS is the ordinary case rather than the
+  /// occurrence whose ring was held pending and then simply happened while the
+  /// app was not watching, which on iOS is the ordinary case rather than the
   /// exception. Skipping it there left iOS pendings on disk forever and the
-  /// morning recorded nowhere at all, which is worse than mislabelling it.
+  /// occurrence recorded nowhere at all, which is worse than mislabelling it.
   ///
   /// What differs by platform is the WORD, not whether to write one: see
   /// [_vanishedRingDisposition].
@@ -2319,7 +2322,7 @@ class NivaatEngine {
         // Everything between the outer read and here — the drain, the other
         // alarms' settles, their roll-ons — can arm or move this very id, and
         // an older snapshot would then call a ring that exists "vanished" and
-        // close the morning on it.
+        // close the occurrence on it.
         final armed = await scheduler.scheduledAlarms();
         // The id alone is not enough: ring ids repeat every day, so tomorrow's
         // pre-arm under the same number would make today's stale pending look
@@ -2390,7 +2393,7 @@ class NivaatEngine {
       // `scheduledFor` at the time the host has already moved away from, and
       // every later comparison keys on that. `_recoverAmbiguousPending` then
       // reads a ring the platform still holds as a DIFFERENT ring and settles
-      // the morning as vanished, and a second, larger move falls outside the
+      // the occurrence as vanished, and a second, larger move falls outside the
       // slack and is rejected as the wrong occurrence.
       if (pending == null) {
         throw const HostAlarmEventNotReady('no pending ring to move yet');
@@ -2418,7 +2421,7 @@ class NivaatEngine {
       // **The slot belongs to ONE occurrence, so a move for another may not
       // take it.** `savePendingRing` keys on `alarmId` alone, and
       // `_matchPendingForHostEvent` will happily synthesize a pending for a
-      // different morning — so a deferral of tomorrow's `nextRing` wrote
+      // different occurrence — so a deferral of tomorrow's `nextRing` wrote
       // straight over today's held ring and erased the only record that it was
       // still owed. Same rule the settle path's clear already follows; it was
       // applied there and not here.
@@ -2443,7 +2446,7 @@ class NivaatEngine {
       // microtask as `scheduleRing`'s future completes — and a refused
       // foreground service lands in exactly those seconds (upstream #424), so
       // it is the likeliest moment for this drop to arrive. Returning here
-      // marked it done and the morning was later recorded as merely
+      // marked it done and the occurrence was later recorded as merely
       // unconfirmed rather than missed.
       //
       // Asking for it back works here, unlike in Arunoday, because Nivaat's
@@ -2469,7 +2472,7 @@ class NivaatEngine {
   ///
   /// A pre-arm is set for the occurrence's exact minute and a deferral moves it
   /// by seconds, so two minutes is generous for "the same ring" while still
-  /// refusing an event for a different morning — the ids repeat daily, so
+  /// refusing an event for a different occurrence — the ids repeat daily, so
   /// yesterday's drop and today's ring wear the same number.
   static const Duration _hostEventSlack = Duration(minutes: 2);
 
@@ -2480,9 +2483,9 @@ class NivaatEngine {
   /// whichever retry found calm air — so it cannot be matched by proximity to
   /// the alarm's minute like the other two lockers. **It is bounded by the
   /// occurrence's own retry window instead**, because "any lateRing event at or
-  /// after `alarmAt`" is satisfied by every future morning as well: a replayed
-  /// drop from last Tuesday would then close today's occurrence and roll the
-  /// cascade on, one day early, on evidence a week old.
+  /// after `alarmAt`" is satisfied by every future occurrence as well: a
+  /// replayed drop from last Tuesday would then close today's occurrence and
+  /// roll the cascade on, one day early, on evidence a week old.
   bool _lateRingBelongsTo(
     NivaatAlarm alarm,
     DateTime occurrenceAt,
@@ -2615,7 +2618,7 @@ class NivaatEngine {
   /// [closed]'s own ring locker, which may still be holding a live alarm —
   /// see [_evaluate] for why that mattered.
   /// **Records the intent before carrying it out**, so a crash cannot lose the
-  /// next morning.
+  /// next occurrence.
   ///
   /// This is the one place a database transaction genuinely could not reach.
   /// Rolling on arms a real alarm, and no `ROLLBACK` un-arms one — so the
@@ -2667,7 +2670,7 @@ class NivaatEngine {
     // hand, and a court deleted since the intent was recorded should be seen.
     final courts = await store.loadCourts();
     // Always open the occurrence *after* [closed]. A nextRing drop can close a
-    // morning that is still in the future relative to wall clock; using only
+    // occurrence that is still in the future relative to wall clock; using only
     // the pass clock then hits `nextOccurrence(t) == closed` and would skip the
     // cascade (H5). Prefer the later of wall clock and just-past-closed so a
     // roll that already runs after T keeps its own evaluate clock for wind

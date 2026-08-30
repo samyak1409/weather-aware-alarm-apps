@@ -25,9 +25,9 @@ void main() {
   group('AlarmPkgScheduler applies the loudness ramp exactly once', () {
     // Regression (2026-07-26): this scheduler passed the ring volume to the
     // asset resolver AND set the system volume to it. With Nivaat's resolver —
-    // which returns a pre-attenuated variant — a windy-morning ring played the
-    // 75% file at 75% system volume, ~56% of full: outside SPEC.md's 75-100%
-    // band, and quieter than the identical ring on iOS.
+    // which returns a pre-attenuated variant — a ring quietened for wind played
+    // the 75% file at 75% system volume, ~56% of full: outside SPEC.md's
+    // 75-100% band, and quieter than the identical ring on iOS.
     test('the tone is resolved at full volume, never pre-attenuated', () {
       final askedFor = <double>[];
       final scheduler = AlarmPkgScheduler(soundAssetForVolume: (v) {

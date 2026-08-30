@@ -40,7 +40,7 @@ import 'engine.dart';
 ///
 /// **The history clause is the reassuring half.** Rows outlive their alarm —
 /// only deleting the COURT removes them (N20) — and without saying so, "delete"
-/// reads as "delete the mornings too", which is the reading that stops someone
+/// reads as "delete the history too", which is the reading that stops someone
 /// tidying up an alarm they no longer want. [history] is counted on the alarm's
 /// own id, which is never reissued (REVIEW #9), so it survives every edit to
 /// the alarm's time and court.
@@ -80,7 +80,7 @@ const int kNivaatAlarmMinuteInterval = 30;
 /// between them. Caught by Samyak.
 ///
 /// The fix is to anchor everything on the alarm actually going off at its set
-/// time, and to say separately that a windy morning shifts the whole thing
+/// time, and to say separately that a windy start shifts the whole thing
 /// later. That is exactly what the engine does: `playWindow` is measured from
 /// the moment the alarm really rings, so a ring rescued at 04:15 moves the
 /// window to 04:45–05:15 — the note's "the times below move with it" is
@@ -723,10 +723,10 @@ class _AlarmSheetState extends State<_AlarmSheet> with WidgetsBindingObserver {
                 ),
                 // **Chronological order — Keep, Time, Minimum** (Samyak,
                 // 2026-08-25). I argued for condition-then-fallback, which put
-                // Keep checking last; his order is the order the morning
-                // actually happens in, and it is the same order the timeline
-                // below reads. Rows and timeline reinforcing each other beats
-                // either one being individually better argued.
+                // Keep checking last; his order is the order events actually
+                // happen in, and it is the same order the timeline below reads.
+                // Rows and timeline reinforcing each other beats either one
+                // being individually better argued.
                 _PlayRow(
                   label: 'Keep checking',
                   hint:
@@ -875,10 +875,12 @@ class _Timeline extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Not "YOUR MORNING" (Samyak, 2026-08-25). The codebase calls an
+            // Not "YOUR MORNING" (Samyak, 2026-08-25). The codebase called an
             // occurrence a morning everywhere — the story test, the card
             // comments — and that leaked onto a screen where it is simply
-            // wrong: nothing stops you setting this alarm for 15:00.
+            // wrong: nothing stops you setting this alarm for 15:00. The prose
+            // behind it was swept on 2026-08-30; this is the screen that caught
+            // it.
             //
             // And not the "WHAT HAPPENS" that replaced it either: this block
             // describes the DRAFT on screen, not an alarm as saved, and it is
@@ -959,7 +961,7 @@ class _PlayRow extends StatelessWidget {
 /// the control is a trailer at either size.
 ///
 /// **Every minutes row gets the dev extra now** (Samyak, 2026-08-25). It was
-/// Keep checking's alone, which made a test morning half-fast: the retry
+/// Keep checking's alone, which made a test occurrence half-fast: the retry
 /// window shrank to 15 minutes while the play window it was retrying stayed
 /// half an hour out and half an hour long.
 class _MinutesSegmented extends StatelessWidget {

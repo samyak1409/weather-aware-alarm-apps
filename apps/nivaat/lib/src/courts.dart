@@ -35,7 +35,7 @@ import 'controller.dart';
 /// with 5 history entries`). Two rewrites were weighed and both are wrong the
 /// same way: `2 alarms and 5 history entries USE Society Court` says history
 /// *uses* a court, which it does not — an alarm points at a court, a row is a
-/// record of a morning that already happened there — and a compound subject
+/// record of an occurrence that already happened there — and a compound subject
 /// then needs a plural verb, so `1 alarm and 1 history entry uses` is
 /// ungrammatical on top. Hanging both off `deletes` removes the verb from the
 /// argument entirely: nothing has to agree with a count, the trailing

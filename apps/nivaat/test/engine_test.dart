@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine_fakes.dart';
 
-/// Records every push to the morning's single card, in order, plus the body
+/// Records every push to the occurrence's single card, in order, plus the body
 /// each one rendered — the body is where every wording decision lands, so a
 /// test that only counts pushes would miss all of them.
 void main() {
@@ -29,7 +29,7 @@ void main() {
     api = FakeApi();
     notifier = FakeNotifier();
     final store = NivaatStore();
-    // Seed the store, the way `morning_story_test` already does. The engine
+    // Seed the store, the way `occurrence_story_test` already does. The engine
     // re-reads it before it arms anything (`_stillLive`), because an alarm
     // that has left the store mid-pass must not be scheduled — so an alarm
     // that was NEVER in it is a fixture production cannot produce, and tests
@@ -58,7 +58,7 @@ void main() {
     // the numbers alone; "Play!" moved up into the title (2026-07-22).
     expect(ring.scheduled[todayRing]!.title, 'Home Court · 06:00 · Play! 🏸');
     // Checked at T−12h the evening before, so the note carries the date —
-    // a bare "18:00" would read as this morning.
+    // a bare "18:00" would read as the alarm's own day.
     expect(ring.scheduled[todayRing]!.body,
         'wind 3 (≤4) · gusts 5 (≤15) km/h · checked 11 Jul 18:00');
     // **The window asked for is when you PLAY, never the alarm instant.**
@@ -111,7 +111,7 @@ void main() {
     expect(history.first.volume, 0.85);
     // **A rang row names its slot too** (2026-08-25). Skipped rows carried one
     // from the day the window rule landed; ring rows did not, so the log
-    // explained a windy morning and shrugged at a calm one. The slot is the
+    // explained a windy occurrence and shrugged at a calm one. The slot is the
     // windiest minute of the play window, so it is on the grid and inside
     // that window — never the alarm time, which is what a reader would
     // otherwise assume the numbers were taken at.
@@ -168,7 +168,7 @@ void main() {
     // And the pass is NOT a no-op — it says so, and books the next retry, so
     // the still-checking card can sit beside a pre-arm that then sounds.
     expect(notifier.extended, hasLength(1),
-        reason: 'the morning is on the record as still checking');
+        reason: 'the occurrence is on the record as still checking');
     expect(checks.booked[7], alarmAt.add(const Duration(minutes: 15)),
         reason: 'the retry after T is booked either way');
   });
@@ -290,7 +290,7 @@ void main() {
 
   test('windy at T, calm in the retry window -> rings late, card gives way',
       () async {
-    api.sample = wind(9.0, 10.0); // windy — the morning's card posts at T
+    api.sample = wind(9.0, 10.0); // windy — the occurrence's card posts at T
     await engine.evaluateAlarm(alarm, [court],
         now: alarmAt.subtract(const Duration(minutes: 1)));
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
@@ -340,8 +340,8 @@ void main() {
     expect(history.last.watchedUntil, isNotNull);
     expect(notifier.shown, isEmpty, reason: 'a ring needs no skip card');
     expect(notifier.extended, hasLength(1),
-        reason: 'still the only card push this morning made');
-    // The ROW stays, the CARD does not: the ring is this morning's
+        reason: 'still the only card push this occurrence made');
+    // The ROW stays, the CARD does not: the ring is this occurrence's
     // notification now, and a "still checking" card beside a sounding alarm
     // is noise. (`extended` counts pushes that happened, not what is showing.)
     expect(notifier.cancelled, contains(alarm.id),
@@ -536,7 +536,7 @@ void main() {
     test('the cascade keeps trying, and arms as soon as scheduling recovers',
         () async {
       // Leaving the occurrence undecided is the point: a refusal costs this
-      // rung, not the morning. The ladder has seven more.
+      // rung, not the occurrence. The ladder has seven more.
       ring.accepts = false;
       api.sample = wind(5.0, 5.0);
       await engine.evaluateAlarm(alarm, [court],
@@ -552,9 +552,9 @@ void main() {
     });
 
     test('at T, a refused ring falls through to the watching card', () async {
-      // Not silence: the morning still gets its one card and its history row,
-      // because from the user's side "we could not ring" is a skip like any
-      // other and the retry window is still theirs.
+      // Not silence: the occurrence still gets its one card and its history
+      // row, because from the user's side "we could not ring" is a skip like
+      // any other and the retry window is still theirs.
       ring.accepts = false;
       api.sample = wind(5.0, 5.0);
       // A rung before T, so the occurrence is in flight when T arrives —
@@ -566,7 +566,7 @@ void main() {
       await engine.evaluateAlarm(alarm, [court], now: alarmAt);
 
       expect(notifier.extended, hasLength(1),
-          reason: 'the morning is explained rather than dropped');
+          reason: 'the occurrence is explained rather than dropped');
       expect(ring.scheduled, isEmpty);
     });
 
@@ -599,7 +599,7 @@ void main() {
           (await engine.store.loadHistory())
               .where((h) => h.outcome == CheckOutcome.rang),
           isEmpty,
-          reason: 'no ring ever sounded, so no morning may say it did');
+          reason: 'no ring ever sounded, so no row may say it did');
     });
 
     test('a failed same-id RE-arm mid-ladder drops the claim too', () async {
@@ -631,9 +631,9 @@ void main() {
     test('a refused check booking does not pass for a booked cascade (#22)',
         () async {
       // On Android nothing else re-books an alarm — checks only reschedule
-      // themselves — so a swallowed booking failure ends the morning: no check
-      // at T, no retries, no card. The engine may not carry on as though a
-      // wakeup exists.
+      // themselves — so a swallowed booking failure ends the occurrence: no
+      // check at T, no retries, no card. The engine may not carry on as though
+      // a wakeup exists.
       checks.accepts = false;
       api.sample = wind(5.0, 5.0);
 
@@ -1200,8 +1200,9 @@ void main() {
     await engine.store.saveAlarms([alarm, alarm2]); // alarm.courtId == court.id
     // c1 has two rows from its live alarm (7) plus one from an alarm deleted
     // earlier (99) — court-keyed, so that orphan is still c1's and gets deleted.
-    // Alarm 7's pair is ONE morning pushed twice, so they carry different push
-    // numbers; sharing one would converge them into a single row by design.
+    // Alarm 7's pair is ONE occurrence pushed twice, so they carry different
+    // push numbers; sharing one would converge them into a single row by
+    // design.
     for (final (id, courtId, seq) in [
       (7, 'c1', 1),
       (7, 'c1', 2),
@@ -1484,7 +1485,7 @@ void main() {
     });
 
     // Toggle-off, delete, edit-abandon and the whole card lifecycle moved to
-    // morning_story_test.dart, which asserts them as whole rendered strings.
+    // occurrence_story_test.dart, which asserts them as whole rendered strings.
 
     test('a missing court cancels cards even when the alarm is still saved',
         () async {
@@ -1626,7 +1627,7 @@ void main() {
   });
 
   // The user-visible half of mid-window edits — the card and the rows they
-  // produce — is asserted as whole strings in morning_story_test.dart. What
+  // produce — is asserted as whole strings in occurrence_story_test.dart. What
   // stays here is the machinery underneath: which occurrence survives, and
   // whether the cascade keeps flying.
   group('mid-window edits keep or abandon the occurrence', () {
@@ -1654,7 +1655,7 @@ void main() {
           ring.scheduled.containsKey(lateRing) ||
               ring.log.any((e) => e.id == lateRing),
           isTrue,
-          reason: 'the same morning rings under the raised limit');
+          reason: 'the same occurrence rings under the raised limit');
       expect(
           (await engine.store.loadHistory())
               .any((h) => h.kind == HistoryKind.cancelled),
@@ -1676,7 +1677,7 @@ void main() {
       await engine.evaluateAlarm(added, [court], now: t);
 
       expect((await engine.store.loadCheckState(7))!.alarmAt, alarmAt,
-          reason: 'still the same morning');
+          reason: 'still the same occurrence');
     });
 
     test('dropping the in-flight weekday abandons it', () async {
@@ -1696,8 +1697,8 @@ void main() {
       // that an outcome existed *after* an evaluate, so it stayed green while
       // the retain was pushing an alerting `watching until 06:01` card at
       // 06:02 first — a promise already broken, and an immutable row with it.
-      // Split in two now: the retain closes the morning, the evaluate only
-      // rolls tomorrow on. (`morning_story_test` 14d locks how it reads.)
+      // Split in two now: the retain closes the occurrence, the evaluate only
+      // rolls tomorrow on. (`occurrence_story_test` 14d locks how it reads.)
       await windyThroughT();
       final tiny = alarm.copyWith(retryMinutesAfter: 1);
       final t = alarmAt.add(const Duration(minutes: 2));
@@ -1729,7 +1730,7 @@ void main() {
           reason: 'today is closed; the roll-on has booked tomorrow');
     });
 
-    test('widening after the old cap died does not resurrect that morning',
+    test('widening after the old cap died does not resurrect that occurrence',
         () async {
       api.sample = wind(9.0, 10.0);
       final short = alarm.copyWith(retryMinutesAfter: 1);
@@ -1778,7 +1779,7 @@ void main() {
       row(1, HistoryKind.stillChecking, at: tomorrow),
     ]);
 
-    expect(latest, hasLength(2), reason: 'two mornings, not four rows');
+    expect(latest, hasLength(2), reason: 'two occurrences, not four rows');
     expect(latest['7@${alarmAt.millisecondsSinceEpoch}']!.kind,
         HistoryKind.outcome,
         reason: 'list order must not decide it — the push number does');
@@ -1787,7 +1788,7 @@ void main() {
 
     // Equal numbers have to break SOMEWHERE, and this function takes any
     // iterable — so the rule is list order, and callers pass newest-first.
-    // Resolving a tie the other way reads a finished morning as an open
+    // Resolving a tie the other way reads a finished occurrence as an open
     // window, and home would promise checking that already stopped.
     final tied = nivaatLatestRowPerOccurrence([
       row(0, HistoryKind.outcome),
@@ -1825,7 +1826,7 @@ void main() {
   test('every sound the ramp can name is actually shipped', () {
     // The ring asset is chosen at schedule time from a computed filename, so a
     // variant that isn't in assets/ fails at RING time — silently, hours later,
-    // on the one morning it mattered. Sweep the whole ramp against the disk.
+    // on the one occurrence it mattered. Sweep the whole ramp against the disk.
     final was = nivaatSelectedSound;
     addTearDown(() => nivaatSelectedSound = was);
     nivaatSelectedSound = null;
@@ -1853,7 +1854,7 @@ void main() {
     // `_pushCard` writes the row first and only then notifies, so the shade
     // can never hold a card the log cannot explain. The reverse order is the
     // one the user cannot recover from: a notification blaming the wind for a
-    // morning that left no record.
+    // occurrence that left no record.
     final failing = NivaatEngine(
       store: FailingHistoryStore(),
       scheduler: ring,
@@ -1904,7 +1905,7 @@ void main() {
       // The kind wins over the reason here — the first branch of the builder,
       // and the only one that ignores its numbers. The record still CARRIES
       // the last known wind (so the data stays true); the line just doesn't
-      // speak for it, because you ended the morning, not the weather.
+      // speak for it, because you ended the occurrence, not the weather.
       final cancelled = HistoryRecord(
         alarmId: 7,
         courtId: 'c1',
@@ -1923,7 +1924,8 @@ void main() {
     test('a rang row without a volume drops the number, never the sheet', () {
       // `volume` is optional on the record, and history is PERSISTED: force-
       // unwrapping it meant one such row crashed the log open-after-open. The
-      // row still has to explain the morning, so only the parenthetical goes.
+      // row still has to explain the occurrence, so only the parenthetical
+      // goes.
       expect(nivaatHistoryLine(row(CheckOutcome.rang)),
           'Rang · wind 3 (≤4) · gusts 16 (≤15) km/h',
           reason: 'degrades like whenChecked and windGustSummary do');
@@ -1960,7 +1962,7 @@ void main() {
 
     test('the numbers name the slot they came from (2026-08-25)', () {
       // The card learned this when the window rule landed; history had not,
-      // and it is the surface that has to explain a morning weeks later.
+      // and it is the surface that has to explain an occurrence weeks later.
       // `Skipped · wind 6 (≤4)` beside a sub reading `06:00 · last checked
       // 06:00` invites exactly the wrong conclusion — that 06:00 was windy,
       // when 06:00 may have been still and the six came from a slot three
@@ -1987,7 +1989,7 @@ void main() {
 
     test('a slot from another day carries its date, like every other time', () {
       // Last night's 22:00 reading behind a 06:00 alarm — a bare `22:00` here
-      // would read as this morning, four hours after the alarm.
+      // would read as the alarm's own day, four hours after it.
       expect(
         nivaatHistoryLine(row(CheckOutcome.skippedWindy,
             slotAt: at.subtract(const Duration(hours: 8)))),
@@ -2254,7 +2256,8 @@ void main() {
     );
   });
 
-  test('nivaatHomeWatchingLine: clears the moment you cancel the morning', () {
+  test('nivaatHomeWatchingLine: clears the moment you cancel the occurrence',
+      () {
     // Toggling the alarm off mid-window appends a `Cancelled` row. The cue has
     // to go with it — the outcome case above shares this code path, but this
     // is the one you reach by hand, and it is the one that would read as the
@@ -2526,9 +2529,10 @@ void main() {
       });
     });
 
-    test('ONE windy slot inside the window skips the whole morning', () async {
+    test('ONE windy slot inside the window skips the whole occurrence',
+        () async {
       // Calm on arrival, windy ten minutes in. The old single-point check rang
-      // this morning; you would have got there and not been able to play.
+      // this one; you would have got there and not been able to play.
       final from = alarmAt.add(const Duration(minutes: 30));
       api.window = [
         wind(5.0, 5.0, from),
@@ -2543,11 +2547,11 @@ void main() {
     test('a RETRY judges its own window, not the one T would have had',
         () async {
       // Woken late, you get on court late — so a retry at T+15 must look at
-      // T+15+ready onwards. Re-judging T's window would decide the morning on
-      // wind from a time you will already have missed.
-      // The morning must SKIP first, or T has a committed ring and the pass at
-      // T+15 settles it and rolls on to tomorrow — a different occurrence, and
-      // a window a day away.
+      // T+15+ready onwards. Re-judging T's window would decide the occurrence
+      // on wind from a time you will already have missed.
+      // The occurrence must SKIP first, or T has a committed ring and the pass
+      // at T+15 settles it and rolls on to tomorrow — a different occurrence,
+      // and a window a day away.
       api.sample = wind(20.0, 9.0);
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(hours: 1)));
@@ -2557,8 +2561,8 @@ void main() {
       final late = alarmAt.add(const Duration(minutes: 15));
       await engine.evaluateAlarm(alarm, [court], now: late);
       // The retry's OWN fetch. Finding calm air it also rings late, finalises
-      // the morning and rolls on — and the roll-on fetches tomorrow's window,
-      // so the last entry belongs to a different occurrence entirely.
+      // the occurrence and rolls on — and the roll-on fetches tomorrow's
+      // window, so the last entry belongs to a different occurrence entirely.
       final retry = api.asked[1];
 
       expect(retry.$1.isAfter(preT.$1), isTrue,
@@ -2571,7 +2575,7 @@ void main() {
 
     test('changing the play window is a CONTINUE edit, like the wind limit',
         () {
-      // It re-decides the same morning under new settings; it does not move
+      // It re-decides the same occurrence under new settings; it does not move
       // the occurrence, so there is nothing to abandon.
       const a = NivaatAlarm(id: 7, hour: 6, minute: 0, courtId: 'c1');
       expect(
@@ -2590,7 +2594,7 @@ void main() {
       // T-23h, not earlier: this fixture is a DAILY alarm, so anything before
       // T-24h resolves to yesterday's occurrence instead. Which also means a
       // daily alarm can never book its own T-24h rung — that instant is the
-      // previous morning's alarm — so eight is the real ceiling here and nine
+      // previous day's alarm — so eight is the real ceiling here and nine
       // is only reachable for a weekly one.
       api.sample = wind(5.0, 5.0);
       await engine.evaluateAlarm(alarm, [court],
@@ -2650,7 +2654,7 @@ void main() {
         checks: FakeChecks(),
         notifier: FakeNotifier(),
       );
-      // Soft-fails as a no-data morning rather than spinning.
+      // Soft-fails as a no-data occurrence rather than spinning.
       await e.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(hours: 1)));
       expect(rejecting.calls, 1);
@@ -2693,10 +2697,10 @@ void main() {
           ['meteofrance_arpege_world', 'cma_grapes_global'],
           reason: 'only the five named go, and order is preserved');
       // The assertion that matters: a real verdict came out of it. Stopping
-      // early failed the fetch, which the engine reads as a no-data morning —
-      // so the alarm simply would not have been armed.
+      // early failed the fetch, which the engine reads as a no-data occurrence
+      // — so the alarm simply would not have been armed.
       expect(ring.scheduled[todayRing]?.at, alarmAt,
-          reason: 'the surviving models decided the morning');
+          reason: 'the surviving models decided the occurrence');
     });
 
     test('every name retired ends as no-data, not as a spin', () async {
@@ -2727,7 +2731,7 @@ void main() {
       expect(await store.loadWindModels(), isEmpty,
           reason: 'a retired name stays retired across reads');
       expect(ring.scheduled[todayRing], isNull,
-          reason: 'nothing answered, so the morning has no reading');
+          reason: 'nothing answered, so the occurrence has no reading');
     });
   });
 
@@ -2759,7 +2763,7 @@ void main() {
       expect(f.checkedAt, first, reason: 'stale, and says so');
     });
 
-    test('a windy morning records a NOT-going verdict', () async {
+    test('a windy occurrence records a NOT-going verdict', () async {
       api.sample = wind(20.0, 9.0);
       await engine.evaluateAlarm(alarm, [court],
           now: alarmAt.subtract(const Duration(hours: 1)));

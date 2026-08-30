@@ -59,8 +59,8 @@ void main() {
 
   test('re-enqueueing a finished intent does not run it again', () async {
     // The idempotency the whole design rests on. Host events arrive at least
-    // once and two isolates can both be told, so a morning gets settled more
-    // than once as a matter of course — and each settle enqueues. Keyed by
+    // once and two isolates can both be told, so an occurrence gets settled
+    // more than once as a matter of course — and each settle enqueues. Keyed by
     // occurrence, so the second one finds the roll already recorded.
     final h = handler();
     await outbox.enqueue(intent);
@@ -96,7 +96,7 @@ void main() {
     expect(await outbox.stateOf(intent.dedupKey), OutboxState.processing);
 
     // Inside the lease, another pass must NOT take it: that is what stops two
-    // isolates arming the same morning twice.
+    // isolates arming the same occurrence twice.
     await outbox.dispatch(handlers,
         now: t.add(OutboxStore.lease - const Duration(seconds: 1)));
     expect(ran, [1]);
@@ -181,8 +181,8 @@ void main() {
     // enqueueing used to ignore any key it already had — so a roll-on that
     // exhausted its attempts could never be claimed again and never
     // re-enqueued. `_rollOn` then returned false forever, the pending slot it
-    // guards was held open forever, and every later pass re-settled a morning
-    // that could never finish.
+    // guards was held open forever, and every later pass re-settled an
+    // occurrence that could never finish.
     //
     // A caller asserting the intent again is new information: nothing carried
     // it out, and the occurrence still owes a roll.
@@ -268,9 +268,9 @@ void main() {
 
   test('prune drops finished rows but keeps the parked ones', () async {
     // A `done` row is the "already carried out" record, so it is kept for as
-    // long as the morning it belongs to could still be re-settled. A `dead` row
-    // is the only trace of an intent that never happened — deleting that would
-    // erase the evidence that a morning was never booked.
+    // long as the occurrence it belongs to could still be re-settled. A `dead`
+    // row is the only trace of an intent that never happened — deleting that
+    // would erase the evidence that an occurrence was never booked.
     final t = DateTime(2026, 8, 12, 6);
     await outbox.enqueue(const OutboxIntent(kind: 'rollOn', dedupKey: 'done:1'),
         now: t);

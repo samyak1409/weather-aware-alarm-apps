@@ -368,11 +368,11 @@ void main() {
   });
 
   test('a fresh CheckState comes from the CONSTRUCTOR', () {
-    // `ringScheduled` and `cardShown` defaulting to false is exactly how a
-    // morning would re-arm a ring or re-post a card it had already done once,
-    // so where they come from matters. They come from here — the columns are
-    // NOT NULL, so there is no absent-value path left that could invent them,
-    // which is what the old `fromJson` guard stood in for. The storage
+    // `ringScheduled` and `cardShown` defaulting to false is exactly how an
+    // occurrence would re-arm a ring or re-post a card it had already done
+    // once, so where they come from matters. They come from here — the columns
+    // are NOT NULL, so there is no absent-value path left that could invent
+    // them, which is what the old `fromJson` guard stood in for. The storage
     // round-trip moved to repos_test.
     final fresh = CheckState(alarmId: 1, alarmAt: DateTime(2026, 7, 13, 6, 0));
     expect(fresh.ringScheduled, isFalse);

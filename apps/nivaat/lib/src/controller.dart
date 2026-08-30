@@ -214,8 +214,8 @@ class NivaatController extends ChangeNotifier {
   /// How many history rows belong to [alarmId] — what the delete-alarm
   /// confirmation says stays behind (N17).
   ///
-  /// Rows survive their alarm on purpose: the log is a record of mornings, not
-  /// of alarms, and only deleting the COURT takes them
+  /// Rows survive their alarm on purpose: the log is a record of occurrences,
+  /// not of alarms, and only deleting the COURT takes them
   /// ([NivaatStore.removeHistoryForCourt]). Saying so is the point of quoting
   /// the number — a delete that looks like it also erases the log would stop
   /// people deleting alarms they no longer want.
@@ -351,7 +351,7 @@ class NivaatController extends ChangeNotifier {
     return true;
   }
 
-  /// Deleting mid-window still closes the morning's story — the history rows
+  /// Deleting mid-window still closes the occurrence's story — the history rows
   /// survive an alarm's deletion, so leaving the last one open would strand a
   /// row reading "watching until 06:30" that nothing will ever answer. What it
   /// does NOT do is keep the card: a notification for an alarm that no longer

@@ -391,7 +391,7 @@ void main() {
     });
 
     test('history prepends newest and is never trimmed', () async {
-      // 65 mornings: one past the 60-row ceiling this store used to enforce
+      // 65 occurrences: one past the 60-row ceiling this store used to enforce
       // (removed 2026-07-31 — the log is permanent, per SPEC). The oldest row
       // must still be there, because nothing but a court delete removes one.
       for (var i = 0; i < 65; i++) {
@@ -410,9 +410,9 @@ void main() {
       expect(h.last.alarmId, 0, reason: 'the very first row survives');
     });
 
-    test('one morning can push past the old ceiling on its own', () async {
-      // The other direction: 65 pushes of a SINGLE occurrence, which is what a
-      // morning does when you keep moving the Keep-checking deadline. Distinct
+    test('one occurrence can push past the old ceiling on its own', () async {
+      // The other direction: 65 pushes of a SINGLE occurrence, which is what
+      // one does when you keep moving the Keep-checking deadline. Distinct
       // pushSeq, so none of them converges onto another.
       for (var i = 0; i < 65; i++) {
         await store.upsertHistory(HistoryRecord(
@@ -427,7 +427,8 @@ void main() {
       }
       final h = await store.loadHistory();
       expect(h, hasLength(65));
-      expect(h.last.pushSeq, 0, reason: 'the morning\'s first promise stands');
+      expect(h.last.pushSeq, 0,
+          reason: 'the occurrence\'s first promise stands');
     });
 
     test('removeHistoryForCourt drops every row for that court, keeps others',

@@ -80,7 +80,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                       final h = c.history[i];
                       // A cancelled row keeps the last known wind reason in
                       // its data but shows none of it, so it needs its own
-                      // icon too — the wind isn't what ended that morning.
+                      // icon too — the wind isn't what ended that occurrence.
                       final icon = h.kind == HistoryKind.cancelled
                           ? Icons.cancel_outlined
                           : switch (h.ringDisposition) {

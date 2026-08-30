@@ -50,7 +50,7 @@ class FakeNotifier extends SkipNotifier {
 
   Iterable<String> get bodies => pushes.map((p) => p.body);
 
-  /// Views by state, so the cascade tests can keep asking "has the morning
+  /// Views by state, so the cascade tests can keep asking "has the occurrence
   /// opened / closed yet?". These count PUSHES to the one card, not separate
   /// notifications — `extended` is every still-checking push, `shown` every
   /// skipped push.
@@ -189,7 +189,7 @@ class FakeRing implements AlarmScheduler {
   /// True: this fake models the **Android** scheduler, the one platform that
   /// reports host drops. `SilentRing` is the iOS-shaped double (false), and
   /// that difference is what decides whether a vanished ring reads as
-  /// `Couldn't confirm` or as an ordinary morning.
+  /// `Couldn't confirm` or as an ordinary ring.
   @override
   bool get reportsHostEvents => true;
 
@@ -242,7 +242,7 @@ class FakeRing implements AlarmScheduler {
 /// That single difference is the whole of AlarmKit's position. An alarm leaves
 /// AlarmKit the moment it fires and is dismissed, which is indistinguishable
 /// from one the host quietly discarded — so an engine that reads "gone" as an
-/// anomaly labels every good morning `Couldn't confirm`. Pair it with
+/// anomaly labels every good ring `Couldn't confirm`. Pair it with
 /// [FakeRing] to assert the two platforms answer the same story differently.
 class NoEventRing extends FakeRing {
   NoEventRing() {

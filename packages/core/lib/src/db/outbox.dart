@@ -11,7 +11,7 @@ import 'tables.dart';
 /// [dedupKey] is the whole idempotency story, so derive it from the thing the
 /// intent is about — an occurrence, not a clock reading. Enqueueing the same
 /// key twice is a no-op whatever state the first one reached, so a repeated
-/// settle of one morning cannot roll it on twice.
+/// settle of one occurrence cannot roll it on twice.
 class OutboxIntent {
   const OutboxIntent({
     required this.kind,
@@ -55,7 +55,7 @@ typedef OutboxHandler = Future<void> Function(OutboxJob job);
 /// rollback leaves that alarm armed with nothing able to un-arm it. So the
 /// transaction that closes the occurrence also records the *intent* here, and
 /// this dispatcher performs the platform call afterwards and marks it done.
-/// Without that step a crash between the two still skips the next morning,
+/// Without that step a crash between the two still skips the next occurrence,
 /// which is the one thing moving to a database was supposed to fix.
 ///
 /// **What it does NOT buy is exactly-once scheduling, and nothing at this layer
@@ -83,8 +83,8 @@ class OutboxStore {
   /// This is the crash window: a process that dies mid-handler leaves the row
   /// [OutboxState.processing], and nothing else may touch it until the lease
   /// runs out. Too short and two isolates run one handler concurrently; too
-  /// long and a crashed roll-on waits that long for the next morning to be
-  /// booked. Two minutes is inside Nivaat's per-minute retry cadence.
+  /// long and a crashed roll-on waits that long for the next occurrence to
+  /// be booked. Two minutes is inside Nivaat's 15-minute retry cadence.
   static const Duration lease = Duration(minutes: 2);
 
   /// How long a failed attempt waits before the next barrier may retake it.
@@ -103,8 +103,8 @@ class OutboxStore {
   ///
   /// Kept rather than deleted because a [OutboxState.done] row IS the "already
   /// rolled on" record — [enqueue] on the same key finds it and does nothing.
-  /// A morning is only re-settleable for so long, so the same seven days the
-  /// host-event claims use.
+  /// An occurrence is only re-settleable for so long, so the same seven days
+  /// the host-event claims use.
   static const Duration doneTtl = Duration(days: 7);
 
   /// Records [intent] — a no-op if it is already owed or already carried out,
@@ -128,7 +128,7 @@ class OutboxStore {
   ///   row could never be claimed again (the dispatcher only ever looks at
   ///   `pending`/`processing`) and never re-enqueued, so `_rollOn` returned
   ///   false forever, the pending slot was held open forever, and every later
-  ///   pass re-settled a morning that could never finish.
+  ///   pass re-settled an occurrence that could never finish.
   ///
   /// Revival is not a busy loop: it costs one attempt per settle, which is the
   /// same per-barrier cadence [retryAfter] enforces inside a single run.
@@ -316,7 +316,7 @@ class OutboxStore {
 
   /// Drops finished rows past [doneTtl]. [OutboxState.dead] rows stay: they are
   /// the record of an intent that never happened, and deleting them would erase
-  /// the only trace of a morning that was never booked.
+  /// the only trace of an occurrence that was never booked.
   Future<void> prune({DateTime? now}) async {
     final cutoff =
         (now ?? DateTime.now()).subtract(doneTtl).microsecondsSinceEpoch;

@@ -18,7 +18,7 @@ Wakes you at **civil dawn** — every day, at your location's real dawn, like hu
 
 ## 🌬️ Nivaat (निवात)
 
-The badminton alarm. Rings **only if the wind at your court stays low enough for your whole session** — and the calmer the morning, the louder it rings. _"yathā dīpo nivāta-stho neṅgate"_ — like a lamp in a windless place that doesn't flicker (Gita 6.19).
+The badminton alarm. Rings **only if the wind at your court stays low enough for your whole session** — and the calmer the wind, the louder it rings. _"yathā dīpo nivāta-stho neṅgate"_ — like a lamp in a windless place that doesn't flicker (Gita 6.19).
 
 ## Why waking with the dawn works
 

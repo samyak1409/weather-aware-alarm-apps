@@ -159,7 +159,7 @@ int _severity(WindVerdict v) => switch (v) {
 /// Checking one instant was the app's original flaw: it promised a playable
 /// *moment* while the user read it as a playable *session*. You are on court
 /// from `T + timeUntilPlay` for `minPlayMinutes`, so the wind is checked at
-/// every 15-minute slot across that span and the morning rings only if all of
+/// every 15-minute slot across that span and the alarm rings only if all of
 /// them clear.
 ///
 /// **The worst slot decides, and it also carries the volume** — one rule, not
@@ -179,7 +179,7 @@ int _severity(WindVerdict v) => switch (v) {
 /// numbers can be re-run rather than taken on trust.
 ///
 /// [window] must not be empty — a fetch that returned nothing is a *no-data*
-/// morning, which the engine handles by never calling this at all.
+/// occurrence, which the engine handles by never calling this at all.
 WindDecision decide(List<WindSample> window, WindThresholds thresholds) {
   assert(window.isNotEmpty, 'no-data is the caller\'s branch, not a verdict');
   var worst = decideSlot(window.first, thresholds);
@@ -269,7 +269,7 @@ List<int> minuteOptionsFor({
 /// **Two consequences, both known and both accepted.** On Android the T-0 check
 /// and the ring are exact alarms for the same instant, so their order is the
 /// platform's to choose: if the ring wins, Rule 1 sees it audible and leaves it
-/// alone; if the check wins on a calm morning, it re-arms into the late locker
+/// alone; if the check wins on a calm reading, it re-arms into the late locker
 /// and the alarm sounds ~10s late. On iOS the wakeup's date is a floor rather
 /// than a schedule, so the T-0 re-check **may not run at all** and the pre-arm
 /// sounds on time.

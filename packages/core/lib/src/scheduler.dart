@@ -21,7 +21,7 @@ abstract class AlarmScheduler {
   /// "scheduled" must check it.** `false` means no alarm exists: on iOS a
   /// denied or unavailable AlarmKit, on Android a rejected `Alarm.set`
   /// (`AlarmException` since alarm 5.9.0 / upstream #420). Silently returning
-  /// here was how Nivaat came to log `Rang` for a morning nothing was ever
+  /// here was how Nivaat came to log `Rang` for an occurrence nothing was ever
   /// armed for (REVIEW #2).
   ///
   /// `true` means the platform accepted and armed it. On Android that claim
@@ -54,7 +54,7 @@ abstract class AlarmScheduler {
   /// drops are reported, a vanished ring with no event is genuinely ambiguous
   /// and Nivaat records `Couldn't confirm`; where they are not, a vanished
   /// ring is just an alarm that fired and was dismissed — the ordinary case —
-  /// and reading it as a miss would label **every** iOS morning as unconfirmed.
+  /// and reading it as a miss would label **every** iOS ring as unconfirmed.
   /// Nivaat gates its ambiguous-B policy on this; see `_settleRingScheduled`.
   bool get reportsHostEvents;
 
@@ -73,7 +73,7 @@ abstract class AlarmScheduler {
   /// snapshot to reason over, instead of a series that can shift underneath it.
   ///
   /// Bookkeeping for move recovery / cancel policy only — **never Rang proof**.
-  /// A time surviving in the plugin's storage does not mean the morning rang.
+  /// A time surviving in the plugin's storage does not mean the alarm rang.
   ///
   /// **Throws if the platform cannot be asked.** An empty map means the
   /// platform answered and holds nothing; it must never stand in for a failed

@@ -65,9 +65,9 @@ String? nivaatWindWord(WindVerdict verdict) => switch (verdict) {
 /// **The reason names the SLOT that failed** (2026-08-25), because the numbers
 /// beside it belong to that slot and not to the check that read it.
 ///
-/// A morning is decided across the whole play window now, so `Too windy · wind
-/// 6 (≤4) · last checked 06:00` was quietly contradictory: 06:00 may have been
-/// perfectly calm, and the six came from a slot three quarters of an hour
+/// An occurrence is decided across the whole play window now, so `Too windy ·
+/// wind 6 (≤4) · last checked 06:00` was quietly contradictory: 06:00 may have
+/// been perfectly calm, and the six came from a slot three quarters of an hour
 /// later. `Too windy at 06:45` says which moment it is talking about.
 ///
 /// The slot is dropped when there is none — a no-data row carries no numbers,
@@ -99,7 +99,7 @@ String _reason(HistoryRecord record) {
 ///
 /// `alarmAt` only decides whether the date is needed: a ring booked from last
 /// night's forecast reads ` · checked 17 Jul 22:00`, never a bare `22:00` that
-/// looks like this morning.
+/// looks like the alarm day.
 String nivaatCheckedNote(
   DateTime whenChecked,
   DateTime alarmAt, {
@@ -130,14 +130,14 @@ String nivaatWatchingUntilPhrase(DateTime until, DateTime alarmAt) =>
     'watching until ${fmtCheckTime(until, alarmAt)}';
 
 /// `watched until 06:30` — how far checking actually reached, used ONLY when
-/// that differs from the last reading. They match on almost every morning;
+/// that differs from the last reading. They match on almost every occurrence;
 /// when they don't, the final attempt failed to reach the network, and this is
 /// the one thing separating "we gave up at 06:29" from "we tried at 06:30 and
 /// got nothing" (2026-07-26).
 String nivaatWatchedUntilPhrase(DateTime endedAt, DateTime alarmAt) =>
     'watched until ${fmtCheckTime(endedAt, alarmAt)}';
 
-/// `stopped 06:05` — when YOU ended the morning.
+/// `stopped 06:05` — when YOU ended the occurrence.
 String nivaatStoppedPhrase(DateTime stoppedAt, DateTime alarmAt) =>
     'stopped ${fmtCheckTime(stoppedAt, alarmAt)}';
 
@@ -160,8 +160,8 @@ String nivaatStillCheckingBody(HistoryRecord record, DateTime until) =>
     '${_reasonNumsChecked(record)} · '
     '${nivaatWatchingUntilPhrase(until, record.at)}';
 
-/// Body once the morning ends without a ring (MESSAGES.md N2 · skipped).
-/// Empty for a ring — that morning's card is the ring itself.
+/// Body once the occurrence ends without a ring (MESSAGES.md N2 · skipped).
+/// Empty for a ring — that occurrence's card is the ring itself.
 String nivaatSkippedBody(HistoryRecord record) {
   if (record.outcome == CheckOutcome.rang) return '';
   final reach = nivaatOutlastedLastReading(record)
@@ -170,7 +170,7 @@ String nivaatSkippedBody(HistoryRecord record) {
   return '${_reasonNumsChecked(record)}$reach';
 }
 
-/// Body when you stopped the morning yourself (MESSAGES.md N2 · cancelled).
+/// Body when you stopped the occurrence yourself (MESSAGES.md N2 · cancelled).
 /// Richer than its history row on purpose: the row sits beside the still-
 /// checking row that already carries the numbers, the card has no neighbour.
 String nivaatCancelledBody(HistoryRecord record) {
@@ -251,12 +251,12 @@ class SkipNotifier {
     return options != null && !options.isEnabled;
   }
 
-  // ONE CARD PER MORNING (2026-07-26). A single notification id
+  // ONE CARD PER OCCURRENCE (2026-07-26). A single notification id
   // ([NivaatIds.card]) posts at T as "Still checking" and is rewritten in
-  // place to "Skipped" or "Cancelled" as the morning resolves. There is no
+  // place to "Skipped" or "Cancelled" as the occurrence resolves. There is no
   // second card: the earlier design left the heads-up standing beside a fresh
   // skip card, so the shade kept a promise ("watching until 06:30") that the
-  // morning had already broken.
+  // occurrence had already broken.
   //
   // Every push ALERTS. Rewriting is new information every time — even the
   // Keep-checking deadline move, which is a change you made and want
@@ -324,11 +324,11 @@ class SkipNotifier {
       _push(record, courtName, kNivaatStillChecking,
           nivaatStillCheckingBody(record, until));
 
-  /// The morning ended without a ring. Rewrites the same card.
+  /// The occurrence ended without a ring. Rewrites the same card.
   Future<void> showSkipped(HistoryRecord record, String courtName) =>
       _push(record, courtName, kNivaatSkipped, nivaatSkippedBody(record));
 
-  /// You ended the morning yourself — toggled the alarm off, or edited its
+  /// You ended the occurrence yourself — toggled the alarm off, or edited its
   /// time or court so today's window was abandoned. Rewrites the same card.
   Future<void> showCancelled(HistoryRecord record, String courtName) =>
       _push(record, courtName, kNivaatCancelled, nivaatCancelledBody(record));
@@ -336,7 +336,7 @@ class SkipNotifier {
   /// Take [alarmId]'s card down. Used when the alarm is **deleted** or its
   /// court is gone — a card for something that no longer exists is an orphan
   /// no rewrite can fix — and when a late ring lands, where the ring itself
-  /// becomes that morning's card.
+  /// becomes that occurrence's card.
   ///
   /// Cancelling an id that isn't posted is a no-op, so this is safe on every
   /// pass. History keeps the durable record either way.

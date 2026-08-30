@@ -326,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 12),
           Text(
             'Rings only when the wind at your court is low enough to play. '
-            'The calmer the morning, the louder it rings.',
+            'The calmer the wind, the louder it rings.',
             style: text.bodyMedium,
           ),
           const Spacer(flex: 2),
@@ -335,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// N15's live line: **the morning's own state when one is open, otherwise
+  /// N15's live line: **the occurrence's own state when one is open, otherwise
   /// the forecast verdict.**
   ///
   /// This is where the old top-of-screen "still checking" cue went (N11, 2026-
@@ -346,7 +346,7 @@ class _HomeScreenState extends State<HomeScreen>
   /// and the trip to history all go with it.
   ///
   /// A retry window outranks the forecast because it is the newer fact: the
-  /// alarm did not ring at T and the morning is still live, which no
+  /// alarm did not ring at T and the occurrence is still live, which no
   /// "going / not going to ring" phrasing can say.
   Widget _liveLine(TextTheme text, NivaatAlarm a) {
     final state = c.checkStates[a.id];
@@ -368,7 +368,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// The dot + words. The accent means "something is live here" — either the
-  /// wind says it would ring, or the morning is still being checked.
+  /// wind says it would ring, or the occurrence is still being checked.
   ///
   /// **Not green/red** (2026-08-25): both apps are built on one accent over
   /// true black, so a third and fourth colour would be the first break in that

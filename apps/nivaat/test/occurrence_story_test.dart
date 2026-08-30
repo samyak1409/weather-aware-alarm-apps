@@ -13,9 +13,9 @@ import 'engine_fakes.dart';
 /// **An occurrence, not "a morning"** (Samyak, 2026-08-25). The codebase used
 /// the two as synonyms throughout, which was harmless until it reached the
 /// screen — the editor's timeline shipped a `YOUR MORNING` heading above an
-/// alarm nothing stops you setting for 15:00. This file's name went with it;
-/// the fixtures below are still 06:00 mornings, and the prose still calls them
-/// that where that is what they are.
+/// alarm nothing stops you setting for 15:00. This file's name went first; the
+/// prose everywhere else was swept on 2026-08-30. The fixtures below are still
+/// 06:00 alarms — but that is the fixture, not the vocabulary.
 ///
 /// This file is the catalogue Samyak signed off on (2026-07-26). Counting
 /// pushes or rows is not enough: every wording decision in this change lives
@@ -33,7 +33,7 @@ void main() {
 
   // wind(9,10) → court 5.4 (>4, windy). wind(5,5) → court 3.0 (calm).
   // **The reason names the slot the numbers came from, not the check time.**
-  // A morning is decided across the whole play window, so `Too windy · … ·
+  // An occurrence is decided across the whole play window, so `Too windy · … ·
   // last checked 06:00` was contradictory: 06:00 may have been calm, and the
   // five came from a slot half an hour later.
   const windyBody = 'Too windy at 06:30 · wind 5 (≤4) · gusts 10 (≤15) km/h';
@@ -88,8 +88,8 @@ void main() {
     );
   });
 
-  /// Every row for the morning, oldest first — the sheet renders newest first,
-  /// but a story reads better forwards.
+  /// Every row for the occurrence, oldest first — the sheet renders newest
+  /// first, but a story reads better forwards.
   Future<List<HistoryRecord>> rows() async {
     final all = await engine.store.loadHistory();
     return all.reversed.toList();
@@ -106,7 +106,7 @@ void main() {
   Future<void> runAt(DateTime t, {NivaatAlarm a = alarm}) =>
       engine.evaluateAlarm(a, [court], now: t);
 
-  /// Windy at T: the morning opens its card and its first row.
+  /// Windy at T: the occurrence opens its card and its first row.
   Future<void> openWindyWindow({DateTime? firstRun}) async {
     api.sample = wind(9.0, 10.0);
     await runAt(alarmAt.subtract(const Duration(minutes: 1)));
@@ -288,7 +288,7 @@ void main() {
       );
 
       expect(notifier.cancelled, contains(alarm.id),
-          reason: 'the ring is that morning’s notification now');
+          reason: 'the ring is that occurrence’s notification now');
       expect(notifier.card, isNull);
       expect(await story(), [
         'Still checking · $windyLine\n'
@@ -371,7 +371,7 @@ void main() {
       expect(notifier.card!.status, kNivaatCancelled);
       expect((await rows()).last.kind, HistoryKind.cancelled);
       expect((await rows()).last.at, alarmAt,
-          reason: 'the row belongs to the morning you abandoned');
+          reason: 'the row belongs to the occurrence you abandoned');
     });
 
     test('14 · Keep checking 30 → 60 — a new row, new deadline, no outcome yet',
@@ -395,12 +395,12 @@ void main() {
       ]);
     });
 
-    test('14d · shrinking the window past now ends the morning, quietly and '
+    test('14d · shrinking the window past now ends the occurrence, quietly and '
         'at once', () async {
       // 30 → 1 at T+2: the new deadline (06:01) is already behind us. The
       // card used to be re-posted — ALERTING — reading `watching until 06:01`
       // at 06:02, with a matching row that is immutable and so stayed in the
-      // log for good. A promise the morning has already broken is the exact
+      // log for good. A promise the occurrence has already broken is the exact
       // thing the one-card model exists to prevent (found in review,
       // 2026-07-31).
       await openWindyWindow();
@@ -519,7 +519,7 @@ void main() {
   group('through the controller', () {
     /// `init()` resyncs against the REAL clock, which books a check for the
     /// next occurrence after today — 2026-07-12 is long past. Clear that state
-    /// so the morning under test starts from nothing.
+    /// so the occurrence under test starts from nothing.
     Future<NivaatController> freshController() async {
       final c = NivaatController(engine: engine);
       await c.init();
@@ -527,9 +527,9 @@ void main() {
       return c;
     }
 
-    test('raising the limit mid-window still rings this morning', () async {
+    test('raising the limit mid-window still rings today', () async {
       // init() resyncs against the REAL clock, which would finalise a
-      // 2026-07-12 morning before the test even starts. Build it first.
+      // 2026-07-12 occurrence before the test even starts. Build it first.
       final controller = await freshController();
       await openWindyWindow();
 

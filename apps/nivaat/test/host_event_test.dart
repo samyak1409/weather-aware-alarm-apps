@@ -115,19 +115,6 @@ void main() {
     await engine.evaluateAlarm(alarm, [court], now: alarmAt);
   }
 
-  /// An alarm armed AT T on the live clock, with a pending held for it.
-  ///
-  /// Any test whose host event is handled OUTSIDE an evaluate lane needs this
-  /// rather than the file's 2026-08-08 fixture, because there `_nowFor` falls
-  /// back to the wall clock. Two ways that bites. A move about a ring whose
-  /// time has passed is correctly ignored as a stale replay, so the test
-  /// exercises the rejection path and passes whether or not the rule under
-  /// test exists. And `_rollOn` prefers the later of that clock and just-past
-  /// `closed`, so a past-dated `closed` never reaches the `afterClosed` guard
-  /// — and whatever the wall clock made true the morning the test was written
-  /// stops being true a day later (H5 began failing on its own). Seconds are
-  /// stripped so `nextOccurrence` lands on the minute rather than rolling to
-  /// tomorrow.
   /// Everything a live-clock test needs, built but NOT yet evaluated.
   ///
   /// **Dated on the live clock, five minutes ahead, seconds stripped.** Any
@@ -139,7 +126,7 @@ void main() {
   /// exists. And `_rollOn` prefers the later of that clock and just-past
   /// `closed`, so a past-dated `closed` never reaches the `afterClosed` guard —
   /// and the answer asserted is only whatever the wall clock made true the
-  /// morning it was written (the nextRing H5 began failing on its own two days
+  /// day it was written (the nextRing H5 began failing on its own two days
   /// later). Seconds are stripped so `nextOccurrence` lands on the minute
   /// rather than rolling to tomorrow.
   Future<
@@ -205,7 +192,6 @@ void main() {
     await r.engine.evaluateAlarm(r.alarm, [court], now: r.at);
     return r;
   }
-
 
   test('post-T schedule success holds pending — no Rang until settle', () async {
     await armCalmAtT();
@@ -516,7 +502,7 @@ void main() {
     // `closed`. Dated 2026-08-08, `closed` is in the past, the wall clock
     // wins, and the test never reaches the `afterClosed` guard it is cited
     // for on `_rollOn`; worse, the answer it asserted was whatever the wall
-    // clock made true that morning, so it began failing on its own at
+    // clock made true that day, so it began failing on its own at
     // 2026-08-10 06:00. Armed five minutes ahead, `closed` is genuinely in
     // the future — the branch under test — and the expected roll is fixed.
     final f = await armLiveAtT();
@@ -653,7 +639,7 @@ void main() {
       'never Couldn\'t confirm', () async {
     // **The iOS shape.** AlarmKit reports nothing it does on its own, and an
     // alarm leaves it the moment it fires and is dismissed — which is exactly
-    // what a good morning looks like. It also never opens the app, so Nivaat is
+    // what a good ring looks like. It also never opens the app, so Nivaat is
     // essentially never running while the alert sounds and almost never sees
     // the ring as audible. Reading "gone, and nothing said why" as a miss there
     // labelled EVERY iOS ring unconfirmed.
@@ -684,7 +670,7 @@ void main() {
 
     final rows =
         (await store.loadHistory()).where((r) => r.at == alarmAt).toList();
-    expect(rows, isNotEmpty, reason: 'the morning must be recorded at all');
+    expect(rows, isNotEmpty, reason: 'the occurrence must be recorded at all');
     expect(
       rows.where((r) =>
           r.ringDisposition == RingDisposition.missed ||
@@ -719,9 +705,9 @@ void main() {
     // lateRing has no fixed time — it is armed "ten seconds from now" by
     // whichever retry found calm air — so it cannot be matched by proximity to
     // the alarm's minute. Bounded by the retry window instead: "any lateRing
-    // event at or after alarmAt" is satisfied by every FUTURE morning too, so a
-    // replayed drop from days ago would close today and roll the cascade on a
-    // day early.
+    // event at or after alarmAt" is satisfied by every FUTURE occurrence too,
+    // so a replayed drop from days ago would close today and roll the cascade
+    // on a day early.
     await armCalmAtT();
     final before = await engine.store.loadPendingRing(alarm.id);
     expect(before, isNotNull);
@@ -791,7 +777,7 @@ void main() {
       () async {
     // "I could not ask" is not "it is not there" — REVIEW #2's rule, pointed at
     // a different call. Answering an empty map on a transient query failure
-    // would finalise a morning whose alarm is still sitting in the system,
+    // would finalise an occurrence whose alarm is still sitting in the system,
     // armed and about to sound.
     SharedPreferences.setMockInitialValues({});
     final blind = UnqueryableRing()..blind = false;
@@ -823,7 +809,7 @@ void main() {
       (await store.loadHistory())
           .where((r) => r.at == alarmAt && r.ringDisposition != null),
       isEmpty,
-      reason: 'a failed query must not settle the morning',
+      reason: 'a failed query must not settle the occurrence',
     );
     expect(await store.loadPendingRing(alarm.id), isNotNull,
         reason: 'the ring is still owed — nothing has been learned about it');
@@ -869,7 +855,7 @@ void main() {
       (await engine.store.loadHistory())
           .where((r) => r.at == alarmAt && r.ringDisposition != null),
       hasLength(1),
-      reason: 'the morning already had its verdict',
+      reason: 'the occurrence already had its verdict',
     );
     expect(await engine.store.loadPendingRing(alarm.id), isNull,
         reason: 'and the leftover slot is cleaned up either way');
@@ -878,11 +864,11 @@ void main() {
       () async {
     // AlarmKit schedules before it cancels, so a refused create leaves the
     // SUPERSEDED alarm armed (REVIEW #5, deliberate — better a duplicate than
-    // a silent morning). The engine records `ringScheduled: false` and stops
-    // tracking it, so the only thing standing between that alarm and a windy
-    // morning is the skip path's own cancel. This is the invariant Nivaat
-    // exists for, and until the fake stopped modelling iOS as destructive it
-    // was not tested at all.
+    // an alarm that never sounds). The engine records `ringScheduled: false`
+    // and stops tracking it, so the only thing standing between that alarm and
+    // a ring the wind should have stopped is the skip path's own cancel. This
+    // is the invariant Nivaat exists for, and until the fake stopped modelling
+    // iOS as destructive it was not tested at all.
     SharedPreferences.setMockInitialValues({});
     final ios = NoEventRing();
     expect(ios.destructiveOnFailure, isFalse);
@@ -913,7 +899,7 @@ void main() {
     expect(ios.scheduled.containsKey(preArm), isTrue,
         reason: 'iOS keeps the old alarm when a create fails');
 
-    // The wind turns. The morning is skipped — and the ring the engine is no
+    // The wind turns. The occurrence is skipped — and the ring the engine is no
     // longer tracking must still be taken off the platform.
     ios.accepts = true;
     windy.sample = wind(30.0, 40.0);
@@ -921,7 +907,7 @@ void main() {
         now: alarmAt.subtract(const Duration(minutes: 10)));
 
     expect(ios.scheduled.containsKey(preArm), isFalse,
-        reason: 'a windy morning must leave nothing armed to sound');
+        reason: 'a windy occurrence must leave nothing armed to sound');
     expect(ios.cancelled, contains(preArm));
   });
   test('a known drop upgrades an earlier Couldn\'t confirm to Missed',
@@ -962,7 +948,7 @@ void main() {
     expect(rows.single.ringDisposition, RingDisposition.missed);
   });
 
-  test('a late drop never rewrites a morning that audibly rang', () async {
+  test('a late drop never rewrites an occurrence that audibly rang', () async {
     // The other direction, and the one that would be a real betrayal: the user
     // woke up to it. A drop event arriving after a settled `rang` — a stale
     // replay, or a refusal recorded for a locker we have since reused — must
@@ -996,7 +982,7 @@ void main() {
         .where((r) => r.at == alarmAt && r.ringDisposition != null);
     expect(rows, hasLength(1));
     expect(rows.single.ringDisposition, RingDisposition.rang,
-        reason: 'a morning the user woke up to is not rewritten as missed');
+        reason: 'an occurrence the user woke up to is not rewritten as missed');
   });
   test('a drop landing before its pending is saved is retried, not lost',
       () async {
@@ -1114,7 +1100,7 @@ void main() {
   test('a move for another occurrence never takes the held pending slot',
       () async {
     // One slot per alarm. `_matchPendingForHostEvent` will synthesize a
-    // pending for a different morning, and `savePendingRing` keys on alarmId
+    // pending for a different occurrence, and `savePendingRing` keys on alarmId
     // alone — so a deferral of tomorrow's `nextRing` used to write straight
     // over today's held ring and erase the only record it was still owed.
     final f = await armLiveAtT();
@@ -1162,7 +1148,7 @@ void main() {
         reason: 'the older replay must not win');
   });
 
-  test('the early host-closed exit still takes the morning\'s card down',
+  test('the early host-closed exit still takes the occurrence\'s card down',
       () async {
     // **Reachable at exactly T, and only there.** `atOrPastAlarm` is
     // `t >= next` (the wake grace is zero) while Rule 2 needs `t > next`, so
@@ -1174,13 +1160,13 @@ void main() {
     // The card-cancel line lives after this exit, and it is placed where it is
     // so a mid-await settle cannot return past it. This exit was added later
     // and returned past it anyway, leaving `Still checking` in the shade for a
-    // morning already recorded as missed.
+    // occurrence already recorded as missed.
     final sched = _EmitsDuringSchedule();
     final f = await liveRig(scheduler: sched);
     final (store, live, at) = (f.store, f.alarm, f.at);
-    // A committed ring with the morning's card already up: the card went out at
-    // T when the wind was still being watched, and a ring was committed for the
-    // same occurrence. `ringScheduled` is what lets the drop match at all.
+    // A committed ring with the occurrence's card already up: the card went out
+    // at T when the wind was still being watched, and a ring was committed for
+    // the same occurrence. `ringScheduled` is what lets the drop match at all.
     await store.saveCheckState(CheckState(
       alarmId: live.id,
       alarmAt: at,
@@ -1221,7 +1207,7 @@ void main() {
 
     // Pre-T arm: commits the ring, so `ringScheduled` is true and the plugin
     // still holds it — which is what sends the next pass down Rule 2 rather
-    // than settling the morning.
+    // than settling the occurrence.
     await e.evaluateAlarm(live, [court],
         now: at.subtract(const Duration(minutes: 2)));
     expect((await store.loadCheckState(live.id))?.ringScheduled, isTrue);
@@ -1372,7 +1358,7 @@ void main() {
     f.ring.throwOnSchedule = true;
     await f.ring.emitHostEvent(dropNext);
 
-    // The morning was still closed: that half is a database write and never
+    // The occurrence was still closed: that half is a database write and never
     // depended on the platform.
     expect(
         (await f.store.loadHistory()).where((r) =>

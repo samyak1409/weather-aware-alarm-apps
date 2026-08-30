@@ -7,7 +7,7 @@ class AppPalette {
   /// Arunoday accent: first light of dawn.
   static const Color dawn = Color(0xFFFFB067);
 
-  /// Nivaat accent: clear-sky blue (a calm, windless morning).
+  /// Nivaat accent: clear-sky blue (a calm, windless sky).
   static const Color wind = Color(0xFF6FB7EC);
 
   static const Color trueBlack = Color(0xFF000000);

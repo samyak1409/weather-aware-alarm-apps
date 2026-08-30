@@ -8,15 +8,15 @@
 ///
 ///      10000 + alarmId   ring armed for the occurrence's own time
 ///      20000 + alarmId   LATE ring, armed after T inside the retry window
-///      30000 + alarmId   the morning's card
+///      30000 + alarmId   the occurrence's card
 ///      40000 + alarmId   pre-arm for the NEXT occurrence, written at roll-on
 ///     100000 + alarmId   wind check, rung 0 (T-24h)
 ///     110000 + alarmId   wind check, rung 1 (T-12h)
 ///        ... one block per rung ...
 ///     180000 + alarmId   wind check, rung 8 (T-0), reused by post-T retries
 ///
-/// One card per morning (2026-07-26): it posts at T as "Still checking" and
-/// is rewritten in place to "Skipped" / "Cancelled" as the morning resolves,
+/// One card per occurrence (2026-07-26): it posts at T as "Still checking" and
+/// is rewritten in place to "Skipped" / "Cancelled" as the occurrence resolves,
 /// so the old 50000 "skipped" block went away. 50000 is now [NivaatIds.nextRing]
 /// — a deliberate reuse of a freed number, not an oversight. Nothing sat above
 /// it, so nothing renumbered, and a card already posted under the old meaning
@@ -90,9 +90,9 @@ class NivaatIds {
   /// runs *at* T — which is the very moment [ring]'s own alarm is due but may
   /// not have sounded yet. `Alarm.set` stops any alarm sharing the id before
   /// writing the new one (verified in `alarm 5.6.0`, `lib/alarm.dart:113`), so
-  /// a check landing at 06:00:02 finalised the morning and pre-armed tomorrow
-  /// **into the same number**, cancelling the ring that was a heartbeat from
-  /// waking you — while history recorded `Rang`.
+  /// a check landing at 06:00:02 finalised the occurrence and pre-armed
+  /// tomorrow **into the same number**, cancelling the ring that was a
+  /// heartbeat from waking you — while history recorded `Rang`.
   ///
   /// Handed over to [ring] at that occurrence's own first ladder rung: cancel
   /// this, then arm [ring]. **Cancel-then-set, never set-then-cancel** — two
@@ -182,7 +182,7 @@ class NivaatIds {
           check(alarmId, r),
       ];
 
-  /// The morning's one notification. Posted at T and rewritten in place —
+  /// The occurrence's one notification. Posted at T and rewritten in place —
   /// same number throughout, which is what lets a later push replace the
   /// card rather than stack a second one beside it.
   static int card(int alarmId) => cardBlock + alarmId;

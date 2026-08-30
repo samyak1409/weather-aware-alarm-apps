@@ -126,7 +126,8 @@ class AlarmKitScheduler implements AlarmScheduler {
     // #5): a failed create then leaves the old alarm armed and mapped instead
     // of leaving the day silent. Do not "tidy" the order back — the accepted
     // cost is the mirror image (a failed cancel leaves two live alarms, both
-    // sounding), and a duplicate alert beats a silent morning. CLAUDE.md.
+    // sounding), and a duplicate alert beats an alarm that never sounds.
+    // CLAUDE.md.
     final String uuid;
     try {
       uuid = await _ak.scheduleOneShotAlarm(
@@ -145,8 +146,8 @@ class AlarmKitScheduler implements AlarmScheduler {
       // drives the permission banner to send the user to Settings. A failed
       // schedule must never crash the engine/controller, but it must not pass
       // for a success either: this used to `return` into a caller that then
-      // recorded the alarm as armed, and Nivaat logged `Rang` for a morning
-      // that never made a sound (REVIEW #2).
+      // recorded the alarm as armed, and Nivaat logged `Rang` for an
+      // occurrence that never made a sound (REVIEW #2).
       return false;
     }
     final superseded = (await _loadMap())['$id'] ?? const <String>[];
@@ -157,8 +158,8 @@ class AlarmKitScheduler implements AlarmScheduler {
     // closed here:** AlarmKit mints the UUID, so nothing can be written down
     // until the create returns, and dying in between (iOS killing a background
     // task at expiry) arms an alarm no row names — so nothing can cancel it and
-    // it rings even on a morning the wind says to skip. Sweeping alarms this
-    // map does not name is the only fix and is NOT a drive-by: in that same
+    // it rings even when the wind says to skip. Sweeping alarms this map
+    // does not name is the only fix and is NOT a drive-by: in that same
     // window a new alarm looks exactly like an orphan. CLAUDE.md.
     //
     // Moving the map into SQLite did not change any of that. It closed the
@@ -247,8 +248,8 @@ class AlarmKitScheduler implements AlarmScheduler {
     // comes back is a snapshot, and deleting "everything AlarmKit did not
     // mention" against a snapshot destroys any handle another isolate recorded
     // in the meantime — an armed alarm no row names, which `cancel`,
-    // `isRinging` and the orphan sweep all work off, so it rings on a morning
-    // the wind says to skip. `scheduleRing` records its row only after
+    // `isRinging` and the orphan sweep all work off, so it rings when the wind
+    // says to skip. `scheduleRing` records its row only after
     // `scheduleOneShotAlarm` has returned, so a row older than this instant was
     // already known to AlarmKit when it was asked; anything newer is not this
     // snapshot's business and is left alone until the next prune.
@@ -301,7 +302,7 @@ class AlarmKitScheduler implements AlarmScheduler {
   /// init. So on iOS "the ring is no longer there" carries no information
   /// about whether it rang — it is what an ordinary dismissed alarm looks
   /// like — and Nivaat must not read it as a miss. Getting this wrong labels
-  /// every iOS morning `Couldn't confirm`, because AlarmKit never opens the
+  /// every iOS ring `Couldn't confirm`, because AlarmKit never opens the
   /// app and so the app is essentially never running while the alert sounds.
   @override
   bool get reportsHostEvents => false;
@@ -324,8 +325,8 @@ class AlarmKitScheduler implements AlarmScheduler {
   /// sweep, where the worst case is cancelling nothing. This one feeds the
   /// opposite decision: Nivaat reads an absent id as "the ring is gone" and
   /// closes the occurrence on it. Returning an empty map on a transient
-  /// AlarmKit hiccup would finalise a morning whose alarm is still sitting in
-  /// the system, armed and about to sound — "I could not ask" is not "it is
+  /// AlarmKit hiccup would finalise an occurrence whose alarm is still sitting
+  /// in the system, armed and about to sound — "I could not ask" is not "it is
   /// not there", which is REVIEW #2's rule pointed at a different call.
   @override
   Future<Map<int, ScheduledAlarmInfo>> scheduledAlarms() async {

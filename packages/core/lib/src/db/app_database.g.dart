@@ -1783,7 +1783,7 @@ class HistoryEntry extends DataClass implements Insertable<HistoryEntry> {
   final double? rawGustLimitKmh;
 
   /// The 15-minute slot the numbers above DESCRIBE — the worst one in the play
-  /// window, which is the one that decided the morning.
+  /// window, which is the one that decided the occurrence.
   ///
   /// Distinct from [checkedAt], which is when the check ran. They differ by the
   /// whole lead time, so a row saying `last checked 06:00` about wind measured
