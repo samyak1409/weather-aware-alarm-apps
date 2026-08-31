@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -49,12 +51,13 @@ void main() {
   Future<NivaatController> controller({
     List<SavedLocation> courts = const [],
     List<NivaatAlarm> alarms = const [],
+    OpenMeteo? api,
   }) async {
     SharedPreferences.setMockInitialValues({});
     final store = NivaatStore();
     if (courts.isNotEmpty) await store.saveCourts(courts);
     if (alarms.isNotEmpty) await store.saveAlarms(alarms);
-    final c = NivaatController(engine: silentEngine(store));
+    final c = NivaatController(engine: silentEngine(store, api: api));
     await c.init();
     return c;
   }
@@ -1098,6 +1101,98 @@ void main() {
       // the test above is what proves that.
     });
 
+    testWidgets('a check YOU start says Checking…; opening the app never does',
+        (tester) async {
+      // Active vs passive, rendered — `NivaatController._rechecking` has the
+      // rule and why it is one. Switching an alarm back on after a week used
+      // to show last week's answer under the new switch, with nothing saying
+      // a fresh check was running (Samyak, 2026-08-31).
+      final api = _HeldApi();
+      final c = await controller(
+        courts: [court],
+        alarms: const [NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1')],
+        api: api,
+      );
+
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+      expect(find.textContaining('to ring · as per'), findsOneWidget,
+          reason: 'precondition: an answer on the row');
+
+      // Passive — this is `resync`, the same call app open, resume, ring-stop
+      // and a background check's ping all arrive through.
+      api.hold = true;
+      final opened = c.resync();
+      await tester.pump();
+      expect(find.text('Checking…'), findsNothing,
+          reason: 'the last answer is what you opened the app to read');
+      expect(find.textContaining('to ring · as per'), findsOneWidget);
+      api.releaseAll();
+      await opened;
+      await tester.pump();
+
+      // Active — the switch, off and then on again a while later.
+      await c.toggleAlarm(1, false);
+      await c.lastEvaluation;
+      await tester.pump();
+      api.hold = true;
+      await c.toggleAlarm(1, true);
+      await tester.pump();
+      expect(find.text('Checking…'), findsOneWidget);
+      expect(find.textContaining('to ring · as per'), findsNothing,
+          reason: 'the verdict it is about to replace is withheld, not shown');
+      // And no ⓘ beside it: the row cannot half-say `Checking…` and still
+      // offer the numbers from the answer it is in the middle of replacing.
+      expect(find.byIcon(Icons.info_outline), findsNothing);
+
+      api.releaseAll();
+      await c.lastEvaluation;
+      await tester.pump();
+      expect(find.textContaining('to ring · as per'), findsOneWidget,
+          reason: 'the fresh answer takes the word back down');
+    });
+
+    testWidgets('and the answer landing does not move the rows below it',
+        (tester) async {
+      // Samyak, 2026-08-31, on a device: "some shift has been happening".
+      // `_line`'s 6pt of tap padding was on the forecast branch alone, so
+      // `Checking…` rendered 12pt shorter than the verdict that replaced it
+      // and everything under it jumped when the check landed. Always wrong,
+      // but only ever visible for the seconds after creating an alarm — until
+      // `Checking…` became what an active re-check shows too.
+      //
+      // Measured on the SECOND alarm's clock: a height that changes shows up
+      // as the row below moving, which is the thing you actually see.
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final api = _HeldApi();
+      final c = await controller(
+        courts: [court],
+        alarms: const [
+          NivaatAlarm(id: 1, hour: 6, minute: 0, courtId: 'c1'),
+          NivaatAlarm(id: 2, hour: 7, minute: 30, courtId: 'c1'),
+        ],
+        api: api,
+      );
+      await tester.pumpWidget(MaterialApp(home: HomeScreen(controller: c)));
+      await tester.pump();
+      final settled = tester.getRect(find.text('07:30')).top;
+
+      api.hold = true;
+      await c.toggleAlarm(1, true);
+      await tester.pump();
+      expect(find.text('Checking…'), findsOneWidget, reason: 'precondition');
+      expect(tester.getRect(find.text('07:30')).top, settled,
+          reason: 'the row below must not move while the check runs');
+
+      api.releaseAll();
+      await c.lastEvaluation;
+      await tester.pump();
+      expect(tester.getRect(find.text('07:30')).top, settled,
+          reason: 'nor when the answer arrives');
+    });
+
     testWidgets('the old top-of-screen watching cue is gone (N11 retired)',
         (tester) async {
       // It moved onto the row it was always about. Nothing at the top of home
@@ -1111,4 +1206,32 @@ void main() {
       expect(find.textContaining('Still checking wind'), findsNothing);
     });
   });
+}
+
+/// [SilentApi] that can be held mid-fetch, so a test can look at the SCREEN
+/// while a check is genuinely in flight rather than inferring it afterwards.
+class _HeldApi extends SilentApi {
+  /// Hold every call from here on. Off by default so setup fetches freely.
+  bool hold = false;
+
+  /// One gate, shared by whatever parks on it — see `_GatedApi` next door.
+  Completer<void>? _gate;
+
+  void releaseAll() {
+    hold = false;
+    _gate?.complete();
+    _gate = null;
+  }
+
+  @override
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) async {
+    if (hold) await (_gate ??= Completer<void>()).future;
+    return super.windWindow(lat, lon, from, to, models: models);
+  }
 }

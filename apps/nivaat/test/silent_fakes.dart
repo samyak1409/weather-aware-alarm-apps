@@ -100,10 +100,11 @@ class SilentApi extends OpenMeteo {
 }
 
 /// Convenience for the common "quiet engine over an empty store" setup.
-NivaatEngine silentEngine(NivaatStore store) => NivaatEngine(
+/// [api] overrides the quiet one for the tests that need to hold a fetch open.
+NivaatEngine silentEngine(NivaatStore store, {OpenMeteo? api}) => NivaatEngine(
       store: store,
       scheduler: SilentRing(),
-      api: SilentApi(),
+      api: api ?? SilentApi(),
       checks: SilentChecks(),
       notifier: SilentNotifier(),
     );

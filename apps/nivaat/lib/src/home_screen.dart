@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:core/core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import 'alarm_sheet.dart';
 import 'background_banner.dart';
@@ -234,21 +235,29 @@ class _HomeScreenState extends State<HomeScreen>
             ),
             // Permission nudges only once there's something to protect
             // (2026-07-22: keep the intro hero clean — same rule as Arunoday).
-            if (!kScreenshotHarness && c.alarms.isNotEmpty) ...[
-              const AlarmPermissionBanner(
-                  appName: 'Nivaat', accent: AppPalette.wind),
-              NotificationPermissionBanner(
-                accent: AppPalette.wind,
-                denied: () =>
-                    c.engine.notifier?.notificationsDenied() ??
-                    Future.value(false),
-                recheckAfter: widget.permissionFlow,
-                message: Platform.isAndroid
-                    ? kNivaatNotificationsOffAndroid
-                    : kNivaatNotificationsOffIos,
+            if (!kScreenshotHarness && c.alarms.isNotEmpty)
+              // Wrapped so the black under the last one collapses with it —
+              // see [_NoticeStack].
+              _NoticeStack(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const AlarmPermissionBanner(
+                        appName: 'Nivaat', accent: AppPalette.wind),
+                    NotificationPermissionBanner(
+                      accent: AppPalette.wind,
+                      denied: () =>
+                          c.engine.notifier?.notificationsDenied() ??
+                          Future.value(false),
+                      recheckAfter: widget.permissionFlow,
+                      message: Platform.isAndroid
+                          ? kNivaatNotificationsOffAndroid
+                          : kNivaatNotificationsOffIos,
+                    ),
+                    BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
+                  ],
+                ),
               ),
-              BackgroundChecksBanner(recheckAfter: widget.batteryFlow),
-            ],
             Expanded(
               child: c.alarms.isEmpty ? _empty(text) : _list(text),
             ),
@@ -363,8 +372,15 @@ class _HomeScreenState extends State<HomeScreen>
     if (watching != null) {
       return _line(text, watching, live: true, forecast: forecast);
     }
-    return _line(text, nivaatForecastLine(forecast),
-        live: forecast?.willRing ?? false, forecast: forecast);
+    // A check you started reads exactly like a first one — same word, same
+    // grey dot, no ⓘ. Passing null rather than adding a third state is the
+    // point: the row cannot half-say "Checking…" and still offer numbers from
+    // the answer it is replacing. The retry line above is left alone, because
+    // it is not a verdict — an occurrence past T is still open while the wind
+    // is read again, and that is the more useful sentence.
+    final pending = c.rechecking(a.id) ? null : forecast;
+    return _line(text, nivaatForecastLine(pending),
+        live: pending?.willRing ?? false, forecast: pending);
   }
 
   /// The dot + words. The accent means "something is live here" — either the
@@ -427,7 +443,20 @@ class _HomeScreenState extends State<HomeScreen>
         ],
       ],
     );
-    if (forecast == null) return row;
+    // **The padding is the LINE's, not the gesture's** (Samyak, 2026-08-31:
+    // "some shift has been happening"). The dot's line is only ~20px tall, so
+    // these 6pt either side are what make it a real tap target rather than a
+    // hairline of one — but they were applied on the forecast branch alone,
+    // which left `Checking…` 12pt shorter than the verdict replacing it and
+    // shoved every row below it down the moment a check landed. It was always
+    // wrong; it was only ever visible for the seconds after a brand-new alarm
+    // was created, until `Checking…` also became what an active re-check shows
+    // (`NivaatController._rechecking`) and it started happening on every save.
+    final padded = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: row,
+    );
+    if (forecast == null) return padded;
     // **A `Builder`, and it is load-bearing** (2026-08-25). `_line` is a
     // method on the State, so a bare `context` inside the callback below is
     // the State's own — the whole Scaffold. `findRenderObject` on that
@@ -452,13 +481,9 @@ class _HomeScreenState extends State<HomeScreen>
             centerY: box.localToGlobal(box.size.center(Offset.zero)).dy,
           );
         },
-        // The dot's line is only ~20px tall, so the vertical padding is what
-        // makes this a real target rather than a hairline of one. It is inside
-        // the gesture and outside the visible row, so nothing moves.
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: row,
-        ),
+        // Inside the gesture, so the padding is part of the target as well as
+        // part of the height.
+        child: padded,
       ),
     );
   }
@@ -616,5 +641,50 @@ class _HomeScreenState extends State<HomeScreen>
         },
       ),
     );
+  }
+}
+
+/// The nudge stack, and the black underneath it — or nothing at all.
+///
+/// **Measures rather than pads, because the gap has to collapse.** Every nudge
+/// draws `SizedBox.shrink()` while its permission is fine, and each decides
+/// that for itself asynchronously (on mount, on resume, when the startup
+/// once-ask settles), so nothing here knows at build time whether any is up.
+/// A `Padding` would hold the gap open on the home screen where every
+/// permission is fine — most of them, and the one screen where nothing should
+/// move. Asking the nudges would mean re-running their three checks on their
+/// schedule: two copies of an answer that can disagree. A zero-height stack
+/// takes zero height here, so the list sits exactly where it always did.
+class _NoticeStack extends SingleChildRenderObjectWidget {
+  const _NoticeStack({required Widget super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderNoticeStack();
+}
+
+class _RenderNoticeStack extends RenderProxyBox {
+  /// Puts the last nudge 20pt clear of the list — the 12 it carries itself,
+  /// plus this — which is the same 20 the caveat at the foot of the screen
+  /// keeps from the list's other edge (`_bgNote`). The list is bracketed by
+  /// those two and they were not treating it alike, so a nudge sat almost on
+  /// top of a 40pt clock (Samyak, 2026-08-31). The 12 is the rhythm BETWEEN
+  /// stacked nudges and is left alone.
+  static const double _gap = 8;
+
+  /// The child's size plus the gap — unless it drew nothing, in which case
+  /// there is nothing to hold clear of anything. `child!`: the widget above
+  /// requires one.
+  Size _withGap(Size child) =>
+      Size(child.width, child.height == 0 ? 0 : child.height + _gap);
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) =>
+      constraints.constrain(_withGap(child!.getDryLayout(constraints)));
+
+  @override
+  void performLayout() {
+    child!.layout(constraints, parentUsesSize: true);
+    size = constraints.constrain(_withGap(child!.size));
   }
 }

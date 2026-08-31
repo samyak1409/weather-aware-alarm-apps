@@ -119,13 +119,25 @@ String nivaatHistoryLine(HistoryRecord record) {
 /// Hung on the numbers instead, it can only mean what it says: gusts of 10 at
 /// 06:45.
 ///
+/// **A ring names no slot** (Samyak, 2026-08-31) — the rule the card and the
+/// home row's ⓘ have followed since [nivaatWindWord] returned null for a ring
+/// on 2026-08-25, and history was the last surface still breaking it. A skip
+/// is caused by ONE slot and can be pinned to it; a ring is the whole play
+/// window clearing, so `at 06:45` on one points at a moment that was never
+/// special. The numbers stay — they come off that slot and they earned the
+/// ring — so only the false pinpoint goes. `Missed` / `Couldn't confirm` are
+/// rings too, differing in what became of the ring and never in what the wind
+/// said.
+///
 /// Empty in, empty out — a row that lost its readings has no slot worth
 /// naming, and a no-data row is refused its numbers by the caller before it
 /// ever reaches here.
 String nivaatHistoryNumbers(HistoryRecord record) {
   final summary = record.windGustSummary;
   final slot = record.slotAt;
-  if (summary.isEmpty || slot == null) return summary;
+  if (summary.isEmpty || slot == null || record.outcome == CheckOutcome.rang) {
+    return summary;
+  }
   // Its own ` · ` clause (Samyak, 2026-08-25). Run on as `km/h at 06:45` it
   // read as part of the gust reading; every other fact on this line is a
   // dot-separated clause, and the slot is a fact about all of them.
@@ -342,9 +354,11 @@ String nivaatInLabel(DateTime? t, {DateTime? now}) {
 /// The date rides along only when the check was not today, so an alarm whose
 /// last successful check was yesterday evening cannot read as this afternoon.
 String nivaatForecastLine(AlarmForecast? forecast, {DateTime? now}) {
-  // Nothing checked yet — a brand-new alarm, for the seconds before its first
-  // fetch lands. The row keeps this line's height either way, so the result
-  // arriving cannot make the list jump.
+  // No answer to show: a brand-new alarm before its first fetch lands, or a
+  // check YOU started, which withholds the verdict it is replacing for as long
+  // as it runs — `NivaatController._rechecking` has the rule, and why opening
+  // the app is not one of them. The row keeps this line's height either way,
+  // so the result arriving cannot make the list jump.
   if (forecast == null) return 'Checking…';
   final t = now ?? DateTime.now();
   return '${forecast.willRing ? 'Going' : 'Not going'} to ring · as per '

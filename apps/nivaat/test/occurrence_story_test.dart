@@ -60,6 +60,10 @@ void main() {
   //
   // Three variants for the same three reasons the card has three: each check
   // judges its OWN window, so a retry's slot is later than T's.
+  //
+  // All three are SKIP lines, and since 2026-08-31 that is the only kind of
+  // line a slot appears on: a ring is the whole window clearing, so no minute
+  // in it is the one that decided — see `nivaatHistoryNumbers`.
   const windyLine = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 06:30';
   const windyLineAtCap = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 07:00';
   const windyLineFrom0629 = 'wind 5 (≤4) · gusts 10 (≤15) km/h · at 06:45';
@@ -294,7 +298,10 @@ void main() {
         'Still checking · $windyLine\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00 '
             '· watching until 06:30',
-        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h · at 06:30\n'
+        // No slot on a ring (2026-08-31): the still-checking row above names
+        // one because a skip is caused by a single slot, while the ring is the
+        // whole play window clearing and no minute in it decided anything.
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:07',
       ]);
     });
@@ -313,7 +320,7 @@ void main() {
 
       expect(notifier.pushes, isEmpty, reason: 'nothing to explain');
       expect(await story(), [
-        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h · at 06:30\n'
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 5 (≤15) km/h\n'
             'Society Court · 12 Jul · 06:00 · last checked 06:00',
       ]);
     });

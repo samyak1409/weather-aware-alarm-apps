@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:core/core.dart';
@@ -109,12 +110,18 @@ void main() {
     expect(history.first.outcome, CheckOutcome.rang);
     expect(history.first.ringDisposition, RingDisposition.rang);
     expect(history.first.volume, 0.85);
-    // **A rang row names its slot too** (2026-08-25). Skipped rows carried one
-    // from the day the window rule landed; ring rows did not, so the log
+    // **A rang row RECORDS its slot too** (2026-08-25). Skipped rows carried
+    // one from the day the window rule landed; ring rows did not, so the log
     // explained a windy occurrence and shrugged at a calm one. The slot is the
     // windiest minute of the play window, so it is on the grid and inside
     // that window — never the alarm time, which is what a reader would
     // otherwise assume the numbers were taken at.
+    //
+    // Recorded, not printed: since 2026-08-31 a ring's line stops at the
+    // numbers (`nivaatHistoryNumbers`), because a ring is the whole window
+    // clearing and no minute in it is the decisive one. The field stays — it
+    // is where those numbers came from, and every reader of it degrades on
+    // null rather than assuming.
     final slot = history.first.slotAt;
     final (playFrom, playTo) = alarm.playWindow(alarmAt);
     expect(slot, isNotNull, reason: 'the whole point of ringSlotAt');
@@ -1883,7 +1890,8 @@ void main() {
 
   group('nivaatHistoryLine', () {
     final at = DateTime(2026, 7, 22, 6);
-    HistoryRecord row(CheckOutcome outcome, {double? volume, DateTime? slotAt}) =>
+    HistoryRecord row(CheckOutcome outcome,
+            {double? volume, DateTime? slotAt, RingDisposition? disposition}) =>
         HistoryRecord(
             alarmId: 7,
             courtId: 'c1',
@@ -1894,6 +1902,7 @@ void main() {
             courtSpeedLimitKmh: 4,
             rawGustLimitKmh: 14.667,
             slotAt: slotAt,
+            ringDisposition: disposition,
             volume: volume);
 
     test('quotes the volume it rang at, alongside the numbers', () {
@@ -1972,19 +1981,41 @@ void main() {
         nivaatHistoryLine(row(CheckOutcome.skippedWindy, slotAt: slot)),
         'Skipped · wind 3 (≤4) · gusts 16 (≤15) km/h · at 06:45',
       );
-      // A ring names it too — there, it is the windiest minute you would have
-      // played through, which is the number that earned the ring.
-      expect(
-        nivaatHistoryLine(
-            row(CheckOutcome.rang, volume: 0.85, slotAt: slot)),
-        'Rang (vol. 85%) · wind 3 (≤4) · gusts 16 (≤15) km/h · at 06:45',
-      );
       // Trailing, where the CARD puts it up front: the card's `Too windy at
       // 06:45` reads as a condition of a moment, while `Skipped at 06:45`
       // would read as when the skip was decided — a different fact, and one
       // the sub already carries.
       expect(nivaatHistoryLine(row(CheckOutcome.skippedWindy, slotAt: slot)),
           isNot(startsWith('Skipped at')));
+    });
+
+    test('a ring names no slot — just the numbers (2026-08-31)', () {
+      // The card and the home row's ⓘ have said this since 2026-08-25: a skip
+      // is caused by ONE slot and can be pinned to it, while a ring is the
+      // whole play window clearing. History was the last surface still naming
+      // one, and it read as though the ring had a decisive minute. The numbers
+      // stay — they earned the ring; only the false pinpoint goes.
+      final slot = at.add(const Duration(minutes: 45));
+      // The control, and it belongs in THIS test: nothing below would notice
+      // if the builder stopped naming slots altogether — the equality expects
+      // a slot-less string, and the loop asserts absences outright.
+      expect(nivaatHistoryLine(row(CheckOutcome.skippedWindy, slotAt: slot)),
+          endsWith(' · at 06:45'));
+      expect(
+        nivaatHistoryLine(row(CheckOutcome.rang, volume: 0.85, slotAt: slot)),
+        'Rang (vol. 85%) · wind 3 (≤4) · gusts 16 (≤15) km/h',
+      );
+      // Every disposition row is a ring too — they differ in what became of
+      // the ring, never in what the wind said — so none of them may name a
+      // slot. All three, because all three are separate MESSAGES entries
+      // (N4 / N4a / N4b) and this is the rule that changed for each.
+      for (final d in RingDisposition.values) {
+        expect(
+            nivaatHistoryLine(
+                row(CheckOutcome.rang, slotAt: slot, disposition: d)),
+            isNot(contains('at 06:45')),
+            reason: '$d still describes a ring');
+      }
     });
 
     test('a slot from another day carries its date, like every other time', () {
@@ -2770,6 +2801,189 @@ void main() {
       expect((await engine.store.loadForecasts())[7]!.willRing, isFalse);
     });
   });
+
+  group('Checking… is for a check YOU started (2026-08-31)', () {
+    late _GatedApi gated;
+    late NivaatController c;
+
+    /// A controller over a held-able API, already carrying one stored verdict
+    /// — the state every case below is about. (A brand-new alarm has no
+    /// verdict at all, which is why it was the only one that ever said
+    /// `Checking…` before this.)
+    Future<void> withAVerdict() async {
+      gated = _GatedApi()..sample = wind(5.0, 5.0);
+      c = NivaatController(
+        engine: NivaatEngine(
+          store: engine.store,
+          scheduler: ring,
+          api: gated,
+          checks: checks,
+          notifier: notifier,
+        ),
+      );
+      await c.init();
+      expect(c.forecasts[7], isNotNull, reason: 'precondition: an answer');
+      expect(c.rechecking(7), isFalse);
+    }
+
+    test('opening the app re-checks WITHOUT withholding the answer', () async {
+      // The passive half, and the reason this is a rule rather than a flag on
+      // every check: `resync` runs on app open, on resume, when a ring stops
+      // and when a background check pings the UI. Blanking the row to
+      // `Checking…` on any of those would take the last answer off the screen
+      // at the exact moment you came to read it.
+      await withAVerdict();
+      gated.hold = true;
+      final open = c.resync();
+      await gated.arrived();
+      expect(c.rechecking(7), isFalse,
+          reason: 'nothing you did started this one');
+      gated.releaseAll();
+      await open;
+      expect(c.rechecking(7), isFalse);
+    });
+
+    test('switching the alarm back on withholds it until the answer lands',
+        () async {
+      // The active half — the case that started this (Samyak, 2026-08-31): the
+      // verdict survives a toggle-off, so switching back on used to show
+      // yesterday's answer under a new switch with no sign a fresh check was
+      // even running.
+      await withAVerdict();
+      await c.toggleAlarm(7, false);
+      await c.lastEvaluation;
+
+      gated.hold = true;
+      await c.toggleAlarm(7, true);
+      await gated.arrived();
+      expect(c.rechecking(7), isTrue);
+      // The stored verdict is untouched — this withholds it, it does not throw
+      // it away, so a fetch that fails leaves the old answer to come back to.
+      expect((await engine.store.loadForecasts())[7], isNotNull);
+
+      gated.releaseAll();
+      await c.lastEvaluation;
+      expect(c.rechecking(7), isFalse);
+    });
+
+    test('a fetch that throws still takes the word down', () async {
+      // Otherwise the row is stranded on a sentence nothing will ever answer.
+      await withAVerdict();
+      gated.fail = true;
+      await c.toggleAlarm(7, true);
+      await c.lastEvaluation;
+      expect(c.rechecking(7), isFalse);
+    });
+
+    test('a save that THROWS takes the cue down, and repaints', () async {
+      // The other end of the same rule. This throw lands before `_saveAlarm`
+      // ever notifies, so it looks at first as though the word cannot be on
+      // screen yet — but the row reads `rechecking` at build time, and the
+      // home rebuilds on its own while a save is in flight (the minute ticker
+      // alone does, every wall-clock :00). Clearing the mark without a frame
+      // would leave `Checking…` up until the next rebuild from anywhere.
+      await withAVerdict();
+      final boom = NivaatController(
+        engine: _BoomOnSave(
+          store: engine.store,
+          scheduler: ring,
+          api: gated,
+          checks: checks,
+          notifier: notifier,
+        ),
+      );
+      await boom.init();
+      var frames = 0;
+      boom.addListener(() => frames++);
+
+      await expectLater(
+          boom.toggleAlarm(7, true), throwsA(isA<OpenMeteoException>()));
+      expect(boom.rechecking(7), isFalse, reason: 'no check is coming');
+      expect(frames, greaterThan(0),
+          reason: 'the mark came down, so the row has to be told');
+    });
+
+    test('two overlapping checks: the first to finish does not clear the cue',
+        () async {
+      // Off-then-straight-back-on starts two evaluations. Counted rather than
+      // flagged for exactly this: the first one finishing must not take down
+      // the cue the second is still earning.
+      // They never fetch at the same instant — the engine runs one pass per
+      // alarm at a time — but the second save is made and marked while the
+      // first check is still out, and it is still owed when that one lands.
+      // A flag would be taken down there, mid-check, by the wrong evaluation.
+      //
+      // Both saves here are EDITS, so this also carries the editor's half of
+      // the rule: every save goes through `upsertAlarm`, and a wind limit you
+      // just changed is being judged against a reading taken under the old one
+      // until the mark clears.
+      await withAVerdict();
+      gated.hold = true;
+      await c.upsertAlarm(c.alarms.single.copyWith(courtSpeedLimitKmh: 9));
+      await gated.arrived();
+      final first = c.lastEvaluation!;
+
+      // NOT awaited: the second save cannot get past the engine's lane while
+      // the first check is parked on the gate. That is the whole scenario —
+      // the save has been made, so its mark is already there (it is the first
+      // thing `upsertAlarm` does), and the save itself is still waiting.
+      final again =
+          c.upsertAlarm(c.alarms.single.copyWith(courtSpeedLimitKmh: 10));
+      expect(c.rechecking(7), isTrue, reason: 'both saves');
+
+      gated.releaseAll();
+      await first;
+      expect(c.rechecking(7), isTrue,
+          reason: "the first check's answer must not take down the second's "
+              'cue — a flag here would leave the row showing a verdict the '
+              'check still running is about to replace');
+
+      await again;
+      await c.lastEvaluation;
+      expect(c.rechecking(7), isFalse);
+    });
+  });
+}
+
+/// [FakeApi] that can be held mid-fetch, so a test can look at the app while a
+/// check is genuinely in flight rather than inferring it afterwards.
+///
+/// One gate, shared by whatever parks on it. Nothing here releases fetches
+/// separately, and sharing is what makes a second arrival harmless: a
+/// completer per call would need every one of them completed, and one left
+/// behind is a thirty-second timeout with nothing to read.
+class _GatedApi extends FakeApi {
+  /// Hold every call from here on. Off by default so setup can fetch freely.
+  bool hold = false;
+
+  Completer<void>? _gate;
+
+  /// Waits until a call is parked. Every fetch reaches the gate through
+  /// database work first, so "the check has started" is only true once the
+  /// call actually arrives — asserting before that is a race.
+  Future<void> arrived() async {
+    while (_gate == null) {
+      await pumpEventQueue();
+    }
+  }
+
+  void releaseAll() {
+    hold = false;
+    _gate?.complete();
+    _gate = null;
+  }
+
+  @override
+  Future<List<WindSample>> windWindow(
+    double lat,
+    double lon,
+    DateTime from,
+    DateTime to, {
+    List<String> models = OpenMeteo.defaultWindModels,
+  }) async {
+    if (hold) await (_gate ??= Completer<void>()).future;
+    return super.windWindow(lat, lon, from, to, models: models);
+  }
 }
 
 /// Refuses exactly one model name the way Open-Meteo does — a hard failure of
@@ -2810,4 +3024,26 @@ class _RejectsModels extends FakeApi {
     if (dead.isNotEmpty) throw OpenMeteoUnknownModel(dead.first);
     return super.windWindow(lat, lon, from, to, models: models);
   }
+}
+
+/// An engine whose save-side work fails. `retainInFlightEdits` is the half a
+/// toggle on an already-enabled alarm takes, and it stands in for the whole
+/// class (a write that will not land, a plugin that refuses): all that matters
+/// is that `upsertAlarm` throws AFTER marking the row.
+class _BoomOnSave extends NivaatEngine {
+  _BoomOnSave({
+    required super.store,
+    required super.scheduler,
+    required super.api,
+    required super.checks,
+    required super.notifier,
+  });
+
+  @override
+  Future<void> retainInFlightEdits(
+    NivaatAlarm previous,
+    NivaatAlarm next, {
+    DateTime? now,
+  }) async =>
+      throw OpenMeteoException('save failed');
 }

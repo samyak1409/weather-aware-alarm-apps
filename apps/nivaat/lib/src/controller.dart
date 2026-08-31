@@ -30,6 +30,33 @@ class NivaatController extends ChangeNotifier {
   Map<int, AlarmForecast> forecasts = {};
   bool loaded = false;
 
+  /// Alarm ids whose wind check is running **because you just did something**
+  /// — saved the editor, or flipped the switch back on. The home row reads
+  /// this and says `Checking…` instead of the verdict it is replacing (Samyak,
+  /// 2026-08-31).
+  ///
+  /// **Active, not passive, and that is the whole rule.** Opening the app
+  /// re-checks every alarm too, and there the last answer is what you opened
+  /// it to read — blanking it says strictly less. So only [upsertAlarm] marks
+  /// (the editor's Save and every switch, since [toggleAlarm] is an upsert),
+  /// and [resync] never does — app open, resume, ring stop and a background
+  /// check's ping all arrive through it. Before this the word was reachable
+  /// only by a brand-new alarm, the one alarm with no stored verdict to show
+  /// instead.
+  ///
+  /// **Counted, not flagged**: off and straight back on starts two
+  /// evaluations, and the first to finish must not take down the cue the
+  /// second is still earning.
+  ///
+  /// In memory and per-launch — it describes a fetch THIS process is waiting
+  /// on, so a restart has nothing to restore and comes back showing the stored
+  /// verdict, which is the passive case.
+  final Map<int, int> _rechecking = {};
+
+  /// True while a check you set going yourself is still in flight for
+  /// [alarmId] — see [_rechecking].
+  bool rechecking(int alarmId) => _rechecking.containsKey(alarmId);
+
   /// Most recent fire-and-forget cleanup or evaluate kicked off by
   /// [upsertAlarm] or [deleteAlarm] (or null before the first). Tests await
   /// this; production never reads it.
@@ -296,6 +323,34 @@ class NivaatController extends ChangeNotifier {
     // a colliding HH:MM even if a future caller skips the UI check.
     if (nivaatAlarmTimeConflict(alarms, alarm) != null) return false;
 
+    // **Marked before anything can wait.** The engine runs one pass per alarm
+    // at a time, so the abandon/retain inside can sit behind a check already
+    // out on the network, and a cue that went up only after that wait would
+    // leave the save unacknowledged for as long as it lasted. The refusal
+    // above returns first, so it never leaves a mark owing.
+    _rechecking.update(alarm.id, (n) => n + 1, ifAbsent: () => 1);
+    try {
+      await _saveAlarm(alarm, now: now);
+    } catch (_) {
+      // No check is coming, so the mark comes down here — nothing downstream
+      // will do it. **With a frame**, even though this throw lands before
+      // [_saveAlarm] ever notifies: the row reads [rechecking] at BUILD time
+      // and the home rebuilds on its own while a save is in flight (the minute
+      // ticker alone does, every wall-clock :00), so the word may well be up,
+      // and it would stay up until the next rebuild from anywhere. Both sites
+      // that end a mark repaint; there is no third. Rethrown, not swallowed —
+      // a save that cannot write is still the caller's problem.
+      _endRecheck(alarm.id);
+      notifyListeners();
+      rethrow;
+    }
+    return true;
+  }
+
+  /// [upsertAlarm]'s body, split out for one reason: it lets the [_rechecking]
+  /// mark be made before this runs and undone if it throws, without wrapping
+  /// fifty lines in a `try`.
+  Future<void> _saveAlarm(NivaatAlarm alarm, {DateTime? now}) async {
     final i = alarms.indexWhere((a) => a.id == alarm.id);
     final previous = i >= 0 ? alarms[i] : null;
     alarms = [...alarms];
@@ -343,12 +398,44 @@ class NivaatController extends ChangeNotifier {
     // Drop stale in-flight state before notify so the home cue can't flash
     // "still checking" for an occurrence we just abandoned (toggle / edit).
     await _reloadCheckStates();
+    // One paint for both: the switch's new position and the `Checking…` that
+    // [upsertAlarm]'s mark put beside it.
     notifyListeners();
     // Wind evaluation hits the network — never block the UI on it. Tests
     // await [lastEvaluation] when they need the late-ring / finalise outcome.
-    lastEvaluation = _evaluateInBackground(alarm, now: now);
+    lastEvaluation = _recheckInBackground(alarm, now: now);
     unawaited(lastEvaluation!);
-    return true;
+  }
+
+  /// [_evaluateInBackground], plus taking the `Checking…` cue down after it —
+  /// the other half of [upsertAlarm]'s [_rechecking] mark.
+  ///
+  /// `finally`, so a fetch that throws cannot strand the row on a word nothing
+  /// will answer. It ends every mark whose save got this far ([upsertAlarm]'s
+  /// `catch` covers the ones that did not), which is why [deleteAlarm] can
+  /// share [_evaluateInBackground] without touching the count.
+  Future<void> _recheckInBackground(NivaatAlarm alarm, {DateTime? now}) async {
+    try {
+      await _evaluateInBackground(alarm, now: now);
+    } finally {
+      _endRecheck(alarm.id);
+      // New verdict or a failed fetch leaving the old one standing, the word
+      // comes down either way. Coalesces with the notify
+      // [_evaluateInBackground] just made — no await between them — so the
+      // success path still paints once.
+      notifyListeners();
+    }
+  }
+
+  /// One check you started has answered. Decrements rather than clears — see
+  /// [_rechecking] on why this is counted.
+  void _endRecheck(int alarmId) {
+    final left = _rechecking[alarmId];
+    if (left != null && left > 1) {
+      _rechecking[alarmId] = left - 1;
+    } else {
+      _rechecking.remove(alarmId);
+    }
   }
 
   /// Deleting mid-window still closes the occurrence's story — the history rows
